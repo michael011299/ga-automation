@@ -1410,6 +1410,17 @@ async function trackingHealthCheckSiteInternal(url) {
     const allFixes = failureDetail.flatMap(f => (f.items || []).map(i => i.fix).filter(Boolean));
     results.fix = allFixes.length > 0 ? allFixes.join(" | ") : null;
 
+    // ── GA4 events captured ──
+    const ga4Seen = new Set();
+    results.cta_details.phones.items.forEach(i => (i.ga4_events || []).forEach(e => ga4Seen.add(e)));
+    results.cta_details.emails.items.forEach(i => (i.ga4_events || []).forEach(e => ga4Seen.add(e)));
+    results.form_details.forEach(p => {
+      [...p.first_party_forms, ...p.third_party_forms].forEach(f => {
+        (f.ga4_events || f.ga4_events_seen || []).forEach(e => ga4Seen.add(e));
+      });
+    });
+    results.ga4_events_captured = ga4Seen.size > 0 ? [...ga4Seen] : null;
+
     // ── Console output ──
     const GRADE_LABEL = { T1: "✅ T1 — PASS", T2: "⚠️  T2 — ISSUES FOUND", T3: "🔍 T3 — NOT TESTED", FAIL: "❌ FAIL — NO CONVERSIONS TRACKED" };
     logInfo(`\n╔══════════════════════════════════════════════╗`);
@@ -1462,16 +1473,20 @@ async function trackingHealthCheckSiteInternal(url) {
 }
 
 async function trackingHealthCheckSite(url) {
+  const startedAt = Date.now();
   await acquireCheckSlot();
   try {
-    return await withTimeout(
+    const result = await withTimeout(
       trackingHealthCheckSiteInternal(url),
       GLOBAL_TIMEOUT_MS,
       `Global timeout (${GLOBAL_TIMEOUT_MS}ms) exceeded for ${url}`
     );
+    result.ran_at = new Date(startedAt).toISOString();
+    result.duration_ms = Date.now() - startedAt;
+    return result;
   } catch (e) {
     logInfo(`⏱ Check aborted: ${e.message}`, { url });
-    return { url: normaliseUrl(url), grade: "T2", health_status: "ERROR", health_reasons: e.message };
+    return { url: normaliseUrl(url), grade: "T2", health_status: "ERROR", health_reasons: e.message, ran_at: new Date(startedAt).toISOString(), duration_ms: Date.now() - startedAt };
   } finally {
     releaseCheckSlot();
   }
