@@ -11,11 +11,9 @@
   "author": "",
   "license": "ISC",
   "type": "commonjs",
-  "devDependencies": {
-    "playwright": "^1.57.0"
-  },
   "dependencies": {
     "express": "^5.2.1",
-    "http-proxy-middleware": "^3.0.5"
+    "http-proxy-middleware": "^3.0.5",
+    "playwright": "^1.57.0"
   }
 }
