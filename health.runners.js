@@ -1375,30 +1375,42 @@ async function trackingHealthCheckSiteInternal(url) {
     }
 
     // ── Grading ──
-    const totalFound = uniquePhones.size + uniqueEmails.size + results.forms_found;
-    const hasFail    = failureDetail.some(f => f.grade_impact === "FAIL");
-    const hasT2      = failureDetail.some(f => f.grade_impact === "T2");
-    const hasT3      = failureDetail.some(f => f.grade_impact === "T3");
-    const anyPassed  = results.phone_passed > 0 || results.email_passed > 0 || results.forms_passed > 0;
+    const totalFound        = uniquePhones.size + uniqueEmails.size + results.forms_found;
+    const hasFail           = failureDetail.some(f => f.grade_impact === "FAIL");
+    const hasT2             = failureDetail.some(f => f.grade_impact === "T2");
+    const hasT3             = failureDetail.some(f => f.grade_impact === "T3");
+    const anyPassed         = results.phone_passed > 0 || results.email_passed > 0 || results.forms_passed > 0;
+    const hasDuplicateFiring = phoneDuplicateItems.length > 0 || emailDuplicateItems.length > 0;
 
     let grade, health_status, health_reasons;
 
     if (totalFound === 0 && !hasNonClickable) {
       grade = "T3"; health_status = "NOT_TESTED";
-      health_reasons = "No actionable CTAs (phone links, email links, or forms) were found on any visited page.";
+      health_reasons = "No trackable CTAs were found on any page visited. Check that the site has clickable phone numbers (tel: links), email addresses (mailto: links), or contact forms visible on the pages the runner visited.";
     } else if (hasFail && !anyPassed) {
       grade = "FAIL"; health_status = "NO_CONVERSIONS_TRACKED";
-      health_reasons = "GTM is installed but no conversion events fired for any tested CTA or form. See failure_detail for fixes.";
-    } else if (hasT2 || (hasFail && anyPassed)) {
-      grade = "T2"; health_status = "TRACKING_ISSUES_FOUND";
-      const t2cats = failureDetail.filter(f => f.grade_impact === "T2" || f.grade_impact === "FAIL").map(f => f.category);
-      health_reasons = `Tracking is partially working but has issues: ${t2cats.join(", ")}. See failure_detail for fixes.`;
-    } else if (hasT3 && !hasT2 && !hasFail) {
+      health_reasons = "GTM is installed but no GA4 conversion event fired for any tested CTA or form. Check: (1) the GA4 tag is published in GTM — not just saved, (2) trigger conditions match the actual click events, (3) the GA4 Measurement ID is correct and the property is receiving data.";
+    } else if (hasT3 && !hasFail && !hasT2 && !hasNonClickable && !hasDuplicateFiring) {
       grade = "T3"; health_status = "NOT_TESTED";
-      health_reasons = `CTAs found but could not be tested automatically (${failureDetail.map(f => f.category).join(", ")}). Manual verification required.`;
+      health_reasons = "All forms on this site are protected by CAPTCHA or bot detection — automated testing could not submit. Open GTM Preview, submit each form manually, and verify a GA4 event fires in the network tab.";
+    } else if (hasT2 || hasNonClickable || hasDuplicateFiring || (hasFail && anyPassed)) {
+      grade = "T2"; health_status = "TRACKING_ISSUES_FOUND";
+      const t2lines = [];
+      if (hasNonClickable) t2lines.push(
+        `${results.cta_details.phones.not_clickable_items.length} phone(s) and ` +
+        `${results.cta_details.emails.not_clickable_items.length} email(s) found as plain text — wrap in tel:/mailto: links and add GTM Click triggers.`
+      );
+      if (hasDuplicateFiring) t2lines.push(
+        `${phoneDuplicateItems.length + emailDuplicateItems.length} CTA(s) firing GA4 more than once per click — change the GTM tag firing option from "Once per event" to "Once per page".`
+      );
+      const partialCats = failureDetail.filter(f => f.grade_impact === "T2" && f.category.includes("Partial"));
+      partialCats.forEach(f => t2lines.push(f.summary));
+      const failedPassedCats = failureDetail.filter(f => f.grade_impact === "FAIL" && anyPassed);
+      failedPassedCats.forEach(f => t2lines.push(f.summary));
+      health_reasons = "Tracking is working but has issues. " + t2lines.join(" | ");
     } else {
       grade = "T1"; health_status = "PASS";
-      health_reasons = "All detected conversion CTAs and forms are firing GA4 events correctly on every tested page.";
+      health_reasons = "All tracked CTAs are firing correctly. Every phone link, email link, and form tested fired a GA4 conversion event with no double-firing and no plain-text contacts found.";
     }
 
     results.grade          = grade;
@@ -1406,9 +1418,31 @@ async function trackingHealthCheckSiteInternal(url) {
     results.health_reasons = health_reasons;
     results.failure_detail = failureDetail;
 
-    // ── Consolidated fix text for the fix column ──
-    const allFixes = failureDetail.flatMap(f => (f.items || []).map(i => i.fix).filter(Boolean));
-    results.fix = allFixes.length > 0 ? allFixes.join(" | ") : null;
+    // ── Fix column — concise priority action list ──
+    const fixLines = [];
+    if (!tracking.has_gtm) {
+      fixLines.push("Install GTM: add the <head> and <body> snippets to every page then republish.");
+    } else {
+      if (hasNonClickable) fixLines.push(
+        "Wrap plain-text phone/email in tel:/mailto: links, then add GTM Click – Just Links triggers with GA4 Event tags."
+      );
+      if (hasDuplicateFiring) fixLines.push(
+        "Change duplicate-firing tag(s) in GTM from 'Once per event' to 'Once per page'."
+      );
+      const formFails = failureDetail.find(f => f.category === "Contact Forms" && f.grade_impact !== "T3");
+      if (formFails) fixLines.push(
+        "Form submitted but no GA4 event fired — add a GTM Form Submission trigger (or Thank You page URL trigger) with a GA4 Event tag."
+      );
+      const phoneFails = failureDetail.find(f => f.category.startsWith("Phone Calls") && f.grade_impact === "FAIL");
+      if (phoneFails) fixLines.push(
+        "Phone click not tracked — create a GTM Click – Just Links trigger for href contains tel: and attach a GA4 Event tag (event name: click_call)."
+      );
+      const emailFails = failureDetail.find(f => f.category.startsWith("Email Clicks") && f.grade_impact === "FAIL");
+      if (emailFails) fixLines.push(
+        "Email click not tracked — create a GTM Click – Just Links trigger for href contains mailto: and attach a GA4 Event tag (event name: click_email)."
+      );
+    }
+    results.fix = fixLines.length > 0 ? fixLines.join(" | ") : null;
 
     // ── GA4 events captured ──
     const ga4Seen = new Set();
