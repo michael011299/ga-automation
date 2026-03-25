@@ -53,7 +53,7 @@ const SLOT_ACQUIRE_TIMEOUT = Number(process.env.HEALTH_SLOT_TIMEOUT       || 900
 const MAX_CONCURRENT_CHECKS = Number(process.env.HEALTH_MAX_CONCURRENT    || 20);
 
 // FIX 5: how long to actively poll for GTM after consent (ms)
-const POST_CONSENT_MAX_WAIT_MS = Number(process.env.HEALTH_CONSENT_WAIT   || 4000);
+const POST_CONSENT_MAX_WAIT_MS = Number(process.env.HEALTH_CONSENT_WAIT   || 6000);
 const POST_CONSENT_POLL_MS     = 200; // check every 200ms
 
 const TEST_VALUES = {
@@ -129,6 +129,23 @@ async function getBrowser() {
   browserUses++;
   return globalBrowser;
 }
+
+// ─────────────────────────────────────────────
+// RAM safeguard: track open contexts and force-close stale ones
+// ─────────────────────────────────────────────
+const openContexts = new Map(); // context -> { createdAt, url }
+const STALE_CONTEXT_MS = GLOBAL_TIMEOUT_MS + 60000; // max age before force-close
+
+setInterval(async () => {
+  const now = Date.now();
+  for (const [ctx, info] of openContexts) {
+    if (now - info.createdAt > STALE_CONTEXT_MS) {
+      logInfo(`⚠️ RAM safeguard: force-closing stale context for ${info.url} (open ${Math.round((now - info.createdAt) / 1000)}s)`);
+      openContexts.delete(ctx);
+      try { await ctx.close(); } catch {}
+    }
+  }
+}, 60000);
 
 // ─────────────────────────────────────────────
 // Utilities
@@ -245,14 +262,41 @@ function classifyAndParseBeacon(reqUrl, postData) {
 async function handleCookieConsent(page) {
   const out = { accepted: false };
   const candidates = [
+    // OneTrust
     "#onetrust-accept-btn-handler",
+    // Cookiebot
     "#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll",
-    ".cmplz-accept","#wt-cli-accept-all-btn",".wt-cli-accept-all-btn",
-    "#cookie_action_close_header",".cookie-accept",".accept-cookies",
-    "[aria-label='Accept cookies']","[id*='accept'][class*='cookie']",
-    "[class*='accept'][class*='cookie']"
+    // Complianz
+    ".cmplz-accept", ".cmplz-btn",
+    // Cookie Notice / WP Cookie Notice
+    "#wt-cli-accept-all-btn", ".wt-cli-accept-all-btn",
+    "#cookie_action_close_header", ".cookie-accept", ".accept-cookies",
+    // CookieYes
+    "[data-cky-tag='accept-button']",
+    // Iubenda
+    "#iubFooterBtn", ".iubenda-cs-accept-btn",
+    // CookieScript
+    "#cookiescript_accept", "#cookiescript_acceptall",
+    // Civic Cookie Control
+    "#ccc-accept-settings", "#ccc-notify-accept",
+    // Osano
+    ".osano-cm-accept-all",
+    // TrustArc
+    "#truste-consent-button", ".truste_popframe",
+    // Generic patterns
+    "[aria-label='Accept cookies']", "[aria-label='Accept all cookies']",
+    "[id*='accept'][class*='cookie']", "[class*='accept'][class*='cookie']",
+    "[id*='cookie'][id*='accept']", "[class*='cookie-accept']",
+    "button[id*='consent'][id*='accept']", "button[class*='consent-accept']"
   ];
-  const textLabels = ["Accept All","Accept all","Accept All Cookies","I Accept","Allow All","Allow all","Agree","OK","Got it","Continue"];
+  const textLabels = [
+    "Accept All", "Accept all", "Accept All Cookies", "Accept Cookies",
+    "Accept all cookies", "I Accept", "I accept", "I Agree",
+    "Allow All", "Allow all", "Allow Cookies", "Allow all cookies",
+    "Agree", "Agree and Continue", "Agree & Continue",
+    "OK", "Got it", "Continue", "Yes, I agree", "Yes I agree",
+    "Close and accept"
+  ];
 
   try {
     const clicked = await safeEvaluate(page, (sels, labels) => {
@@ -320,7 +364,7 @@ async function detectTrackingSetup(page, beacons) {
       function extract(str) {
         if (typeof str !== "string" || !str) return;
         for (const m of str.toUpperCase().matchAll(/GTM-[A-Z0-9]{4,}/g)) found.gtm.push(m[0]);
-        for (const m of str.toUpperCase().matchAll(/\bG-[A-Z0-9]{6,}\b/g)) found.ga4.push(m[0]);
+        for (const m of str.toUpperCase().matchAll(/\b(?:G|GT)-[A-Z0-9]{6,}\b/g)) found.ga4.push(m[0]);
       }
       for (const s of document.querySelectorAll("script")) { extract(s.src); extract(s.innerHTML); }
       for (const ns of document.querySelectorAll("noscript")) extract(ns.innerHTML);
@@ -362,7 +406,7 @@ async function detectTrackingSetup(page, beacons) {
       try {
         const params = new URL(b.url).searchParams;
         const id = params.get("id") || params.get("tid");
-        if (id && /^G-[A-Z0-9]{6,}$/i.test(id)) ga4Ids.add(id.toUpperCase());
+        if (id && /^(?:G|GT)-[A-Z0-9]{6,}$/i.test(id)) ga4Ids.add(id.toUpperCase());
       } catch {}
     }
 
@@ -1016,6 +1060,7 @@ async function trackingHealthCheckSiteInternal(url) {
       locale: "en-GB",
       timezoneId: "Europe/London"
     });
+    openContexts.set(context, { createdAt: Date.now(), url: targetUrl });
     page = await context.newPage();
 
     await context.route("**/*", route => {
@@ -1052,6 +1097,13 @@ async function trackingHealthCheckSiteInternal(url) {
     const gotoResult = await safeGoto(page, targetUrl);
     if (!gotoResult.ok) {
       logInfo(`⚠️ Homepage failed to load: ${gotoResult.error}`);
+      const pageHasContent = await safeEvaluate(page, () => (document.body?.innerText || "").length > 100);
+      if (!pageHasContent) {
+        results.grade          = "T3";
+        results.health_status  = "SITE_UNAVAILABLE";
+        results.health_reasons = `Site could not be reached: ${gotoResult.error}`;
+        return results;
+      }
     }
     visitedUrls.add(page.url());
 
@@ -1405,7 +1457,7 @@ async function trackingHealthCheckSiteInternal(url) {
     return { ...results, grade: "T2", health_status: "ERROR", health_reasons: `Fatal error: ${error.message}` };
   } finally {
     if (page)    { try { page.removeAllListeners(); await page.close();    } catch {} }
-    if (context) { try { await context.close();                            } catch {} }
+    if (context) { openContexts.delete(context); try { await context.close(); } catch {} }
   }
 }
 
@@ -1479,6 +1531,8 @@ async function runBatchHealthCheck(jobId, clients, callbackUrl = null) {
       job.results.sort((a, b) => a.index - b.index);
       logInfo(`✅ Batch job ${jobId} completed: ${job.completed}/${job.total} processed`);
       if (callbackUrl) sendBatchCallback(jobId, job, callbackUrl);
+      // Auto-cleanup: remove job from memory after 4 hours to prevent unbounded RAM growth
+      setTimeout(() => { batchJobs.delete(jobId); logDebug(`🗑 Batch job ${jobId} evicted from memory`); }, 4 * 60 * 60 * 1000);
     }
   } catch (error) {
     const job = batchJobs.get(jobId);
