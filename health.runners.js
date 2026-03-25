@@ -535,13 +535,25 @@ async function scanCTAsOnPage(page) {
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
       acceptNode(node) {
         const tag = node.parentElement?.tagName?.toLowerCase();
-        if (["script","style","noscript","head"].includes(tag)) return NodeFilter.FILTER_REJECT;
+        if (["script","style","noscript","head","template"].includes(tag)) return NodeFilter.FILTER_REJECT;
+        const el = node.parentElement;
+        if (el) {
+          // Skip elements hidden via CSS (display:none, visibility:hidden, content-visibility:hidden)
+          try {
+            if (typeof el.checkVisibility === "function" && !el.checkVisibility({ checkVisibilityCSS: true }))
+              return NodeFilter.FILTER_REJECT;
+          } catch {}
+          // Skip zero-area elements (overflow:hidden wrappers, off-canvas, max-height:0, etc.)
+          if (el.offsetWidth === 0 && el.offsetHeight === 0) return NodeFilter.FILTER_REJECT;
+        }
         return NodeFilter.FILTER_ACCEPT;
       }
     });
 
     const phonePattern = /(\+?[\d][\d\s\-\(\)\.]{6,}[\d])/g;
     const emailPattern = /([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})/g;
+    // Reserved / placeholder domains that will never be real contact emails
+    const placeholderDomains = new Set(["example.com","example.org","example.net","example.co.uk","test.com","placeholder.com","domain.com","yourdomain.com","email.com"]);
     const foundPhones = [], foundEmails = [];
 
     let node;
@@ -561,6 +573,8 @@ async function scanCTAsOnPage(page) {
       if (!isEmailLink) {
         for (const m of text.matchAll(emailPattern)) {
           const norm = m[1].trim().toLowerCase();
+          const domain = norm.split("@")[1] || "";
+          if (placeholderDomains.has(domain)) continue;
           if (!linkedEmails.has(norm)) foundEmails.push({ raw: m[1].trim(), norm });
         }
       }
@@ -1343,18 +1357,22 @@ async function trackingHealthCheckSiteInternal(url) {
     }
 
     if (results.forms_found > 0 && results.forms_passed === 0) {
-      const botBlocked = allFormResults.some(f => f.reason?.includes("Bot Protection"));
-      const allNT      = allFormResults.every(f => f.status === "NOT_TESTED");
-      const formGrade  = botBlocked || allNT ? "T3" : "FAIL";
+      const botBlocked       = allFormResults.some(f => f.reason?.includes("Bot Protection"));
+      const allNT            = allFormResults.every(f => f.status === "NOT_TESTED");
+      const formGrade        = botBlocked || allNT ? "T3" : "FAIL";
+      const formsTestedCount = allFormResults.filter(f => f.status !== "NOT_TESTED").length;
+      const submittedLabel   = formsTestedCount === results.forms_found
+        ? `${results.forms_found}`
+        : `${formsTestedCount} of ${results.forms_found}`;
 
       failureDetail.push({
         category: "Contact Forms", grade_impact: formGrade,
-        found: results.forms_found, tested: allFormResults.filter(f => f.status !== "NOT_TESTED").length, passed: 0,
+        found: results.forms_found, tested: formsTestedCount, passed: 0,
         summary: botBlocked
           ? `${results.forms_found} form(s) — CAPTCHA/bot protection blocked automated testing. Manual verification required.`
           : allNT
           ? `${results.forms_found} form(s) — could not be submitted automatically. Manual verification required.`
-          : `${results.forms_found} form(s) submitted — none fired a GA4 conversion event.`,
+          : `${submittedLabel} form(s) submitted — none fired a GA4 conversion event.`,
         items: allFormResults.map((f, idx) => ({
           form_index: idx, page_url: f.page_url || null,
           status: f.status, reason: f.reason || null,
