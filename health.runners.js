@@ -473,16 +473,23 @@ async function detectTrackingSetup(page, beacons, targetUrl) {
 
   // Fallback: plain HTTP fetch of the raw HTML — catches sites where Playwright
   // is blocked or JS execution is disrupted (bot detection, CMP hiding scripts, etc.)
-  // GTM is always in the static HTML source, so this reliably finds it when the
-  // browser-based checks above all fail.
+  // IMPORTANT: only scan <head> + first 2000 chars of <body>.
+  // GTM snippet is always in <head>; noscript fallback is always at the top of <body>.
+  // Scanning the full HTML body produces false positives (blog posts, docs, etc.
+  // that merely mention a GTM ID anywhere in their content).
   if (gtmIds.size === 0) {
     const rawUrl  = targetUrl || page.url();
     const rawHtml = await fetchRawHtml(rawUrl);
     if (rawHtml) {
-      const upper = rawHtml.toUpperCase();
-      for (const m of upper.matchAll(/GTM-[A-Z0-9]{4,}/g))           gtmIds.add(m[0]);
-      for (const m of upper.matchAll(/\b(?:G|GT)-[A-Z0-9]{6,}\b/g))  ga4Ids.add(m[0]);
-      if (gtmIds.size > 0) logDebug("✅ GTM found via raw HTML fallback fetch");
+      const headEnd    = rawHtml.search(/<\/head>/i);
+      const headHtml   = headEnd > 0 ? rawHtml.slice(0, headEnd) : rawHtml.slice(0, 8000);
+      const bodyOffset = headEnd > 0 ? headEnd : 0;
+      const bodyTop    = rawHtml.slice(bodyOffset, bodyOffset + 2000);
+      const scanTarget = (headHtml + bodyTop).toUpperCase();
+
+      for (const m of scanTarget.matchAll(/GTM-[A-Z0-9]{4,}/g))          gtmIds.add(m[0]);
+      for (const m of scanTarget.matchAll(/\b(?:G|GT)-[A-Z0-9]{6,}\b/g)) ga4Ids.add(m[0]);
+      if (gtmIds.size > 0) logDebug("✅ GTM found via raw HTML fallback fetch (head/body-top scan)");
     }
   }
 
