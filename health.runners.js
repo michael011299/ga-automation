@@ -9,6 +9,7 @@ const SCRIPT_VERSION = "2026-03-13T18:00:00Z-V27";
 const { chromium } = require("playwright");
 const https        = require("https");
 const http         = require("http");
+const zlib         = require("zlib");
 
 const LOG_LEVEL = (process.env.LOG_LEVEL || "info").toLowerCase();
 function logInfo(msg, data = null) {
@@ -171,6 +172,9 @@ async function safeWait(ms) {
 
 // Plain Node.js HTTP fetch — used as a fallback to read raw HTML when
 // Playwright-based detection misses GTM (bot detection, JS errors, etc.)
+// Sends Accept-Encoding: gzip so we get the same compressed response a real
+// browser would, then decompresses it — without this, compressed responses
+// arrive as binary garbage and the GTM regex never matches.
 async function fetchRawHtml(url, redirectsLeft = 3) {
   return new Promise(resolve => {
     try {
@@ -179,8 +183,11 @@ async function fetchRawHtml(url, redirectsLeft = 3) {
       const req    = lib.get(url, {
         headers: {
           "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-          "Accept":          "text/html,application/xhtml+xml",
+          "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
           "Accept-Language": "en-GB,en;q=0.9",
+          "Accept-Encoding": "gzip, deflate",
+          "Cache-Control":   "no-cache",
+          "Connection":      "keep-alive",
         },
         timeout: 8000,
       }, res => {
@@ -189,14 +196,25 @@ async function fetchRawHtml(url, redirectsLeft = 3) {
           res.resume();
           return fetchRawHtml(next, redirectsLeft - 1).then(resolve);
         }
+        if (res.statusCode < 200 || res.statusCode >= 400) { res.resume(); return resolve(null); }
+
+        // Decompress based on Content-Encoding header
+        const enc = (res.headers["content-encoding"] || "").toLowerCase();
+        let stream = res;
+        try {
+          if      (enc === "gzip")    stream = res.pipe(zlib.createGunzip());
+          else if (enc === "deflate") stream = res.pipe(zlib.createInflate());
+          // brotli ("br") skipped — rare on static HTML pages
+        } catch { stream = res; }
+
         let body = "";
-        res.setEncoding("utf8");
-        res.on("data", chunk => {
+        stream.setEncoding("utf8");
+        stream.on("data", chunk => {
           body += chunk;
-          if (body.length > 300000) req.destroy(); // avoid huge pages
+          if (body.length > 300000) req.destroy();
         });
-        res.on("end",   () => resolve(body));
-        res.on("error", () => resolve(null));
+        stream.on("end",   () => resolve(body));
+        stream.on("error", () => resolve(null));
       });
       req.on("error",   () => resolve(null));
       req.on("timeout", () => { req.destroy(); resolve(null); });
