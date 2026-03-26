@@ -410,10 +410,22 @@ async function detectTrackingSetup(page, beacons) {
       } catch {}
     }
 
-    const gtmInNetwork = beacons.some(b =>
-      /googletagmanager\.com\/gtm\.js/.test(b.url)
-    );
+    const gtmInNetwork = beacons.some(b => {
+      const u = b.url;
+      // Google's CDN — any request except gtag/js (which is GA4 direct, not GTM)
+      if (u.includes("googletagmanager.com") && !u.includes("/gtag/js")) return true;
+      // Custom domain / server-side GTM proxy — path must be /gtm.js and carry a GTM- ID
+      if (u.includes("/gtm.js") && /[?&]id=GTM-/i.test(u)) return true;
+      return false;
+    });
     const globalGtmObj = await safeEvaluate(page, () => !!window.google_tag_manager);
+
+    // Also scan raw HTML source — GTM snippet is always placed statically in <head> or top of <body>
+    const htmlGtmIds = await safeEvaluate(page, () => {
+      const src = (document.head?.innerHTML || "") + (document.body?.innerHTML || "").slice(0, 4000);
+      return [...src.toUpperCase().matchAll(/GTM-[A-Z0-9]{4,}/g)].map(m => m[0]);
+    });
+    if (htmlGtmIds?.length) htmlGtmIds.forEach(id => gtmIds.add(id));
 
     if (gtmIds.size > 0 || gtmInNetwork || globalGtmObj) break;
 
@@ -433,7 +445,12 @@ async function detectTrackingSetup(page, beacons) {
     if (!linkedGa4.has(id)) unlinkedGa4.add(id);
   }
 
-  const gtmInNetwork   = beacons.some(b => /googletagmanager\.com\/gtm\.js/.test(b.url));
+  const gtmInNetwork   = beacons.some(b => {
+    const u = b.url;
+    if (u.includes("googletagmanager.com") && !u.includes("/gtag/js")) return true;
+    if (u.includes("/gtm.js") && /[?&]id=GTM-/i.test(u)) return true;
+    return false;
+  });
   const ga4FiredViaGtm = beacons.some(b => b.type === "GA4" && !!b.gtmHash);
   const globalGtmObj   = await safeEvaluate(page, () => !!window.google_tag_manager);
 
