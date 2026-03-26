@@ -411,7 +411,7 @@ async function detectTrackingSetup(page, beacons) {
     }
 
     const gtmInNetwork = beacons.some(b =>
-      b.url.includes("googletagmanager.com") || b.url.includes("/gtm.js")
+      /googletagmanager\.com\/gtm\.js/.test(b.url)
     );
     const globalGtmObj = await safeEvaluate(page, () => !!window.google_tag_manager);
 
@@ -433,7 +433,7 @@ async function detectTrackingSetup(page, beacons) {
     if (!linkedGa4.has(id)) unlinkedGa4.add(id);
   }
 
-  const gtmInNetwork   = beacons.some(b => b.url.includes("googletagmanager.com") || b.url.includes("/gtm.js"));
+  const gtmInNetwork   = beacons.some(b => /googletagmanager\.com\/gtm\.js/.test(b.url));
   const ga4FiredViaGtm = beacons.some(b => b.type === "GA4" && !!b.gtmHash);
   const globalGtmObj   = await safeEvaluate(page, () => !!window.google_tag_manager);
 
@@ -523,9 +523,14 @@ async function scanCTAsOnPage(page) {
   }));
 
   const plainText = await safeEvaluate(page, () => {
+    function normPhone(d) {
+      if (d.startsWith('+44')) return '0' + d.slice(3);
+      if (d.startsWith('0044')) return '0' + d.slice(4);
+      return d;
+    }
     const linkedPhones = new Set(
       Array.from(document.querySelectorAll("a[href^='tel:' i]"))
-        .map(a => (a.getAttribute("href") || "").replace(/[^\d\+]/g, "")).filter(Boolean)
+        .map(a => normPhone((a.getAttribute("href") || "").replace(/[^\d\+]/g, ""))).filter(Boolean)
     );
     const linkedEmails = new Set(
       Array.from(document.querySelectorAll("a[href^='mailto:' i]"))
@@ -559,20 +564,17 @@ async function scanCTAsOnPage(page) {
     let node;
     while ((node = walker.nextNode())) {
       const text = node.textContent || "";
+      // Skip any text that is already inside an anchor link of any kind
       const parentAnchor = node.parentElement?.closest("a[href]");
-      const isPhoneLink  = parentAnchor && (parentAnchor.getAttribute("href") || "").toLowerCase().startsWith("tel:");
-      const isEmailLink  = parentAnchor && (parentAnchor.getAttribute("href") || "").toLowerCase().startsWith("mailto:");
-
-      if (!isPhoneLink) {
+      if (!parentAnchor) {
         for (const m of text.matchAll(phonePattern)) {
-          const digits = m[1].replace(/[^\d\+]/g, "");
-          if (digits.replace(/\+/, "").length >= 9 && !linkedPhones.has(digits))
+          const rawDigits = m[1].replace(/[^\d\+]/g, "");
+          const digits    = normPhone(rawDigits);
+          if (digits.replace(/[^0-9]/g, "").length >= 9 && !linkedPhones.has(digits))
             foundPhones.push({ raw: m[1].trim(), digits });
         }
-      }
-      if (!isEmailLink) {
         for (const m of text.matchAll(emailPattern)) {
-          const norm = m[1].trim().toLowerCase();
+          const norm   = m[1].trim().toLowerCase();
           const domain = norm.split("@")[1] || "";
           if (placeholderDomains.has(domain)) continue;
           if (!linkedEmails.has(norm)) foundEmails.push({ raw: m[1].trim(), norm });
@@ -1410,7 +1412,10 @@ async function trackingHealthCheckSiteInternal(url) {
       health_reasons = "GTM is installed but no GA4 conversion event fired for any tested CTA or form. Check: (1) the GA4 tag is published in GTM — not just saved, (2) trigger conditions match the actual click events, (3) the GA4 Measurement ID is correct and the property is receiving data.";
     } else if (hasT3 && !hasFail && !hasT2 && !hasNonClickable && !hasDuplicateFiring) {
       grade = "T3"; health_status = "NOT_TESTED";
-      health_reasons = "All forms on this site are protected by CAPTCHA or bot detection — automated testing could not submit. Open GTM Preview, submit each form manually, and verify a GA4 event fires in the network tab.";
+      const t3FormDetail = failureDetail.find(f => f.grade_impact === "T3" && f.category === "Contact Forms");
+      health_reasons = t3FormDetail
+        ? `${t3FormDetail.summary} Open GTM Preview, submit each form manually, and verify a GA4 event fires in the network tab.`
+        : "CTAs were found but could not be tested automatically. Open GTM Preview, test manually, and verify GA4 events fire.";
     } else if (hasT2 || hasNonClickable || hasDuplicateFiring || (hasFail && anyPassed)) {
       grade = "T2"; health_status = "TRACKING_ISSUES_FOUND";
       const t2lines = [];
