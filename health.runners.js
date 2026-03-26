@@ -926,6 +926,40 @@ async function testFirstPartyForm(page, beacons, pageUrl, formMeta) {
     );
     if (botDetected) return { status: "FAIL", reason: "Bot Protection (CAPTCHA/Turnstile)" };
 
+    // Check for multi-step form (Next/Continue button or step-progress widgets)
+    const multiStepBtn = await safeEvaluate(page, idx => {
+      const form = document.querySelectorAll("form")[idx];
+      if (!form) return null;
+      const visible = [...form.querySelectorAll("button,input[type='submit'],input[type='button']")]
+        .filter(b => b.offsetParent !== null);
+      const primaryBtn = visible.find(b => b.type === "submit") || visible[0];
+      const btnText = (primaryBtn?.textContent || primaryBtn?.value || "").trim();
+      const isNextStep = /^(next|continue|proceed|go to step|step\s*\d)/i.test(btnText);
+      const hasStepper = !!form.querySelector(
+        '[class*="step-"],[class*="wizard"],[class*="multi-step"],[data-step],[aria-current="step"],[class*="progress-step"]'
+      );
+      return (isNextStep || hasStepper) ? (btnText || "Next") : null;
+    }, formMeta.index);
+    if (multiStepBtn !== null && multiStepBtn !== undefined) {
+      return { status: "NOT_TESTED", reason: `Multi-step form — button says "${multiStepBtn}"; automated testing cannot navigate all steps` };
+    }
+
+    // Check for inputs the bot cannot fill before attempting
+    const unfillableFields = await safeEvaluate(page, idx => {
+      const form = document.querySelectorAll("form")[idx];
+      if (!form) return [];
+      const issues = [];
+      const visible = [...form.querySelectorAll("input,select,textarea")].filter(el => el.offsetParent !== null);
+      if (visible.some(el => el.type === "file")) issues.push("file upload");
+      if (visible.some(el => ["date","time","datetime-local","month","week"].includes(el.type))) issues.push("date/time picker");
+      if (form.querySelector("[class*='datepick'],[class*='flatpickr'],[class*='pikaday'],[class*='daterangepick'],[class*='react-datepick'],[class*='vue-datepick'],[class*='air-datepick']"))
+        issues.push("custom date picker");
+      return issues;
+    }, formMeta.index);
+    if (unfillableFields.length > 0) {
+      return { status: "NOT_TESTED", reason: `Form contains fields the bot cannot fill: ${unfillableFields.join(", ")}` };
+    }
+
     const beforeBeaconIdx = beacons.length;
     const beforeUrl = page.url();
     const fields = formLocator.locator("input:visible,textarea:visible,select:visible");
@@ -1367,28 +1401,46 @@ async function trackingHealthCheckSiteInternal(url) {
         ? `${results.forms_found}`
         : `${formsTestedCount} of ${results.forms_found}`;
 
+      // Build specific summary for why forms could not be tested
+      const ntReasons = allFormResults.map(f => f.reason || "");
+      const ntIssues  = [];
+      if (ntReasons.some(r => r.includes("Multi-step")))  ntIssues.push("multi-step");
+      if (ntReasons.some(r => r.includes("file upload"))) ntIssues.push("file upload field");
+      if (ntReasons.some(r => r.includes("date")))        ntIssues.push("date/time picker");
+      if (ntReasons.some(r => r.includes("No visible submit"))) ntIssues.push("no submit button");
+      if (ntReasons.some(r => r.includes("cross-origin iframe"))) ntIssues.push("third-party embed");
+      const allNTSummary = ntIssues.length > 0
+        ? `${results.forms_found} form(s) could not be automatically tested — contains: ${ntIssues.join(", ")}. Submit manually and verify GA4 fires in GTM Preview.`
+        : `${results.forms_found} form(s) — could not be submitted automatically. Manual verification required.`;
+
       failureDetail.push({
         category: "Contact Forms", grade_impact: formGrade,
         found: results.forms_found, tested: formsTestedCount, passed: 0,
         summary: botBlocked
           ? `${results.forms_found} form(s) — CAPTCHA/bot protection blocked automated testing. Manual verification required.`
           : allNT
-          ? `${results.forms_found} form(s) — could not be submitted automatically. Manual verification required.`
+          ? allNTSummary
           : `${submittedLabel} form(s) submitted — none fired a GA4 conversion event.`,
         items: allFormResults.map((f, idx) => ({
           form_index: idx, page_url: f.page_url || null,
           status: f.status, reason: f.reason || null,
           ga4_events_seen: f.ga4_events_seen || f.ga4_events || [],
           fix: f.reason?.includes("Bot Protection")
-            ? "CAPTCHA present — submit manually and verify GA4 event in GTM Preview."
+            ? "CAPTCHA/Turnstile detected — submit manually and verify GA4 fires in GTM Preview."
+            : f.reason?.includes("Multi-step")
+            ? "Multi-step form — the bot cannot navigate past step 1. Submit manually through every step and verify a GA4 event fires in GTM Preview on the final confirmation."
+            : f.reason?.includes("file upload")
+            ? "Form has a file upload field — submit manually with a test file and verify a GA4 event fires in GTM Preview."
+            : f.reason?.includes("date")
+            ? "Form has a date/time picker field — submit manually with a valid date and verify a GA4 event fires in GTM Preview."
             : f.status === "FAIL" && f.reason?.includes("success")
             ? "Form submitted (success detected) but no GA4 event fired. Add a GTM trigger for Form Submission or Thank You page URL, with a GA4 Event tag."
             : f.status === "FAIL"
             ? "Form submitted but no GA4 event captured. Check GTM trigger scope — confirm the GA4 Event tag is published and the trigger matches this form."
             : f.reason?.includes("Validation")
-            ? "Validation blocked submission. Fill and submit manually, then verify in GTM Preview."
+            ? "Validation blocked submission — the bot could not fill all required fields. Submit manually and verify in GTM Preview."
             : f.reason?.includes("No visible submit button")
-            ? "No standard submit button found — may use custom JS. Submit manually and verify in GTM Preview."
+            ? "No standard submit button found — form may use custom JS submission. Submit manually and verify in GTM Preview."
             : `Could not test automatically (${f.reason || "unknown"}). Submit manually and verify in GTM Preview.`
         }))
       });
