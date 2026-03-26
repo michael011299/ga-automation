@@ -529,27 +529,82 @@ async function detectTrackingSetup(page, beacons, targetUrl) {
     await safeWait([500, 1000, 2000, 3000][attempt] || 1000);
   }
 
-  // Fallback: plain HTTP fetch of the raw HTML — catches sites where Playwright
-  // is blocked or JS execution is disrupted (bot detection, CMP hiding scripts, etc.)
-  // IMPORTANT: only scan <head> + first 2000 chars of <body>.
-  // GTM snippet is always in <head>; noscript fallback is always at the top of <body>.
-  // Scanning the full HTML body produces false positives (blog posts, docs, etc.
-  // that merely mention a GTM ID anywhere in their content).
-  if (gtmIds.size === 0) {
-    const rawUrl  = targetUrl || page.url();
-    logDebug(`🌐 GTM not found via Playwright — trying raw HTML fetch: ${rawUrl}`);
-    const rawHtml = await fetchRawHtml(rawUrl);
-    if (!rawHtml) logDebug("⚠️ fetchRawHtml returned null — raw HTML fallback could not retrieve page");
-    if (rawHtml) {
-      const headEnd    = rawHtml.search(/<\/head>/i);
-      const headHtml   = headEnd > 0 ? rawHtml.slice(0, headEnd) : rawHtml.slice(0, 8000);
-      const bodyOffset = headEnd > 0 ? headEnd : 0;
-      const bodyTop    = rawHtml.slice(bodyOffset, bodyOffset + 2000);
-      const scanTarget = (headHtml + bodyTop).toUpperCase();
+  // ── HTML scan helper ──────────────────────────────────────────────────────
+  // Scans only <head> + first 2000 chars of <body> to avoid false positives
+  // from blog posts / docs that mention GTM IDs in their content.
+  function scanHeadBodyTop(html) {
+    if (!html) return;
+    const headEnd    = html.search(/<\/head>/i);
+    const headHtml   = headEnd > 0 ? html.slice(0, headEnd) : html.slice(0, 8000);
+    const bodyOffset = headEnd > 0 ? headEnd : 0;
+    const bodyTop    = html.slice(bodyOffset, bodyOffset + 2000);
+    const target     = (headHtml + bodyTop).toUpperCase();
+    for (const m of target.matchAll(/GTM-[A-Z0-9]{4,}/g))          gtmIds.add(m[0]);
+    for (const m of target.matchAll(/\b(?:G|GT)-[A-Z0-9]{6,}\b/g)) ga4Ids.add(m[0]);
+  }
 
-      for (const m of scanTarget.matchAll(/GTM-[A-Z0-9]{4,}/g))          gtmIds.add(m[0]);
-      for (const m of scanTarget.matchAll(/\b(?:G|GT)-[A-Z0-9]{6,}\b/g)) ga4Ids.add(m[0]);
-      if (gtmIds.size > 0) logDebug("✅ GTM found via raw HTML fallback fetch (head/body-top scan)");
+  // ── Fallback 1: page.content() via CDP ────────────────────────────────────
+  // page.content() uses Playwright's DevTools Protocol isolated world —
+  // separate from the main JS world, so bot detection that overrides
+  // window.eval or Function cannot interfere with it.
+  if (gtmIds.size === 0) {
+    try {
+      const cdpHtml = await page.content();
+      if (cdpHtml) {
+        const before = gtmIds.size;
+        scanHeadBodyTop(cdpHtml);
+        if (gtmIds.size > before) logDebug("✅ GTM found via page.content() CDP scan");
+        else logDebug(`page.content() returned ${cdpHtml.length} chars — no GTM ID found in head/body-top`);
+      }
+    } catch (e) {
+      logDebug(`page.content() failed: ${e.message}`);
+    }
+  }
+
+  // ── Fallback 2: Playwright APIRequestContext ───────────────────────────────
+  // Uses the same Chrome TLS fingerprint and session cookies as the browser —
+  // not Node.js OpenSSL. WAFs and CDNs that block Node.js http clients based
+  // on TLS JA3 fingerprint will allow this through.
+  if (gtmIds.size === 0) {
+    try {
+      const apiUrl  = targetUrl || page.url();
+      logDebug(`🌐 Trying Playwright APIRequestContext fetch: ${apiUrl}`);
+      const apiResp = await page.context().request.get(apiUrl, {
+        timeout: 10000,
+        headers: {
+          "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          "Accept-Language": "en-GB,en;q=0.9",
+          "Cache-Control":   "no-cache",
+        },
+      });
+      if (apiResp.ok()) {
+        const apiHtml = await apiResp.text();
+        const before  = gtmIds.size;
+        scanHeadBodyTop(apiHtml);
+        if (gtmIds.size > before) logDebug("✅ GTM found via Playwright APIRequestContext");
+        else logDebug(`APIRequestContext returned ${apiHtml.length} chars — no GTM ID found in head/body-top`);
+      } else {
+        logDebug(`APIRequestContext got HTTP ${apiResp.status()} for ${apiUrl}`);
+      }
+    } catch (e) {
+      logDebug(`Playwright APIRequestContext failed: ${e.message}`);
+    }
+  }
+
+  // ── Fallback 3: plain Node.js HTTP fetch ──────────────────────────────────
+  // Last resort — Node.js http/https module. Has a different TLS fingerprint
+  // to Chrome so some WAFs block it, but it works on most standard servers.
+  if (gtmIds.size === 0) {
+    const rawUrl = targetUrl || page.url();
+    logDebug(`🌐 Trying Node.js HTTP fetch: ${rawUrl}`);
+    const rawHtml = await fetchRawHtml(rawUrl);
+    if (!rawHtml) {
+      logDebug("⚠️ fetchRawHtml returned null — all three HTML fallbacks exhausted");
+    } else {
+      const before = gtmIds.size;
+      scanHeadBodyTop(rawHtml);
+      if (gtmIds.size > before) logDebug("✅ GTM found via Node.js fetchRawHtml");
+      else logDebug(`fetchRawHtml returned ${rawHtml.length} chars — no GTM ID found in head/body-top`);
     }
   }
 
