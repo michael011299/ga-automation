@@ -417,7 +417,7 @@ async function detectTrackingSetup(page, beacons, targetUrl) {
 
   for (let attempt = 0; attempt < 4; attempt++) {
     const scan = await safeEvaluate(page, () => {
-      const found = { gtm: [], ga4: [] };
+      const found = { gtm: [], ga4: [], gtmStartFired: false, gtmIframe: false };
       function extract(str) {
         if (typeof str !== "string" || !str) return;
         for (const m of str.toUpperCase().matchAll(/GTM-[A-Z0-9]{4,}/g)) found.gtm.push(m[0]);
@@ -430,7 +430,13 @@ async function detectTrackingSetup(page, beacons, targetUrl) {
         extract(m.getAttribute("name") || "");
       }
       if (Array.isArray(window.dataLayer)) {
-        for (const push of window.dataLayer) { try { extract(JSON.stringify(push)); } catch {} }
+        for (const push of window.dataLayer) {
+          try {
+            extract(JSON.stringify(push));
+            // gtm.start in dataLayer means GTM has fully initialised
+            if (push && push.event === "gtm.start") found.gtmStartFired = true;
+          } catch {}
+        }
       }
       if (window.google_tag_manager) {
         for (const k of Object.keys(window.google_tag_manager)) extract(k);
@@ -448,12 +454,19 @@ async function detectTrackingSetup(page, beacons, targetUrl) {
       if (typeof window.gtag === "function" && window.gtag.q) {
         for (const call of (window.gtag.q || [])) { try { extract(JSON.stringify(call)); } catch {} }
       }
+      // Live iframe injected by GTM noscript fallback
+      for (const f of document.querySelectorAll("iframe")) {
+        const src = f.getAttribute("src") || "";
+        if (src.includes("googletagmanager.com/ns.html")) { found.gtmIframe = true; extract(src); }
+      }
       return found;
     });
 
     if (scan) {
       scan.gtm.forEach(id => gtmIds.add(id));
       scan.ga4.forEach(id => ga4Ids.add(id));
+      if (scan.gtmStartFired) { logDebug("✅ gtm.start found in dataLayer"); gtmIds.add("GTM-CONFIRMED-VIA-DATALAYER"); }
+      if (scan.gtmIframe)     { logDebug("✅ GTM noscript iframe found in live DOM"); gtmIds.add("GTM-CONFIRMED-VIA-IFRAME"); }
     }
 
     for (const b of beacons) {
@@ -508,6 +521,23 @@ async function detectTrackingSetup(page, beacons, targetUrl) {
       for (const m of scanTarget.matchAll(/GTM-[A-Z0-9]{4,}/g))          gtmIds.add(m[0]);
       for (const m of scanTarget.matchAll(/\b(?:G|GT)-[A-Z0-9]{6,}\b/g)) ga4Ids.add(m[0]);
       if (gtmIds.size > 0) logDebug("✅ GTM found via raw HTML fallback fetch (head/body-top scan)");
+    }
+  }
+
+  // Cookie-based fallback — _gcl_au is written exclusively by GTM's conversion linker.
+  // _ga / _gid are written by GA4 (implies GA4 is firing, which in most cases means GTM).
+  // Only used when no other signal found, to avoid false positives on gtag.js direct installs.
+  if (gtmIds.size === 0) {
+    const gtmCookie = await safeEvaluate(page, () => {
+      const c = document.cookie;
+      if (/_gcl_au=/.test(c)) return "_gcl_au";
+      if (/_ga=/.test(c))     return "_ga";
+      if (/_gid=/.test(c))    return "_gid";
+      return null;
+    });
+    if (gtmCookie) {
+      logDebug(`✅ GTM inferred from cookie presence (${gtmCookie})`);
+      gtmIds.add("GTM-CONFIRMED-VIA-COOKIE");
     }
   }
 
