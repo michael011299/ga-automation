@@ -2507,7 +2507,7 @@ if (await acceptBtn.count() > 0) {
 
 
 
-/* STEP 6 — DATA COLLECTION (PERMANENT FIX) */
+/* STEP 6 — DATA COLLECTION (WEB STREAM) */
 console.log('📍 Step 6: Data Collection (Web Stream)');
 
 const { websiteUrl, websiteName } = getWebsiteInputs(req);
@@ -2515,17 +2515,19 @@ if (!websiteUrl || !websiteName) {
   throw new Error(`Missing websiteUrl or websiteName. Got: ${JSON.stringify(req.body)}`);
 }
 
-// Let navigation settle
+// Wait for navigation after terms acceptance
 await page.waitForLoadState('domcontentloaded', { timeout: 30000 });
-await page.waitForTimeout(1500);
+await page.waitForTimeout(2000);
+console.log('📍 URL after terms:', page.url());
 
-// Robust locators (do NOT rely on exact placeholder)
+// ── Locators ──────────────────────────────────────────────────────────────
+// Web picker button — covers "Web", "Website", "Web stream" (GA changes labels)
 const webOptionBtn = page
-  .locator('button, [role="button"]')
-  .filter({ hasText: /\bweb\b/i })
+  .locator('button, [role="button"], [role="option"]')
+  .filter({ hasText: /\bweb(site|stream)?\b/i })
   .first();
 
-// Website URL input (cover multiple UI variants)
+// URL input — covers every placeholder/aria variant GA has shipped
 const websiteUrlInput = page.locator(
   [
     'input[type="url"]',
@@ -2534,41 +2536,48 @@ const websiteUrlInput = page.locator(
     'input[placeholder*="website" i]',
     'input[placeholder*="example" i]',
     'input[placeholder*="mywebsite" i]',
-    'input[placeholder*="www" i]'
+    'input[placeholder*="www" i]',
+    'input[placeholder*="domain" i]'
   ].join(', ')
 ).first();
 
-// Website name field (also varies)
-const websiteNameInput = page.locator(
-  [
-    'input[aria-label*="Stream name" i]',
-    'input[aria-label*="Website name" i]',
-    'input[placeholder*="Stream name" i]',
-    'input[placeholder*="Website name" i]'
-  ].join(', ')
-).first();
+// ── Try picker or form with a short timeout first ─────────────────────────
+console.log('⏳ Looking for Web picker or URL form (20s)...');
+const step6State = await Promise.race([
+  webOptionBtn.waitFor({ state: 'visible', timeout: 20000 }).then(() => 'PICKER'),
+  websiteUrlInput.waitFor({ state: 'visible', timeout: 20000 }).then(() => 'FORM'),
+]).catch(() => 'UNKNOWN');
 
-console.log('⏳ Waiting for either Web option or form fields...');
-
-const state = await Promise.race([
-  webOptionBtn.waitFor({ state: 'visible', timeout: 60000 }).then(() => 'PICKER'),
-  websiteUrlInput.waitFor({ state: 'visible', timeout: 60000 }).then(() => 'FORM')
-]).catch(async (e) => {
-  // Debug helpers: you can keep these while stabilising
-  console.log('❌ Neither picker nor form appeared. Current URL:', page.url());
-  await page.screenshot({ path: 'step6_timeout.png', fullPage: true });
-  throw e;
-});
-
-if (state === 'PICKER') {
-  console.log('🧭 On stream picker. Clicking Web...');
+if (step6State === 'PICKER') {
+  console.log('🧭 Stream picker visible — clicking Web...');
   await webOptionBtn.click({ timeout: 15000 });
-
-  // After clicking Web, the form should appear
   await websiteUrlInput.waitFor({ state: 'visible', timeout: 30000 });
-  console.log('✅ Reached web stream form');
-} else {
+  console.log('✅ Web stream form appeared after picker click');
+} else if (step6State === 'FORM') {
   console.log('✅ Already on web stream form');
+} else {
+  // GA4 changed the post-terms UI — neither picker nor form appeared.
+  // Extract property + account IDs from the current URL and navigate
+  // directly to the web stream creation page.
+  console.log('⚠️ Picker/form not found after 20s. Attempting direct navigation...');
+  await page.screenshot({ path: 'step6_fallback.png', fullPage: true }).catch(() => {});
+
+  const currentUrl  = page.url();
+  const propIdMatch = currentUrl.match(/#\/a(\d+)p(\d+)/);
+  if (propIdMatch) {
+    const [, aId, pId] = propIdMatch;
+    const streamUrl = `https://analytics.google.com/analytics/web/#/a${aId}p${pId}/admin/streams/new/web`;
+    console.log(`🔗 Navigating to stream creation: ${streamUrl}`);
+    await page.goto(streamUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.waitForTimeout(2000);
+    await websiteUrlInput.waitFor({ state: 'visible', timeout: 30000 });
+    console.log('✅ Reached web stream form via direct URL');
+  } else {
+    // No property ID in URL yet — fall back to clickWebPlatform helper
+    console.log('⚠️ No property ID in URL, trying clickWebPlatform helper...');
+    await clickWebPlatform(page);
+    await websiteUrlInput.waitFor({ state: 'visible', timeout: 30000 });
+  }
 }
 
 console.log('📝 Filling web stream form...');
