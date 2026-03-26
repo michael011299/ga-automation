@@ -7,6 +7,8 @@
 const SCRIPT_VERSION = "2026-03-13T18:00:00Z-V27";
 
 const { chromium } = require("playwright");
+const https        = require("https");
+const http         = require("http");
 
 const LOG_LEVEL = (process.env.LOG_LEVEL || "info").toLowerCase();
 function logInfo(msg, data = null) {
@@ -165,6 +167,43 @@ async function safeEvaluate(page, func, ...args) {
 
 async function safeWait(ms) {
   return new Promise(r => setTimeout(r, ms));
+}
+
+// Plain Node.js HTTP fetch — used as a fallback to read raw HTML when
+// Playwright-based detection misses GTM (bot detection, JS errors, etc.)
+async function fetchRawHtml(url, redirectsLeft = 3) {
+  return new Promise(resolve => {
+    try {
+      const parsed = new URL(url);
+      const lib    = parsed.protocol === "https:" ? https : http;
+      const req    = lib.get(url, {
+        headers: {
+          "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+          "Accept":          "text/html,application/xhtml+xml",
+          "Accept-Language": "en-GB,en;q=0.9",
+        },
+        timeout: 8000,
+      }, res => {
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && redirectsLeft > 0) {
+          const next = new URL(res.headers.location, url).href;
+          res.resume();
+          return fetchRawHtml(next, redirectsLeft - 1).then(resolve);
+        }
+        let body = "";
+        res.setEncoding("utf8");
+        res.on("data", chunk => {
+          body += chunk;
+          if (body.length > 300000) req.destroy(); // avoid huge pages
+        });
+        res.on("end",   () => resolve(body));
+        res.on("error", () => resolve(null));
+      });
+      req.on("error",   () => resolve(null));
+      req.on("timeout", () => { req.destroy(); resolve(null); });
+    } catch {
+      resolve(null);
+    }
+  });
 }
 
 // FIX 2: acquireCheckSlot with hard timeout so a stuck check never blocks the queue
@@ -354,7 +393,7 @@ async function waitForGtmInit(page, beacons, maxWaitMs = POST_CONSENT_MAX_WAIT_M
 // ─────────────────────────────────────────────
 // FIX 4: detectTrackingSetup — break early on GTM confirmed
 // ─────────────────────────────────────────────
-async function detectTrackingSetup(page, beacons) {
+async function detectTrackingSetup(page, beacons, targetUrl) {
   let gtmIds = new Set();
   let ga4Ids = new Set();
 
@@ -430,6 +469,21 @@ async function detectTrackingSetup(page, beacons) {
     if (gtmIds.size > 0 || gtmInNetwork || globalGtmObj) break;
 
     await safeWait([500, 1000, 2000, 3000][attempt] || 1000);
+  }
+
+  // Fallback: plain HTTP fetch of the raw HTML — catches sites where Playwright
+  // is blocked or JS execution is disrupted (bot detection, CMP hiding scripts, etc.)
+  // GTM is always in the static HTML source, so this reliably finds it when the
+  // browser-based checks above all fail.
+  if (gtmIds.size === 0) {
+    const rawUrl  = targetUrl || page.url();
+    const rawHtml = await fetchRawHtml(rawUrl);
+    if (rawHtml) {
+      const upper = rawHtml.toUpperCase();
+      for (const m of upper.matchAll(/GTM-[A-Z0-9]{4,}/g))           gtmIds.add(m[0]);
+      for (const m of upper.matchAll(/\b(?:G|GT)-[A-Z0-9]{6,}\b/g))  ga4Ids.add(m[0]);
+      if (gtmIds.size > 0) logDebug("✅ GTM found via raw HTML fallback fetch");
+    }
   }
 
   const linkedGa4   = new Set();
@@ -1219,7 +1273,7 @@ async function trackingHealthCheckSiteInternal(url) {
     await handleCookieConsent(page);
     await waitForGtmInit(page, beacons, POST_CONSENT_MAX_WAIT_MS);
 
-    const tracking = await detectTrackingSetup(page, beacons);
+    const tracking = await detectTrackingSetup(page, beacons, targetUrl);
     results.detected_gtm_ids = tracking.gtm;
     results.detected_ga4_ids = [...tracking.ga4, ...tracking.unlinked_ga4];
 
