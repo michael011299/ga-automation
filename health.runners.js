@@ -163,7 +163,10 @@ function escapeAttrValue(v) { return String(v).replace(/\\/g,"\\\\").replace(/"/
 function nowIso()           { return new Date().toISOString(); }
 
 async function safeEvaluate(page, func, ...args) {
-  try { return await page.evaluate(func, ...args); } catch { return null; }
+  try { return await page.evaluate(func, ...args); } catch (e) {
+    logDebug(`safeEvaluate failed: ${e.message}`);
+    return null;
+  }
 }
 
 async function safeWait(ms) {
@@ -182,10 +185,10 @@ async function fetchRawHtml(url, redirectsLeft = 3) {
       const lib    = parsed.protocol === "https:" ? https : http;
       const req    = lib.get(url, {
         headers: {
-          "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+          "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
           "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
           "Accept-Language": "en-GB,en;q=0.9",
-          "Accept-Encoding": "gzip, deflate",
+          "Accept-Encoding": "gzip, deflate, br",
           "Cache-Control":   "no-cache",
           "Connection":      "keep-alive",
         },
@@ -196,7 +199,10 @@ async function fetchRawHtml(url, redirectsLeft = 3) {
           res.resume();
           return fetchRawHtml(next, redirectsLeft - 1).then(resolve);
         }
-        if (res.statusCode < 200 || res.statusCode >= 400) { res.resume(); return resolve(null); }
+        if (res.statusCode < 200 || res.statusCode >= 400) {
+          logDebug(`fetchRawHtml: HTTP ${res.statusCode} for ${url}`);
+          res.resume(); return resolve(null);
+        }
 
         // Decompress based on Content-Encoding header
         const enc = (res.headers["content-encoding"] || "").toLowerCase();
@@ -204,21 +210,42 @@ async function fetchRawHtml(url, redirectsLeft = 3) {
         try {
           if      (enc === "gzip")    stream = res.pipe(zlib.createGunzip());
           else if (enc === "deflate") stream = res.pipe(zlib.createInflate());
-          // brotli ("br") skipped — rare on static HTML pages
-        } catch { stream = res; }
+          else if (enc === "br")      stream = res.pipe(zlib.createBrotliDecompress());
+        } catch (e) {
+          logDebug(`fetchRawHtml: decompression setup failed (${enc}): ${e.message}`);
+          stream = res;
+        }
 
         let body = "";
+        let truncated = false;
         stream.setEncoding("utf8");
         stream.on("data", chunk => {
           body += chunk;
-          if (body.length > 300000) req.destroy();
+          // GTM snippet is always in <head> — once we have 300KB we have
+          // everything we need. Destroy the connection but keep what we have.
+          if (body.length > 300000 && !truncated) {
+            truncated = true;
+            logDebug(`fetchRawHtml: body truncated at 300KB for ${url}`);
+            req.destroy();
+          }
         });
-        stream.on("end",   () => resolve(body));
-        stream.on("error", () => resolve(null));
+        stream.on("end", () => resolve(body || null));
+        // On error after truncation we still have the head — return it.
+        // On a genuine network error body will be empty so return null.
+        stream.on("error", e => {
+          if (body.length > 0) {
+            logDebug(`fetchRawHtml: stream error after ${body.length} chars (${e.message}) — returning partial body`);
+            resolve(body);
+          } else {
+            logDebug(`fetchRawHtml: stream error with empty body for ${url}: ${e.message}`);
+            resolve(null);
+          }
+        });
       });
-      req.on("error",   () => resolve(null));
-      req.on("timeout", () => { req.destroy(); resolve(null); });
-    } catch {
+      req.on("error",   e  => { logDebug(`fetchRawHtml: request error for ${url}: ${e.message}`); resolve(null); });
+      req.on("timeout", () => { logDebug(`fetchRawHtml: timeout for ${url}`); req.destroy(); resolve(null); });
+    } catch (e) {
+      logDebug(`fetchRawHtml: exception for ${url}: ${e.message}`);
       resolve(null);
     }
   });
@@ -510,7 +537,9 @@ async function detectTrackingSetup(page, beacons, targetUrl) {
   // that merely mention a GTM ID anywhere in their content).
   if (gtmIds.size === 0) {
     const rawUrl  = targetUrl || page.url();
+    logDebug(`🌐 GTM not found via Playwright — trying raw HTML fetch: ${rawUrl}`);
     const rawHtml = await fetchRawHtml(rawUrl);
+    if (!rawHtml) logDebug("⚠️ fetchRawHtml returned null — raw HTML fallback could not retrieve page");
     if (rawHtml) {
       const headEnd    = rawHtml.search(/<\/head>/i);
       const headHtml   = headEnd > 0 ? rawHtml.slice(0, headEnd) : rawHtml.slice(0, 8000);
