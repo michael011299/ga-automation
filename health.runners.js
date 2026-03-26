@@ -868,6 +868,15 @@ async function detectFieldType(el) {
     if (type === "checkbox")               return { type: "checkbox" };
     if (type === "radio")                  return { type: "radio" };
     if (type === "hidden")                 return { type: "hidden" };
+    if (type === "file")                   return { type: "file" };
+    if (type === "date")                   return { type: "date" };
+    if (type === "time")                   return { type: "time" };
+    if (type === "datetime-local")         return { type: "datetime-local" };
+    if (type === "month")                  return { type: "month" };
+    if (type === "week")                   return { type: "week" };
+    if (type === "number" || type === "range") return { type: "number" };
+    if (type === "url")                    return { type: "url" };
+    if (type === "color")                  return { type: "color" };
     if (/email/.test(c))                   return { type: "email" };
     if (/phone|tel|mobile/.test(c))        return { type: "phone" };
     if (/message|enquiry|comment|details|how.?can/.test(c) || tag === "textarea") return { type: "message" };
@@ -895,6 +904,37 @@ async function fillFormFieldSmart(el, fieldInfo) {
       await el.check({ timeout: 500, force: true }).catch(() => null);
       return;
     }
+    // Native date/time inputs — Playwright fills these with correctly-formatted values
+    if (type === "date") {
+      await el.fill(TEST_VALUES.date, { timeout: 500 }).catch(() => null);
+      return;
+    }
+    if (type === "time") {
+      await el.fill("10:00", { timeout: 500 }).catch(() => null);
+      return;
+    }
+    if (type === "datetime-local") {
+      await el.fill(`${TEST_VALUES.date}T10:00`, { timeout: 500 }).catch(() => null);
+      return;
+    }
+    if (type === "month") {
+      await el.fill("2026-12", { timeout: 500 }).catch(() => null);
+      return;
+    }
+    if (type === "week") {
+      await el.fill("2026-W52", { timeout: 500 }).catch(() => null);
+      return;
+    }
+    if (type === "number") {
+      await el.fill(TEST_VALUES.number, { timeout: 500 }).catch(() => null);
+      return;
+    }
+    if (type === "url") {
+      await el.fill("https://example.com", { timeout: 500 }).catch(() => null);
+      return;
+    }
+    // Skip inputs the bot genuinely cannot fill — file uploads, color pickers, range sliders
+    if (type === "file" || type === "color" || type === "range") return;
     const valueMap = {
       email: TEST_VALUES.email, phone: TEST_VALUES.phone, message: TEST_VALUES.message,
       firstName: TEST_VALUES.firstName, lastName: TEST_VALUES.lastName,
@@ -951,9 +991,9 @@ async function testFirstPartyForm(page, beacons, pageUrl, formMeta) {
       const issues = [];
       const visible = [...form.querySelectorAll("input,select,textarea")].filter(el => el.offsetParent !== null);
       if (visible.some(el => el.type === "file")) issues.push("file upload");
-      if (visible.some(el => ["date","time","datetime-local","month","week"].includes(el.type))) issues.push("date/time picker");
+      // Native date/time inputs are now handled — only flag custom JS date pickers
       if (form.querySelector("[class*='datepick'],[class*='flatpickr'],[class*='pikaday'],[class*='daterangepick'],[class*='react-datepick'],[class*='vue-datepick'],[class*='air-datepick']"))
-        issues.push("custom date picker");
+        issues.push("custom date picker widget");
       return issues;
     }, formMeta.index);
     if (unfillableFields.length > 0) {
