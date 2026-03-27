@@ -7,9 +7,6 @@
 const SCRIPT_VERSION = "2026-03-13T18:00:00Z-V27";
 
 const { chromium } = require("playwright");
-const https        = require("https");
-const http         = require("http");
-const zlib         = require("zlib");
 
 const LOG_LEVEL = (process.env.LOG_LEVEL || "info").toLowerCase();
 function logInfo(msg, data = null) {
@@ -97,8 +94,7 @@ async function getBrowser() {
     await browserLaunchLock;
   }
 
-  // If the browser process died (crash, OOM, WebGL fault), clear the stale reference
-  // so we relaunch rather than returning a dead browser to every waiting caller.
+  // If Chrome crashed (WebGL fault, OOM, etc.) clear the dead reference so we relaunch
   if (globalBrowser && !globalBrowser.isConnected()) {
     logInfo("⚠️ Browser disconnected — clearing stale reference for relaunch");
     globalBrowser = null;
@@ -111,7 +107,7 @@ async function getBrowser() {
     const old = globalBrowser;
     globalBrowser = null;
     browserUses   = 0;
-    old.close().catch(() => null);
+    old.close().catch(() => null); // fire-and-forget — don't block on close
   }
 
   if (!globalBrowser) {
@@ -124,34 +120,23 @@ async function getBrowser() {
         headless: HEADLESS,
         timeout: 30000,
         args: [
-          "--no-sandbox", "--disable-setuid-sandbox",
+          "--no-sandbox","--disable-setuid-sandbox",
           "--disable-blink-features=AutomationControlled",
-          "--disable-dev-shm-usage",
-          // GPU / WebGL — on headless Linux, Chrome crashes if it can't find a
-          // GPU and the software WebGL fallback is disabled by default in recent
-          // builds.  --enable-unsafe-swiftshader keeps the software path alive.
-          "--disable-gpu",
-          // Disable WebGL entirely — headless Linux has no GPU and the software
-          // fallback (SwiftShader) was removed in recent Chrome builds. Without
-          // this flag Chrome crashes on any site that touches WebGL.
-          "--disable-webgl", "--disable-webgl2",
-          // Suppress ALSA / audio errors and media permission prompts
-          "--mute-audio", "--use-fake-ui-for-media-stream",
-          // Misc stability flags
-          "--no-first-run", "--no-default-browser-check",
-          "--disable-background-timer-throttling",
-          "--proxy-server='direct://'", "--proxy-bypass-list=*",
+          "--disable-dev-shm-usage","--disable-gpu",
+          // Headless Linux has no GPU — Chrome crashes when sites use WebGL
+          // because the software fallback (SwiftShader) was removed in recent builds.
+          "--disable-webgl","--disable-webgl2",
+          // Suppress ALSA audio errors and media permission prompts
+          "--mute-audio","--use-fake-ui-for-media-stream",
+          "--proxy-server='direct://'","--proxy-bypass-list=*"
         ],
       });
-
-      // Clear the global ref the moment Chrome dies so the next getBrowser()
-      // call relaunches instead of returning a dead browser.
+      // Clear the global ref the moment Chrome dies so next getBrowser() relaunches
       globalBrowser.on("disconnected", () => {
         logInfo("⚠️ Browser process disconnected — will relaunch on next request");
         globalBrowser = null;
         browserUses   = 0;
       });
-
       logDebug("🚀 Browser launched");
     } finally {
       browserLaunchLock = null;
@@ -193,92 +178,11 @@ function escapeAttrValue(v) { return String(v).replace(/\\/g,"\\\\").replace(/"/
 function nowIso()           { return new Date().toISOString(); }
 
 async function safeEvaluate(page, func, ...args) {
-  try { return await page.evaluate(func, ...args); } catch (e) {
-    logDebug(`safeEvaluate failed: ${e.message}`);
-    return null;
-  }
+  try { return await page.evaluate(func, ...args); } catch { return null; }
 }
 
 async function safeWait(ms) {
   return new Promise(r => setTimeout(r, ms));
-}
-
-// Plain Node.js HTTP fetch — used as a fallback to read raw HTML when
-// Playwright-based detection misses GTM (bot detection, JS errors, etc.)
-// Sends Accept-Encoding: gzip so we get the same compressed response a real
-// browser would, then decompresses it — without this, compressed responses
-// arrive as binary garbage and the GTM regex never matches.
-async function fetchRawHtml(url, redirectsLeft = 3) {
-  return new Promise(resolve => {
-    try {
-      const parsed = new URL(url);
-      const lib    = parsed.protocol === "https:" ? https : http;
-      const req    = lib.get(url, {
-        headers: {
-          "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-          "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-          "Accept-Language": "en-GB,en;q=0.9",
-          "Accept-Encoding": "gzip, deflate, br",
-          "Cache-Control":   "no-cache",
-          "Connection":      "keep-alive",
-        },
-        timeout: 8000,
-      }, res => {
-        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && redirectsLeft > 0) {
-          const next = new URL(res.headers.location, url).href;
-          res.resume();
-          return fetchRawHtml(next, redirectsLeft - 1).then(resolve);
-        }
-        if (res.statusCode < 200 || res.statusCode >= 400) {
-          logDebug(`fetchRawHtml: HTTP ${res.statusCode} for ${url}`);
-          res.resume(); return resolve(null);
-        }
-
-        // Decompress based on Content-Encoding header
-        const enc = (res.headers["content-encoding"] || "").toLowerCase();
-        let stream = res;
-        try {
-          if      (enc === "gzip")    stream = res.pipe(zlib.createGunzip());
-          else if (enc === "deflate") stream = res.pipe(zlib.createInflate());
-          else if (enc === "br")      stream = res.pipe(zlib.createBrotliDecompress());
-        } catch (e) {
-          logDebug(`fetchRawHtml: decompression setup failed (${enc}): ${e.message}`);
-          stream = res;
-        }
-
-        let body = "";
-        let truncated = false;
-        stream.setEncoding("utf8");
-        stream.on("data", chunk => {
-          body += chunk;
-          // GTM snippet is always in <head> — once we have 300KB we have
-          // everything we need. Destroy the connection but keep what we have.
-          if (body.length > 300000 && !truncated) {
-            truncated = true;
-            logDebug(`fetchRawHtml: body truncated at 300KB for ${url}`);
-            req.destroy();
-          }
-        });
-        stream.on("end", () => resolve(body || null));
-        // On error after truncation we still have the head — return it.
-        // On a genuine network error body will be empty so return null.
-        stream.on("error", e => {
-          if (body.length > 0) {
-            logDebug(`fetchRawHtml: stream error after ${body.length} chars (${e.message}) — returning partial body`);
-            resolve(body);
-          } else {
-            logDebug(`fetchRawHtml: stream error with empty body for ${url}: ${e.message}`);
-            resolve(null);
-          }
-        });
-      });
-      req.on("error",   e  => { logDebug(`fetchRawHtml: request error for ${url}: ${e.message}`); resolve(null); });
-      req.on("timeout", () => { logDebug(`fetchRawHtml: timeout for ${url}`); req.destroy(); resolve(null); });
-    } catch (e) {
-      logDebug(`fetchRawHtml: exception for ${url}: ${e.message}`);
-      resolve(null);
-    }
-  });
 }
 
 // FIX 2: acquireCheckSlot with hard timeout so a stuck check never blocks the queue
@@ -468,13 +372,13 @@ async function waitForGtmInit(page, beacons, maxWaitMs = POST_CONSENT_MAX_WAIT_M
 // ─────────────────────────────────────────────
 // FIX 4: detectTrackingSetup — break early on GTM confirmed
 // ─────────────────────────────────────────────
-async function detectTrackingSetup(page, beacons, targetUrl) {
+async function detectTrackingSetup(page, beacons) {
   let gtmIds = new Set();
   let ga4Ids = new Set();
 
   for (let attempt = 0; attempt < 4; attempt++) {
     const scan = await safeEvaluate(page, () => {
-      const found = { gtm: [], ga4: [], gtmStartFired: false, gtmIframe: false };
+      const found = { gtm: [], ga4: [] };
       function extract(str) {
         if (typeof str !== "string" || !str) return;
         for (const m of str.toUpperCase().matchAll(/GTM-[A-Z0-9]{4,}/g)) found.gtm.push(m[0]);
@@ -487,13 +391,7 @@ async function detectTrackingSetup(page, beacons, targetUrl) {
         extract(m.getAttribute("name") || "");
       }
       if (Array.isArray(window.dataLayer)) {
-        for (const push of window.dataLayer) {
-          try {
-            extract(JSON.stringify(push));
-            // gtm.start in dataLayer means GTM has fully initialised
-            if (push && push.event === "gtm.start") found.gtmStartFired = true;
-          } catch {}
-        }
+        for (const push of window.dataLayer) { try { extract(JSON.stringify(push)); } catch {} }
       }
       if (window.google_tag_manager) {
         for (const k of Object.keys(window.google_tag_manager)) extract(k);
@@ -511,19 +409,12 @@ async function detectTrackingSetup(page, beacons, targetUrl) {
       if (typeof window.gtag === "function" && window.gtag.q) {
         for (const call of (window.gtag.q || [])) { try { extract(JSON.stringify(call)); } catch {} }
       }
-      // Live iframe injected by GTM noscript fallback
-      for (const f of document.querySelectorAll("iframe")) {
-        const src = f.getAttribute("src") || "";
-        if (src.includes("googletagmanager.com/ns.html")) { found.gtmIframe = true; extract(src); }
-      }
       return found;
     });
 
     if (scan) {
       scan.gtm.forEach(id => gtmIds.add(id));
       scan.ga4.forEach(id => ga4Ids.add(id));
-      if (scan.gtmStartFired) { logDebug("✅ gtm.start found in dataLayer"); gtmIds.add("GTM-CONFIRMED-VIA-DATALAYER"); }
-      if (scan.gtmIframe)     { logDebug("✅ GTM noscript iframe found in live DOM"); gtmIds.add("GTM-CONFIRMED-VIA-IFRAME"); }
     }
 
     for (const b of beacons) {
@@ -537,122 +428,14 @@ async function detectTrackingSetup(page, beacons, targetUrl) {
       } catch {}
     }
 
-    const gtmInNetwork = beacons.some(b => {
-      const u = b.url;
-      // Google's CDN — any request except gtag/js (which is GA4 direct, not GTM)
-      if (u.includes("googletagmanager.com") && !u.includes("/gtag/js")) return true;
-      // Custom domain / server-side GTM proxy — path must be /gtm.js and carry a GTM- ID
-      if (u.includes("/gtm.js") && /[?&]id=GTM-/i.test(u)) return true;
-      return false;
-    });
+    const gtmInNetwork = beacons.some(b =>
+      b.url.includes("googletagmanager.com") || b.url.includes("/gtm.js")
+    );
     const globalGtmObj = await safeEvaluate(page, () => !!window.google_tag_manager);
-
-    // Also scan raw HTML source — GTM snippet is always placed statically in <head> or top of <body>
-    const htmlGtmIds = await safeEvaluate(page, () => {
-      const src = (document.head?.innerHTML || "") + (document.body?.innerHTML || "").slice(0, 4000);
-      return [...src.toUpperCase().matchAll(/GTM-[A-Z0-9]{4,}/g)].map(m => m[0]);
-    });
-    if (htmlGtmIds?.length) htmlGtmIds.forEach(id => gtmIds.add(id));
 
     if (gtmIds.size > 0 || gtmInNetwork || globalGtmObj) break;
 
     await safeWait([500, 1000, 2000, 3000][attempt] || 1000);
-  }
-
-  // ── HTML scan helper ──────────────────────────────────────────────────────
-  // Scans only <head> + first 2000 chars of <body> to avoid false positives
-  // from blog posts / docs that mention GTM IDs in their content.
-  function scanHeadBodyTop(html) {
-    if (!html) return;
-    const headEnd    = html.search(/<\/head>/i);
-    const headHtml   = headEnd > 0 ? html.slice(0, headEnd) : html.slice(0, 8000);
-    const bodyOffset = headEnd > 0 ? headEnd : 0;
-    const bodyTop    = html.slice(bodyOffset, bodyOffset + 2000);
-    const target     = (headHtml + bodyTop).toUpperCase();
-    for (const m of target.matchAll(/GTM-[A-Z0-9]{4,}/g))          gtmIds.add(m[0]);
-    for (const m of target.matchAll(/\b(?:G|GT)-[A-Z0-9]{6,}\b/g)) ga4Ids.add(m[0]);
-  }
-
-  // ── Fallback 1: page.content() via CDP ────────────────────────────────────
-  // page.content() uses Playwright's DevTools Protocol isolated world —
-  // separate from the main JS world, so bot detection that overrides
-  // window.eval or Function cannot interfere with it.
-  if (gtmIds.size === 0) {
-    try {
-      const cdpHtml = await page.content();
-      if (cdpHtml) {
-        const before = gtmIds.size;
-        scanHeadBodyTop(cdpHtml);
-        if (gtmIds.size > before) logDebug("✅ GTM found via page.content() CDP scan");
-        else logDebug(`page.content() returned ${cdpHtml.length} chars — no GTM ID found in head/body-top`);
-      }
-    } catch (e) {
-      logDebug(`page.content() failed: ${e.message}`);
-    }
-  }
-
-  // ── Fallback 2: Playwright APIRequestContext ───────────────────────────────
-  // Uses the same Chrome TLS fingerprint and session cookies as the browser —
-  // not Node.js OpenSSL. WAFs and CDNs that block Node.js http clients based
-  // on TLS JA3 fingerprint will allow this through.
-  if (gtmIds.size === 0) {
-    try {
-      const apiUrl  = targetUrl || page.url();
-      logDebug(`🌐 Trying Playwright APIRequestContext fetch: ${apiUrl}`);
-      const apiResp = await page.context().request.get(apiUrl, {
-        timeout: 10000,
-        headers: {
-          "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-          "Accept-Language": "en-GB,en;q=0.9",
-          "Cache-Control":   "no-cache",
-        },
-      });
-      if (apiResp.ok()) {
-        const apiHtml = await apiResp.text();
-        const before  = gtmIds.size;
-        scanHeadBodyTop(apiHtml);
-        if (gtmIds.size > before) logDebug("✅ GTM found via Playwright APIRequestContext");
-        else logDebug(`APIRequestContext returned ${apiHtml.length} chars — no GTM ID found in head/body-top`);
-      } else {
-        logDebug(`APIRequestContext got HTTP ${apiResp.status()} for ${apiUrl}`);
-      }
-    } catch (e) {
-      logDebug(`Playwright APIRequestContext failed: ${e.message}`);
-    }
-  }
-
-  // ── Fallback 3: plain Node.js HTTP fetch ──────────────────────────────────
-  // Last resort — Node.js http/https module. Has a different TLS fingerprint
-  // to Chrome so some WAFs block it, but it works on most standard servers.
-  if (gtmIds.size === 0) {
-    const rawUrl = targetUrl || page.url();
-    logDebug(`🌐 Trying Node.js HTTP fetch: ${rawUrl}`);
-    const rawHtml = await fetchRawHtml(rawUrl);
-    if (!rawHtml) {
-      logDebug("⚠️ fetchRawHtml returned null — all three HTML fallbacks exhausted");
-    } else {
-      const before = gtmIds.size;
-      scanHeadBodyTop(rawHtml);
-      if (gtmIds.size > before) logDebug("✅ GTM found via Node.js fetchRawHtml");
-      else logDebug(`fetchRawHtml returned ${rawHtml.length} chars — no GTM ID found in head/body-top`);
-    }
-  }
-
-  // Cookie-based fallback — _gcl_au is written exclusively by GTM's conversion linker.
-  // _ga / _gid are written by GA4 (implies GA4 is firing, which in most cases means GTM).
-  // Only used when no other signal found, to avoid false positives on gtag.js direct installs.
-  if (gtmIds.size === 0) {
-    const gtmCookie = await safeEvaluate(page, () => {
-      const c = document.cookie;
-      if (/_gcl_au=/.test(c)) return "_gcl_au";
-      if (/_ga=/.test(c))     return "_ga";
-      if (/_gid=/.test(c))    return "_gid";
-      return null;
-    });
-    if (gtmCookie) {
-      logDebug(`✅ GTM inferred from cookie presence (${gtmCookie})`);
-      gtmIds.add("GTM-CONFIRMED-VIA-COOKIE");
-    }
   }
 
   const linkedGa4   = new Set();
@@ -668,12 +451,7 @@ async function detectTrackingSetup(page, beacons, targetUrl) {
     if (!linkedGa4.has(id)) unlinkedGa4.add(id);
   }
 
-  const gtmInNetwork   = beacons.some(b => {
-    const u = b.url;
-    if (u.includes("googletagmanager.com") && !u.includes("/gtag/js")) return true;
-    if (u.includes("/gtm.js") && /[?&]id=GTM-/i.test(u)) return true;
-    return false;
-  });
+  const gtmInNetwork   = beacons.some(b => b.url.includes("googletagmanager.com") || b.url.includes("/gtm.js"));
   const ga4FiredViaGtm = beacons.some(b => b.type === "GA4" && !!b.gtmHash);
   const globalGtmObj   = await safeEvaluate(page, () => !!window.google_tag_manager);
 
@@ -763,14 +541,9 @@ async function scanCTAsOnPage(page) {
   }));
 
   const plainText = await safeEvaluate(page, () => {
-    function normPhone(d) {
-      if (d.startsWith('+44')) return '0' + d.slice(3);
-      if (d.startsWith('0044')) return '0' + d.slice(4);
-      return d;
-    }
     const linkedPhones = new Set(
       Array.from(document.querySelectorAll("a[href^='tel:' i]"))
-        .map(a => normPhone((a.getAttribute("href") || "").replace(/[^\d\+]/g, ""))).filter(Boolean)
+        .map(a => (a.getAttribute("href") || "").replace(/[^\d\+]/g, "")).filter(Boolean)
     );
     const linkedEmails = new Set(
       Array.from(document.querySelectorAll("a[href^='mailto:' i]"))
@@ -780,53 +553,37 @@ async function scanCTAsOnPage(page) {
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
       acceptNode(node) {
         const tag = node.parentElement?.tagName?.toLowerCase();
-        if (["script","style","noscript","head","template"].includes(tag)) return NodeFilter.FILTER_REJECT;
-        const el = node.parentElement;
-        if (el) {
-          // Skip elements hidden via CSS (display:none, visibility:hidden, content-visibility:hidden)
-          try {
-            if (typeof el.checkVisibility === "function" && !el.checkVisibility({ checkVisibilityCSS: true }))
-              return NodeFilter.FILTER_REJECT;
-          } catch {}
-          // Skip zero-area elements (overflow:hidden wrappers, off-canvas, max-height:0, etc.)
-          if (el.offsetWidth === 0 && el.offsetHeight === 0) return NodeFilter.FILTER_REJECT;
-        }
+        if (["script","style","noscript","head"].includes(tag)) return NodeFilter.FILTER_REJECT;
         return NodeFilter.FILTER_ACCEPT;
       }
     });
 
-    // Require number to start with 0 (UK national) or + (international).
-    // Random numeric strings (order IDs, reference numbers, IP addresses,
-    // version numbers) almost never start with 0 or +, so this single
-    // requirement eliminates the vast majority of false positives.
-    // Negative lookahead/lookbehind stop partial matches inside longer strings.
+    // Require UK (starts 0) or international (starts +) — at least 10 pure digits, max 13
     const phonePattern = /(?<![.\d])(\+?0[\d\s\-\(\)\.]{7,16}[\d]|\+[1-9]\d[\d\s\-\(\)\.]{6,14}[\d])(?![.\d])/g;
     const emailPattern = /([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})/g;
-    // Reserved / placeholder domains that will never be real contact emails
-    const placeholderDomains = new Set(["example.com","example.org","example.net","example.co.uk","test.com","placeholder.com","domain.com","yourdomain.com","email.com"]);
     const foundPhones = [], foundEmails = [];
 
     let node;
     while ((node = walker.nextNode())) {
       const text = node.textContent || "";
-      // Skip any text that is already inside an anchor link of any kind
       const parentAnchor = node.parentElement?.closest("a[href]");
-      if (!parentAnchor) {
+      const isPhoneLink  = parentAnchor && (parentAnchor.getAttribute("href") || "").toLowerCase().startsWith("tel:");
+      const isEmailLink  = parentAnchor && (parentAnchor.getAttribute("href") || "").toLowerCase().startsWith("mailto:");
+
+      if (!isPhoneLink) {
         for (const m of text.matchAll(phonePattern)) {
-          const rawDigits  = m[1].replace(/[^\d\+]/g, "");
-          const digits     = normPhone(rawDigits);
-          const pureDigits = digits.replace(/[^0-9]/g, "");
-          // UK phones: 10–11 digits. Allow up to 13 for international formats.
+          const pureDigits = m[1].replace(/[^0-9]/g, "");
+          // Must be 10–13 digits; exclude IP addresses (e.g. 192.168.1.1)
           if (pureDigits.length < 10 || pureDigits.length > 13) continue;
-          // Skip IP addresses (e.g. 0.0.0.0 style — unlikely but defensive)
           if (/^\d{1,3}(?:[.\s]\d{1,3}){3}$/.test(m[1].trim())) continue;
+          const digits = m[1].replace(/[^\d\+]/g, "");
           if (!linkedPhones.has(digits))
             foundPhones.push({ raw: m[1].trim(), digits });
         }
+      }
+      if (!isEmailLink) {
         for (const m of text.matchAll(emailPattern)) {
-          const norm   = m[1].trim().toLowerCase();
-          const domain = norm.split("@")[1] || "";
-          if (placeholderDomains.has(domain)) continue;
+          const norm = m[1].trim().toLowerCase();
           if (!linkedEmails.has(norm)) foundEmails.push({ raw: m[1].trim(), norm });
         }
       }
@@ -1109,12 +866,7 @@ async function scanFrameForForms(frameOrPage) {
 async function detectFieldType(el) {
   try {
     const tag  = await el.evaluate(e => e.tagName.toLowerCase()).catch(() => "");
-    // Read both the HTML attribute and the DOM property — JS frameworks sometimes
-    // set el.type without setting the attribute, so the attribute returns "text"
-    // even though the field is actually a time/date/etc. input.
-    const attrType = (await el.getAttribute("type").catch(() => "")) || "";
-    const domType  = await el.evaluate(e => e.type || "").catch(() => "");
-    const type     = domType || attrType;
+    const type = (await el.getAttribute("type").catch(() => "")) || "";
     const name = (await el.getAttribute("name").catch(() => "")) || "";
     const ph   = (await el.getAttribute("placeholder").catch(() => "")) || "";
     const id   = (await el.getAttribute("id").catch(() => "")) || "";
@@ -1123,15 +875,6 @@ async function detectFieldType(el) {
     if (type === "checkbox")               return { type: "checkbox" };
     if (type === "radio")                  return { type: "radio" };
     if (type === "hidden")                 return { type: "hidden" };
-    if (type === "file")                   return { type: "file" };
-    if (type === "date")                   return { type: "date" };
-    if (type === "time")                   return { type: "time" };
-    if (type === "datetime-local")         return { type: "datetime-local" };
-    if (type === "month")                  return { type: "month" };
-    if (type === "week")                   return { type: "week" };
-    if (type === "number" || type === "range") return { type: "number" };
-    if (type === "url")                    return { type: "url" };
-    if (type === "color")                  return { type: "color" };
     if (/email/.test(c))                   return { type: "email" };
     if (/phone|tel|mobile/.test(c))        return { type: "phone" };
     if (/message|enquiry|comment|details|how.?can/.test(c) || tag === "textarea") return { type: "message" };
@@ -1159,37 +902,6 @@ async function fillFormFieldSmart(el, fieldInfo) {
       await el.check({ timeout: 500, force: true }).catch(() => null);
       return;
     }
-    // Native date/time inputs — Playwright fills these with correctly-formatted values
-    if (type === "date") {
-      await el.fill(TEST_VALUES.date, { timeout: 500 }).catch(() => null);
-      return;
-    }
-    if (type === "time") {
-      await el.fill("10:00", { timeout: 500 }).catch(() => null);
-      return;
-    }
-    if (type === "datetime-local") {
-      await el.fill(`${TEST_VALUES.date}T10:00`, { timeout: 500 }).catch(() => null);
-      return;
-    }
-    if (type === "month") {
-      await el.fill("2026-12", { timeout: 500 }).catch(() => null);
-      return;
-    }
-    if (type === "week") {
-      await el.fill("2026-W52", { timeout: 500 }).catch(() => null);
-      return;
-    }
-    if (type === "number") {
-      await el.fill(TEST_VALUES.number, { timeout: 500 }).catch(() => null);
-      return;
-    }
-    if (type === "url") {
-      await el.fill("https://example.com", { timeout: 500 }).catch(() => null);
-      return;
-    }
-    // Skip inputs the bot genuinely cannot fill — file uploads, color pickers, range sliders
-    if (type === "file" || type === "color" || type === "range") return;
     const valueMap = {
       email: TEST_VALUES.email, phone: TEST_VALUES.phone, message: TEST_VALUES.message,
       firstName: TEST_VALUES.firstName, lastName: TEST_VALUES.lastName,
@@ -1220,40 +932,6 @@ async function testFirstPartyForm(page, beacons, pageUrl, formMeta) {
       !!document.querySelector("iframe[src*='recaptcha'],iframe[src*='turnstile'],.g-recaptcha,.h-captcha,[data-sitekey]")
     );
     if (botDetected) return { status: "FAIL", reason: "Bot Protection (CAPTCHA/Turnstile)" };
-
-    // Check for multi-step form (Next/Continue button or step-progress widgets)
-    const multiStepBtn = await safeEvaluate(page, idx => {
-      const form = document.querySelectorAll("form")[idx];
-      if (!form) return null;
-      const visible = [...form.querySelectorAll("button,input[type='submit'],input[type='button']")]
-        .filter(b => b.offsetParent !== null);
-      const primaryBtn = visible.find(b => b.type === "submit") || visible[0];
-      const btnText = (primaryBtn?.textContent || primaryBtn?.value || "").trim();
-      const isNextStep = /^(next|continue|proceed|go to step|step\s*\d)/i.test(btnText);
-      const hasStepper = !!form.querySelector(
-        '[class*="step-"],[class*="wizard"],[class*="multi-step"],[data-step],[aria-current="step"],[class*="progress-step"]'
-      );
-      return (isNextStep || hasStepper) ? (btnText || "Next") : null;
-    }, formMeta.index);
-    if (multiStepBtn !== null && multiStepBtn !== undefined) {
-      return { status: "NOT_TESTED", reason: `Multi-step form — button says "${multiStepBtn}"; automated testing cannot navigate all steps` };
-    }
-
-    // Check for inputs the bot cannot fill before attempting
-    const unfillableFields = await safeEvaluate(page, idx => {
-      const form = document.querySelectorAll("form")[idx];
-      if (!form) return [];
-      const issues = [];
-      const visible = [...form.querySelectorAll("input,select,textarea")].filter(el => el.offsetParent !== null);
-      if (visible.some(el => el.type === "file")) issues.push("file upload");
-      // Native date/time inputs are now handled — only flag custom JS date pickers
-      if (form.querySelector("[class*='datepick'],[class*='flatpickr'],[class*='pikaday'],[class*='daterangepick'],[class*='react-datepick'],[class*='vue-datepick'],[class*='air-datepick']"))
-        issues.push("custom date picker widget");
-      return issues;
-    }, formMeta.index);
-    if (unfillableFields.length > 0) {
-      return { status: "NOT_TESTED", reason: `Form contains fields the bot cannot fill: ${unfillableFields.join(", ")}` };
-    }
 
     const beforeBeaconIdx = beacons.length;
     const beforeUrl = page.url();
@@ -1397,34 +1075,24 @@ async function trackingHealthCheckSiteInternal(url) {
 
   try {
     logInfo(`🔍 [${SCRIPT_VERSION}] Starting check`, { url: targetUrl });
-    let browser = await getBrowser();
+    const browser = await getBrowser();
 
-    // Guard against the race where the browser crashes between getBrowser()
-    // and newContext() — retry once with a fresh browser before giving up.
+    const ctxOpts = {
+      viewport: { width: 1920, height: 1080 },
+      userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+      locale: "en-GB",
+      timezoneId: "Europe/London"
+    };
     try {
-      context = await browser.newContext({
-        viewport: { width: 1920, height: 1080 },
-        userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        locale: "en-GB",
-        timezoneId: "Europe/London"
-      });
+      context = await browser.newContext(ctxOpts);
     } catch (ctxErr) {
+      // Browser process died between getBrowser() and here — relaunch once
       if (/browser.*closed|Target.*closed/i.test(ctxErr.message)) {
-        logInfo("⚠️ browser.newContext failed (browser closed) — relaunching and retrying once");
-        globalBrowser = null;
-        browserUses   = 0;
-        browser  = await getBrowser();
-        context  = await browser.newContext({
-          viewport: { width: 1920, height: 1080 },
-          userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-          locale: "en-GB",
-          timezoneId: "Europe/London"
-        });
-      } else {
-        throw ctxErr;
-      }
+        globalBrowser = null; browserUses = 0;
+        const freshBrowser = await getBrowser();
+        context = await freshBrowser.newContext(ctxOpts);
+      } else { throw ctxErr; }
     }
-
     openContexts.set(context, { createdAt: Date.now(), url: targetUrl });
     page = await context.newPage();
 
@@ -1477,7 +1145,7 @@ async function trackingHealthCheckSiteInternal(url) {
     await handleCookieConsent(page);
     await waitForGtmInit(page, beacons, POST_CONSENT_MAX_WAIT_MS);
 
-    const tracking = await detectTrackingSetup(page, beacons, targetUrl);
+    const tracking = await detectTrackingSetup(page, beacons);
     results.detected_gtm_ids = tracking.gtm;
     results.detected_ga4_ids = [...tracking.ga4, ...tracking.unlinked_ga4];
 
@@ -1708,99 +1376,62 @@ async function trackingHealthCheckSiteInternal(url) {
     }
 
     if (results.forms_found > 0 && results.forms_passed === 0) {
-      const botBlocked       = allFormResults.some(f => f.reason?.includes("Bot Protection"));
-      const allNT            = allFormResults.every(f => f.status === "NOT_TESTED");
-      const formGrade        = botBlocked || allNT ? "T3" : "FAIL";
-      const formsTestedCount = allFormResults.filter(f => f.status !== "NOT_TESTED").length;
-      const submittedLabel   = formsTestedCount === results.forms_found
-        ? `${results.forms_found}`
-        : `${formsTestedCount} of ${results.forms_found}`;
-
-      // Build specific summary for why forms could not be tested
-      const ntReasons = allFormResults.map(f => f.reason || "");
-      const ntIssues  = [];
-      if (ntReasons.some(r => r.includes("Multi-step")))  ntIssues.push("multi-step");
-      if (ntReasons.some(r => r.includes("file upload"))) ntIssues.push("file upload field");
-      if (ntReasons.some(r => r.includes("date")))        ntIssues.push("date/time picker");
-      if (ntReasons.some(r => r.includes("No visible submit"))) ntIssues.push("no submit button");
-      if (ntReasons.some(r => r.includes("cross-origin iframe"))) ntIssues.push("third-party embed");
-      const allNTSummary = ntIssues.length > 0
-        ? `${results.forms_found} form(s) could not be automatically tested — contains: ${ntIssues.join(", ")}. Submit manually and verify GA4 fires in GTM Preview.`
-        : `${results.forms_found} form(s) — could not be submitted automatically. Manual verification required.`;
+      const botBlocked = allFormResults.some(f => f.reason?.includes("Bot Protection"));
+      const allNT      = allFormResults.every(f => f.status === "NOT_TESTED");
+      const formGrade  = botBlocked || allNT ? "T3" : "FAIL";
 
       failureDetail.push({
         category: "Contact Forms", grade_impact: formGrade,
-        found: results.forms_found, tested: formsTestedCount, passed: 0,
+        found: results.forms_found, tested: allFormResults.filter(f => f.status !== "NOT_TESTED").length, passed: 0,
         summary: botBlocked
           ? `${results.forms_found} form(s) — CAPTCHA/bot protection blocked automated testing. Manual verification required.`
           : allNT
-          ? allNTSummary
-          : `${submittedLabel} form(s) submitted — none fired a GA4 conversion event.`,
+          ? `${results.forms_found} form(s) — could not be submitted automatically. Manual verification required.`
+          : `${results.forms_found} form(s) submitted — none fired a GA4 conversion event.`,
         items: allFormResults.map((f, idx) => ({
           form_index: idx, page_url: f.page_url || null,
           status: f.status, reason: f.reason || null,
           ga4_events_seen: f.ga4_events_seen || f.ga4_events || [],
           fix: f.reason?.includes("Bot Protection")
-            ? "CAPTCHA/Turnstile detected — submit manually and verify GA4 fires in GTM Preview."
-            : f.reason?.includes("Multi-step")
-            ? "Multi-step form — the bot cannot navigate past step 1. Submit manually through every step and verify a GA4 event fires in GTM Preview on the final confirmation."
-            : f.reason?.includes("file upload")
-            ? "Form has a file upload field — submit manually with a test file and verify a GA4 event fires in GTM Preview."
-            : f.reason?.includes("date")
-            ? "Form has a date/time picker field — submit manually with a valid date and verify a GA4 event fires in GTM Preview."
+            ? "CAPTCHA present — submit manually and verify GA4 event in GTM Preview."
             : f.status === "FAIL" && f.reason?.includes("success")
             ? "Form submitted (success detected) but no GA4 event fired. Add a GTM trigger for Form Submission or Thank You page URL, with a GA4 Event tag."
             : f.status === "FAIL"
             ? "Form submitted but no GA4 event captured. Check GTM trigger scope — confirm the GA4 Event tag is published and the trigger matches this form."
             : f.reason?.includes("Validation")
-            ? "Validation blocked submission — the bot could not fill all required fields. Submit manually and verify in GTM Preview."
+            ? "Validation blocked submission. Fill and submit manually, then verify in GTM Preview."
             : f.reason?.includes("No visible submit button")
-            ? "No standard submit button found — form may use custom JS submission. Submit manually and verify in GTM Preview."
+            ? "No standard submit button found — may use custom JS. Submit manually and verify in GTM Preview."
             : `Could not test automatically (${f.reason || "unknown"}). Submit manually and verify in GTM Preview.`
         }))
       });
     }
 
     // ── Grading ──
-    const totalFound        = uniquePhones.size + uniqueEmails.size + results.forms_found;
-    const hasFail           = failureDetail.some(f => f.grade_impact === "FAIL");
-    const hasT2             = failureDetail.some(f => f.grade_impact === "T2");
-    const hasT3             = failureDetail.some(f => f.grade_impact === "T3");
-    const anyPassed         = results.phone_passed > 0 || results.email_passed > 0 || results.forms_passed > 0;
-    const hasDuplicateFiring = phoneDuplicateItems.length > 0 || emailDuplicateItems.length > 0;
+    const totalFound = uniquePhones.size + uniqueEmails.size + results.forms_found;
+    const hasFail    = failureDetail.some(f => f.grade_impact === "FAIL");
+    const hasT2      = failureDetail.some(f => f.grade_impact === "T2");
+    const hasT3      = failureDetail.some(f => f.grade_impact === "T3");
+    const anyPassed  = results.phone_passed > 0 || results.email_passed > 0 || results.forms_passed > 0;
 
     let grade, health_status, health_reasons;
 
     if (totalFound === 0 && !hasNonClickable) {
       grade = "T3"; health_status = "NOT_TESTED";
-      health_reasons = "No trackable CTAs were found on any page visited. Check that the site has clickable phone numbers (tel: links), email addresses (mailto: links), or contact forms visible on the pages the runner visited.";
+      health_reasons = "No actionable CTAs (phone links, email links, or forms) were found on any visited page.";
     } else if (hasFail && !anyPassed) {
       grade = "FAIL"; health_status = "NO_CONVERSIONS_TRACKED";
-      health_reasons = "GTM is installed but no GA4 conversion event fired for any tested CTA or form. Check: (1) the GA4 tag is published in GTM — not just saved, (2) trigger conditions match the actual click events, (3) the GA4 Measurement ID is correct and the property is receiving data.";
-    } else if (hasT3 && !hasFail && !hasT2 && !hasNonClickable && !hasDuplicateFiring) {
-      grade = "T3"; health_status = "NOT_TESTED";
-      const t3FormDetail = failureDetail.find(f => f.grade_impact === "T3" && f.category === "Contact Forms");
-      health_reasons = t3FormDetail
-        ? `${t3FormDetail.summary} Open GTM Preview, submit each form manually, and verify a GA4 event fires in the network tab.`
-        : "CTAs were found but could not be tested automatically. Open GTM Preview, test manually, and verify GA4 events fire.";
-    } else if (hasT2 || hasNonClickable || hasDuplicateFiring || (hasFail && anyPassed)) {
+      health_reasons = "GTM is installed but no conversion events fired for any tested CTA or form. See failure_detail for fixes.";
+    } else if (hasT2 || (hasFail && anyPassed)) {
       grade = "T2"; health_status = "TRACKING_ISSUES_FOUND";
-      const t2lines = [];
-      if (hasNonClickable) t2lines.push(
-        `${results.cta_details.phones.not_clickable_items.length} phone(s) and ` +
-        `${results.cta_details.emails.not_clickable_items.length} email(s) found as plain text — wrap in tel:/mailto: links and add GTM Click triggers.`
-      );
-      if (hasDuplicateFiring) t2lines.push(
-        `${phoneDuplicateItems.length + emailDuplicateItems.length} CTA(s) firing GA4 more than once per click — change the GTM tag firing option from "Once per event" to "Once per page".`
-      );
-      const partialCats = failureDetail.filter(f => f.grade_impact === "T2" && f.category.includes("Partial"));
-      partialCats.forEach(f => t2lines.push(f.summary));
-      const failedPassedCats = failureDetail.filter(f => f.grade_impact === "FAIL" && anyPassed);
-      failedPassedCats.forEach(f => t2lines.push(f.summary));
-      health_reasons = "Tracking is working but has issues. " + t2lines.join(" | ");
+      const t2cats = failureDetail.filter(f => f.grade_impact === "T2" || f.grade_impact === "FAIL").map(f => f.category);
+      health_reasons = `Tracking is partially working but has issues: ${t2cats.join(", ")}. See failure_detail for fixes.`;
+    } else if (hasT3 && !hasT2 && !hasFail) {
+      grade = "T3"; health_status = "NOT_TESTED";
+      health_reasons = `CTAs found but could not be tested automatically (${failureDetail.map(f => f.category).join(", ")}). Manual verification required.`;
     } else {
       grade = "T1"; health_status = "PASS";
-      health_reasons = "All tracked CTAs are firing correctly. Every phone link, email link, and form tested fired a GA4 conversion event with no double-firing and no plain-text contacts found.";
+      health_reasons = "All detected conversion CTAs and forms are firing GA4 events correctly on every tested page.";
     }
 
     results.grade          = grade;
@@ -1808,42 +1439,9 @@ async function trackingHealthCheckSiteInternal(url) {
     results.health_reasons = health_reasons;
     results.failure_detail = failureDetail;
 
-    // ── Fix column — concise priority action list ──
-    const fixLines = [];
-    if (!tracking.has_gtm) {
-      fixLines.push("Install GTM: add the <head> and <body> snippets to every page then republish.");
-    } else {
-      if (hasNonClickable) fixLines.push(
-        "Wrap plain-text phone/email in tel:/mailto: links, then add GTM Click – Just Links triggers with GA4 Event tags."
-      );
-      if (hasDuplicateFiring) fixLines.push(
-        "Change duplicate-firing tag(s) in GTM from 'Once per event' to 'Once per page'."
-      );
-      const formFails = failureDetail.find(f => f.category === "Contact Forms" && f.grade_impact !== "T3");
-      if (formFails) fixLines.push(
-        "Form submitted but no GA4 event fired — add a GTM Form Submission trigger (or Thank You page URL trigger) with a GA4 Event tag."
-      );
-      const phoneFails = failureDetail.find(f => f.category.startsWith("Phone Calls") && f.grade_impact === "FAIL");
-      if (phoneFails) fixLines.push(
-        "Phone click not tracked — create a GTM Click – Just Links trigger for href contains tel: and attach a GA4 Event tag (event name: click_call)."
-      );
-      const emailFails = failureDetail.find(f => f.category.startsWith("Email Clicks") && f.grade_impact === "FAIL");
-      if (emailFails) fixLines.push(
-        "Email click not tracked — create a GTM Click – Just Links trigger for href contains mailto: and attach a GA4 Event tag (event name: click_email)."
-      );
-    }
-    results.fix = fixLines.length > 0 ? fixLines.join(" | ") : null;
-
-    // ── GA4 events captured ──
-    const ga4Seen = new Set();
-    results.cta_details.phones.items.forEach(i => (i.ga4_events || []).forEach(e => ga4Seen.add(e)));
-    results.cta_details.emails.items.forEach(i => (i.ga4_events || []).forEach(e => ga4Seen.add(e)));
-    results.form_details.forEach(p => {
-      [...p.first_party_forms, ...p.third_party_forms].forEach(f => {
-        (f.ga4_events || f.ga4_events_seen || []).forEach(e => ga4Seen.add(e));
-      });
-    });
-    results.ga4_events_captured = ga4Seen.size > 0 ? [...ga4Seen] : null;
+    // ── Consolidated fix text for the fix column ──
+    const allFixes = failureDetail.flatMap(f => (f.items || []).map(i => i.fix).filter(Boolean));
+    results.fix = allFixes.length > 0 ? allFixes.join(" | ") : null;
 
     // ── Console output ──
     const GRADE_LABEL = { T1: "✅ T1 — PASS", T2: "⚠️  T2 — ISSUES FOUND", T3: "🔍 T3 — NOT TESTED", FAIL: "❌ FAIL — NO CONVERSIONS TRACKED" };
@@ -1897,20 +1495,16 @@ async function trackingHealthCheckSiteInternal(url) {
 }
 
 async function trackingHealthCheckSite(url) {
-  const startedAt = Date.now();
   await acquireCheckSlot();
   try {
-    const result = await withTimeout(
+    return await withTimeout(
       trackingHealthCheckSiteInternal(url),
       GLOBAL_TIMEOUT_MS,
       `Global timeout (${GLOBAL_TIMEOUT_MS}ms) exceeded for ${url}`
     );
-    result.ran_at = new Date(startedAt).toISOString();
-    result.duration_ms = Date.now() - startedAt;
-    return result;
   } catch (e) {
     logInfo(`⏱ Check aborted: ${e.message}`, { url });
-    return { url: normaliseUrl(url), grade: "T2", health_status: "ERROR", health_reasons: e.message, ran_at: new Date(startedAt).toISOString(), duration_ms: Date.now() - startedAt };
+    return { url: normaliseUrl(url), grade: "T2", health_status: "ERROR", health_reasons: e.message };
   } finally {
     releaseCheckSlot();
   }
