@@ -1,10 +1,9 @@
 // /health-check-v27.js
 // INTELLIGENT TRACKING HEALTH CHECK
-// Version: V27-CONCURRENCY-FIX
+// Version: V28-GTM-FIXES
 //
 
-
-const SCRIPT_VERSION = "2026-03-13T18:00:00Z-V27";
+const SCRIPT_VERSION = "2026-03-27T14:00:00Z-V28";
 
 const { chromium } = require("playwright");
 
@@ -25,66 +24,121 @@ function logDebug(msg, data = null) {
 // ─────────────────────────────────────────────
 // Configuration — all overridable via env vars
 // ─────────────────────────────────────────────
-const MAX_PAGES_TO_VISIT   = Number(process.env.HEALTH_MAX_PAGES          || 3);
-const MAX_PHONE_TESTS      = Number(process.env.HEALTH_MAX_PHONE_TESTS     || 50);
-const MAX_EMAIL_TESTS      = Number(process.env.HEALTH_MAX_EMAIL_TESTS     || 50);
+const MAX_PAGES_TO_VISIT = Number(process.env.HEALTH_MAX_PAGES || 3);
+const MAX_PHONE_TESTS = Number(process.env.HEALTH_MAX_PHONE_TESTS || 50);
+const MAX_EMAIL_TESTS = Number(process.env.HEALTH_MAX_EMAIL_TESTS || 50);
 
 // FIX 3: single nav attempt, hard 15s cap
-const NAV_TIMEOUT_MS       = Number(process.env.HEALTH_NAV_TIMEOUT        || 15000);
+const NAV_TIMEOUT_MS = Number(process.env.HEALTH_NAV_TIMEOUT || 15000);
 
-const HEADLESS             = true;
+const HEADLESS = true;
 
 // Primary CTA click poll window
-const POST_ACTION_POLL_MS  = Number(process.env.HEALTH_POLL_MS            || 3000);
+const POST_ACTION_POLL_MS = Number(process.env.HEALTH_POLL_MS || 3000);
 
 // Duplicate-fire second click — shorter window, we only need to detect presence/absence
-const SECOND_CLICK_POLL_MS = Number(process.env.HEALTH_SECOND_POLL_MS     || 1500);
+const SECOND_CLICK_POLL_MS = Number(process.env.HEALTH_SECOND_POLL_MS || 1500);
 
 // Settle between first and second click in duplicate-fire test
-const DUPLICATE_TEST_SETTLE_MS = Number(process.env.HEALTH_SETTLE_MS      || 600);
+const DUPLICATE_TEST_SETTLE_MS = Number(process.env.HEALTH_SETTLE_MS || 600);
 
-const FORM_SUBMIT_WAIT_MS  = Number(process.env.HEALTH_FORM_WAIT_MS       || 5000);
+const FORM_SUBMIT_WAIT_MS = Number(process.env.HEALTH_FORM_WAIT_MS || 5000);
 
 // FIX 2: hard global cap per site; also used as acquireCheckSlot timeout
-const GLOBAL_TIMEOUT_MS    = Number(process.env.HEALTH_GLOBAL_TIMEOUT     || 120000);
-const SLOT_ACQUIRE_TIMEOUT = Number(process.env.HEALTH_SLOT_TIMEOUT       || 90000);
+const GLOBAL_TIMEOUT_MS = Number(process.env.HEALTH_GLOBAL_TIMEOUT || 120000);
+const SLOT_ACQUIRE_TIMEOUT = Number(process.env.HEALTH_SLOT_TIMEOUT || 90000);
 
 // FIX 1: raised to 20; safe because each worker is mostly I/O-bound
-const MAX_CONCURRENT_CHECKS = Number(process.env.HEALTH_MAX_CONCURRENT    || 20);
+const MAX_CONCURRENT_CHECKS = Number(process.env.HEALTH_MAX_CONCURRENT || 20);
 
 // FIX 5: how long to actively poll for GTM after consent (ms)
-const POST_CONSENT_MAX_WAIT_MS = Number(process.env.HEALTH_CONSENT_WAIT   || 6000);
-const POST_CONSENT_POLL_MS     = 200; // check every 200ms
+const POST_CONSENT_MAX_WAIT_MS = Number(process.env.HEALTH_CONSENT_WAIT || 6000);
+const POST_CONSENT_POLL_MS = 200; // check every 200ms
 
 const TEST_VALUES = {
-  firstName: "HealthCheck", lastName: "Test", fullName: "HealthCheck Test",
-  email:   process.env.HEALTH_TEST_EMAIL   || "test-automation@example.com",
-  phone:   process.env.HEALTH_TEST_PHONE   || "01632960123",
+  firstName: "HealthCheck",
+  lastName: "Test",
+  fullName: "HealthCheck Test",
+  email: process.env.HEALTH_TEST_EMAIL || "test-automation@example.com",
+  phone: process.env.HEALTH_TEST_PHONE || "01632960123",
   message: process.env.HEALTH_TEST_MESSAGE || "This is a tracking health check. Please ignore.",
-  company: "Test Company", postcode: "SW1A 1AA", city: "London",
-  address: "1 Test Street", subject: "General Enquiry",
-  date: "2026-12-31", number: "1"
+  company: "Test Company",
+  postcode: "SW1A 1AA",
+  city: "London",
+  address: "1 Test Street",
+  subject: "General Enquiry",
+  date: "2026-12-31",
+  number: "1",
 };
 
 const GENERIC_EVENTS = new Set([
-  "page_view","user_engagement","scroll","session_start","first_visit",
-  "form_start","gtm.js","gtm.dom","gtm.load","timing_complete","exception",
-  "web_vitals","optimize.activate"
+  "page_view",
+  "user_engagement",
+  "scroll",
+  "session_start",
+  "first_visit",
+  "form_start",
+  "gtm.js",
+  "gtm.dom",
+  "gtm.load",
+  "timing_complete",
+  "exception",
+  "web_vitals",
+  "optimize.activate",
 ]);
 
-const CONTACT_PAGE_KEYWORDS = ["contact","get-in-touch","enquire","enquiry","quote","book","request","reach-us","talk","call-us"];
-const COMMON_CONTACT_PATHS  = ["/contact","/contact-us","/get-in-touch","/enquiry","/quote","/book","/reach-us"];
-const THIRD_PARTY_HINTS     = ["hubspot","hsforms","jotform","typeform","google.com/forms","forms.gle","calendly","marketo","salesforce","formstack","cognitoforms","gravity","wufoo"];
-const SOCIAL_DOMAINS        = ["facebook.com","twitter.com","instagram.com","linkedin.com","tiktok.com","pinterest.com","youtube.com","whatsapp.com","snapchat.com","t.co","lnkd.in","fb.com","x.com"];
+const CONTACT_PAGE_KEYWORDS = [
+  "contact",
+  "get-in-touch",
+  "enquire",
+  "enquiry",
+  "quote",
+  "book",
+  "request",
+  "reach-us",
+  "talk",
+  "call-us",
+];
+const COMMON_CONTACT_PATHS = ["/contact", "/contact-us", "/get-in-touch", "/enquiry", "/quote", "/book", "/reach-us"];
+const THIRD_PARTY_HINTS = [
+  "hubspot",
+  "hsforms",
+  "jotform",
+  "typeform",
+  "google.com/forms",
+  "forms.gle",
+  "calendly",
+  "marketo",
+  "salesforce",
+  "formstack",
+  "cognitoforms",
+  "gravity",
+  "wufoo",
+];
+const SOCIAL_DOMAINS = [
+  "facebook.com",
+  "twitter.com",
+  "instagram.com",
+  "linkedin.com",
+  "tiktok.com",
+  "pinterest.com",
+  "youtube.com",
+  "whatsapp.com",
+  "snapchat.com",
+  "t.co",
+  "lnkd.in",
+  "fb.com",
+  "x.com",
+];
 
 // ─────────────────────────────────────────────
 // FIX 1: Concurrency — async mutex for browser pool
 // ─────────────────────────────────────────────
-let activeChecks  = 0;
-const checkQueue  = [];
+let activeChecks = 0;
+const checkQueue = [];
 
-let globalBrowser     = null;
-let browserUses       = 0;
+let globalBrowser = null;
+let browserUses = 0;
 let browserLaunchLock = null; // Promise while a launch is in progress
 const MAX_BROWSER_USES = 100;
 
@@ -98,7 +152,7 @@ async function getBrowser() {
   if (globalBrowser && !globalBrowser.isConnected()) {
     logInfo("⚠️ Browser disconnected — clearing stale reference for relaunch");
     globalBrowser = null;
-    browserUses   = 0;
+    browserUses = 0;
   }
 
   // Recycle browser after MAX_BROWSER_USES to prevent memory leaks
@@ -106,21 +160,24 @@ async function getBrowser() {
     logDebug("♻️  Recycling browser after max uses");
     const old = globalBrowser;
     globalBrowser = null;
-    browserUses   = 0;
+    browserUses = 0;
     old.close().catch(() => null); // fire-and-forget — don't block on close
   }
 
   if (!globalBrowser) {
     // Set the lock so concurrent callers wait for this launch
     let resolveLock;
-    browserLaunchLock = new Promise(r => { resolveLock = r; });
+    browserLaunchLock = new Promise((r) => {
+      resolveLock = r;
+    });
 
     try {
       globalBrowser = await chromium.launch({
         headless: HEADLESS,
         timeout: 30000,
         args: [
-          "--no-sandbox","--disable-setuid-sandbox",
+          "--no-sandbox",
+          "--disable-setuid-sandbox",
           "--disable-blink-features=AutomationControlled",
           "--disable-dev-shm-usage",
           // Disable all GPU paths — on headless Linux the GPU process has no
@@ -128,20 +185,23 @@ async function getBrowser() {
           // software compositing pipeline (SharedImageManager) still runs and
           // hits fatal mailbox errors that trigger a graceful browser shutdown.
           "--disable-gpu",
-          "--disable-gpu-compositing",       // stops SharedImageManager crashes
+          "--disable-gpu-compositing", // stops SharedImageManager crashes
           "--disable-accelerated-2d-canvas", // no GPU canvas (uses CPU path)
           "--disable-accelerated-video-decode",
-          "--disable-webgl","--disable-webgl2",
+          "--disable-webgl",
+          "--disable-webgl2",
           // Suppress ALSA audio errors and media permission prompts
-          "--mute-audio","--use-fake-ui-for-media-stream",
-          "--proxy-server='direct://'","--proxy-bypass-list=*"
+          "--mute-audio",
+          "--use-fake-ui-for-media-stream",
+          "--proxy-server='direct://'",
+          "--proxy-bypass-list=*",
         ],
       });
       // Clear the global ref the moment Chrome dies so next getBrowser() relaunches
       globalBrowser.on("disconnected", () => {
         logInfo("⚠️ Browser process disconnected — will relaunch on next request");
         globalBrowser = null;
-        browserUses   = 0;
+        browserUses = 0;
       });
       logDebug("🚀 Browser launched");
     } finally {
@@ -164,9 +224,13 @@ setInterval(async () => {
   const now = Date.now();
   for (const [ctx, info] of openContexts) {
     if (now - info.createdAt > STALE_CONTEXT_MS) {
-      logInfo(`⚠️ RAM safeguard: force-closing stale context for ${info.url} (open ${Math.round((now - info.createdAt) / 1000)}s)`);
+      logInfo(
+        `⚠️ RAM safeguard: force-closing stale context for ${info.url} (open ${Math.round((now - info.createdAt) / 1000)}s)`,
+      );
       openContexts.delete(ctx);
-      try { await ctx.close(); } catch {}
+      try {
+        await ctx.close();
+      } catch {}
     }
   }
 }, 60000);
@@ -178,31 +242,58 @@ function normaliseUrl(input) {
   const u = (input || "").trim();
   return /^https?:\/\//i.test(u) ? u : `https://${u}`;
 }
-function safeUrlObj(u)      { try { return new URL(u); } catch { return null; } }
-function uniq(arr)          { return [...new Set((arr || []).filter(Boolean))]; }
-function escapeAttrValue(v) { return String(v).replace(/\\/g,"\\\\").replace(/"/g,'\\"'); }
-function nowIso()           { return new Date().toISOString(); }
+function safeUrlObj(u) {
+  try {
+    return new URL(u);
+  } catch {
+    return null;
+  }
+}
+function uniq(arr) {
+  return [...new Set((arr || []).filter(Boolean))];
+}
+function escapeAttrValue(v) {
+  return String(v).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+function nowIso() {
+  return new Date().toISOString();
+}
 
 async function safeEvaluate(page, func, ...args) {
-  try { return await page.evaluate(func, ...args); } catch { return null; }
+  try {
+    return await page.evaluate(func, ...args);
+  } catch {
+    return null;
+  }
 }
 
 async function safeWait(ms) {
-  return new Promise(r => setTimeout(r, ms));
+  return new Promise((r) => setTimeout(r, ms));
 }
 
 // FIX 2: acquireCheckSlot with hard timeout so a stuck check never blocks the queue
 async function acquireCheckSlot() {
-  if (activeChecks < MAX_CONCURRENT_CHECKS) { activeChecks++; return; }
+  if (activeChecks < MAX_CONCURRENT_CHECKS) {
+    activeChecks++;
+    return;
+  }
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       // Remove from queue if still waiting
       const idx = checkQueue.indexOf(entry);
       if (idx !== -1) checkQueue.splice(idx, 1);
-      reject(new Error(`acquireCheckSlot timed out after ${SLOT_ACQUIRE_TIMEOUT}ms — all ${MAX_CONCURRENT_CHECKS} workers busy`));
+      reject(
+        new Error(
+          `acquireCheckSlot timed out after ${SLOT_ACQUIRE_TIMEOUT}ms — all ${MAX_CONCURRENT_CHECKS} workers busy`,
+        ),
+      );
     }, SLOT_ACQUIRE_TIMEOUT);
 
-    const entry = () => { clearTimeout(timer); activeChecks++; resolve(); };
+    const entry = () => {
+      clearTimeout(timer);
+      activeChecks++;
+      resolve();
+    };
     checkQueue.push(entry);
   });
 }
@@ -217,14 +308,22 @@ function releaseCheckSlot() {
 
 async function withTimeout(promise, ms, msg) {
   let id;
-  const t = new Promise((_, rej) => { id = setTimeout(() => rej(new Error(msg)), ms); });
-  try   { const r = await Promise.race([promise, t]); clearTimeout(id); return r; }
-  catch (e) { clearTimeout(id); throw e; }
+  const t = new Promise((_, rej) => {
+    id = setTimeout(() => rej(new Error(msg)), ms);
+  });
+  try {
+    const r = await Promise.race([promise, t]);
+    clearTimeout(id);
+    return r;
+  } catch (e) {
+    clearTimeout(id);
+    throw e;
+  }
 }
 
 // FIX 3: single-attempt safeGoto — fail fast on dead sites, no double-timeout
 async function safeGoto(page, url) {
-  if (SOCIAL_DOMAINS.some(d => url.toLowerCase().includes(d))) {
+  if (SOCIAL_DOMAINS.some((d) => url.toLowerCase().includes(d))) {
     return { ok: false, error: "Blocked social domain" };
   }
   try {
@@ -249,33 +348,46 @@ function classifyAndParseBeacon(reqUrl, postData) {
   const u = (reqUrl || "").toLowerCase();
   let type = "OTHER";
   if (u.includes("/g/collect") || u.includes("/r/collect")) type = "GA4";
-  else if (u.includes("gtag/js"))                           type = "GTAG";
-  else if (u.includes("google-analytics.com"))              type = "GA";
-  else if (/googletagmanager\.com\/gtm\.js/.test(u)) type = "GTM";
+  else if (u.includes("gtag/js")) type = "GTAG";
+  else if (u.includes("google-analytics.com")) type = "GA";
+  // GTM FIX: Broaden detection to catch server-side tagging or renamed domains
+  else if (u.includes("gtm.js") || /[?&]id=GTM-[A-Z0-9]+/i.test(u)) type = "GTM";
   if (type === "OTHER") return null;
 
   let event_name = null;
-  try { event_name = new URL(reqUrl).searchParams.get("en"); } catch {}
+  try {
+    event_name = new URL(reqUrl).searchParams.get("en");
+  } catch {}
   if (!event_name && postData) {
-    try { event_name = new URLSearchParams(postData).get("en"); } catch {}
+    try {
+      event_name = new URLSearchParams(postData).get("en");
+    } catch {}
     if (!event_name) {
       try {
         const p = JSON.parse(postData);
         if (p?.events?.[0]?.name) event_name = p.events[0].name;
-        else if (p?.en)           event_name = p.en;
+        else if (p?.en) event_name = p.en;
       } catch {}
     }
   }
 
   const payload_dump = (reqUrl + " " + (postData || "")).toLowerCase();
   let tid = null;
-  try { tid = new URL(reqUrl).searchParams.get("tid"); } catch {}
+  try {
+    tid = new URL(reqUrl).searchParams.get("tid");
+  } catch {}
   if (!tid && postData) {
-    try { tid = new URLSearchParams(postData).get("tid"); } catch {}
-    try { if (!tid) tid = JSON.parse(postData)?.tid; } catch {}
+    try {
+      tid = new URLSearchParams(postData).get("tid");
+    } catch {}
+    try {
+      if (!tid) tid = JSON.parse(postData)?.tid;
+    } catch {}
   }
   let gtmHash = null;
-  try { gtmHash = new URL(reqUrl).searchParams.get("gtm"); } catch {}
+  try {
+    gtmHash = new URL(reqUrl).searchParams.get("gtm");
+  } catch {}
 
   return { url: reqUrl, timestamp: nowIso(), type, event_name, payload_dump, tid, gtmHash };
 }
@@ -291,56 +403,120 @@ async function handleCookieConsent(page) {
     // Cookiebot
     "#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll",
     // Complianz
-    ".cmplz-accept", ".cmplz-btn",
+    ".cmplz-accept",
+    ".cmplz-btn",
     // Cookie Notice / WP Cookie Notice
-    "#wt-cli-accept-all-btn", ".wt-cli-accept-all-btn",
-    "#cookie_action_close_header", ".cookie-accept", ".accept-cookies",
+    "#wt-cli-accept-all-btn",
+    ".wt-cli-accept-all-btn",
+    "#cookie_action_close_header",
+    ".cookie-accept",
+    ".accept-cookies",
     // CookieYes
     "[data-cky-tag='accept-button']",
+    ".cky-btn-accept",
     // Iubenda
-    "#iubFooterBtn", ".iubenda-cs-accept-btn",
+    "#iubFooterBtn",
+    ".iubenda-cs-accept-btn",
     // CookieScript
-    "#cookiescript_accept", "#cookiescript_acceptall",
+    "#cookiescript_accept",
+    "#cookiescript_acceptall",
     // Civic Cookie Control
-    "#ccc-accept-settings", "#ccc-notify-accept",
+    "#ccc-accept-settings",
+    "#ccc-notify-accept",
     // Osano
     ".osano-cm-accept-all",
     // TrustArc
-    "#truste-consent-button", ".truste_popframe",
+    "#truste-consent-button",
+    ".truste_popframe",
+    // Additional WP / Common Plugins
+    "#moove_gdpr_save_popup_settings_button",
+    ".cli-plugin-button",
+    "[data-cookiefirst-action='accept']",
     // Generic patterns
-    "[aria-label='Accept cookies']", "[aria-label='Accept all cookies']",
-    "[id*='accept'][class*='cookie']", "[class*='accept'][class*='cookie']",
-    "[id*='cookie'][id*='accept']", "[class*='cookie-accept']",
-    "button[id*='consent'][id*='accept']", "button[class*='consent-accept']"
+    "[aria-label='Accept cookies']",
+    "[aria-label='Accept all cookies']",
+    "[id*='accept'][class*='cookie']",
+    "[class*='accept'][class*='cookie']",
+    "[id*='cookie'][id*='accept']",
+    "[class*='cookie-accept']",
+    "button[id*='consent'][id*='accept']",
+    "button[class*='consent-accept']",
   ];
   const textLabels = [
-    "Accept All", "Accept all", "Accept All Cookies", "Accept Cookies",
-    "Accept all cookies", "I Accept", "I accept", "I Agree",
-    "Allow All", "Allow all", "Allow Cookies", "Allow all cookies",
-    "Agree", "Agree and Continue", "Agree & Continue",
-    "OK", "Got it", "Continue", "Yes, I agree", "Yes I agree",
-    "Close and accept"
+    "Accept All",
+    "Accept all",
+    "Accept All Cookies",
+    "Accept Cookies",
+    "Accept all cookies",
+    "I Accept",
+    "I accept",
+    "I Agree",
+    "Allow All",
+    "Allow all",
+    "Allow Cookies",
+    "Allow all cookies",
+    "Agree",
+    "Agree and Continue",
+    "Agree & Continue",
+    "OK",
+    "Got it",
+    "Continue",
+    "Yes, I agree",
+    "Yes I agree",
+    "Close and accept",
   ];
 
   try {
-    const clicked = await safeEvaluate(page, (sels, labels) => {
-      for (const sel of sels) {
-        for (const el of document.querySelectorAll(sel)) {
-          if (el.offsetHeight > 0) { el.click(); return true; }
+    const clicked = await safeEvaluate(
+      page,
+      (sels, labels) => {
+        for (const sel of sels) {
+          for (const el of document.querySelectorAll(sel)) {
+            if (el.offsetHeight > 0) {
+              el.click();
+              return true;
+            }
+          }
         }
-      }
-      for (const btn of document.querySelectorAll("button,a[role='button'],[type='button'],[type='submit']")) {
-        const t = (btn.textContent || "").trim();
-        if (labels.some(l => t === l || t.startsWith(l)) && btn.offsetHeight > 0) {
-          btn.click(); return true;
+        for (const btn of document.querySelectorAll("button,a[role='button'],[type='button'],[type='submit']")) {
+          const t = (btn.textContent || "").trim();
+          if (labels.some((l) => t === l || t.startsWith(l)) && btn.offsetHeight > 0) {
+            btn.click();
+            return true;
+          }
         }
-      }
-      return false;
-    }, candidates, textLabels);
+        return false;
+      },
+      candidates,
+      textLabels,
+    );
 
     if (clicked) {
       out.accepted = true;
       logDebug("🍪 Cookie consent accepted");
+    } else {
+      // GTM FIX: DOM-Nuking fallback for stubborn banners
+      await safeEvaluate(page, () => {
+        const overlays = document.querySelectorAll(
+          '[id*="cookie"],[class*="cookie"],[id*="consent"],[class*="consent"],[style*="z-index: 9999"]',
+        );
+        let nuked = false;
+        for (const el of overlays) {
+          const style = window.getComputedStyle(el);
+          if (style.position === "fixed" || style.position === "absolute") {
+            if (el.offsetHeight > 50) {
+              // arbitrary size threshold to avoid deleting tiny icons
+              el.remove();
+              nuked = true;
+            }
+          }
+        }
+        if (nuked) {
+          document.body.style.overflow = "auto"; // Restore scrolling if locked
+          document.documentElement.style.overflow = "auto";
+        }
+      });
+      logDebug("🧹 Cookie consent accept not found — attempted to nuke overlays");
     }
   } catch {}
   return out;
@@ -353,21 +529,35 @@ async function waitForGtmInit(page, beacons, maxWaitMs = POST_CONSENT_MAX_WAIT_M
   const deadline = Date.now() + maxWaitMs;
   while (Date.now() < deadline) {
     const gtmReady = await safeEvaluate(page, () => !!window.google_tag_manager);
-    if (gtmReady) { logDebug("✅ GTM object detected after consent"); return true; }
+    if (gtmReady) {
+      logDebug("✅ GTM object detected after consent");
+      return true;
+    }
 
-    const gtmBeacon = beacons.some(b =>
-      /googletagmanager\.com\/gtm\.js/.test(b.url)
-    );
-    if (gtmBeacon) { logDebug("✅ GTM beacon detected after consent"); return true; }
+    // GTM FIX: Stop checking for googletagmanager.com
+    const gtmBeacon = beacons.some((b) => b.type === "GTM" || /gtm\.js|ns\.html/i.test(b.url));
+    if (gtmBeacon) {
+      logDebug("✅ GTM beacon detected after consent");
+      return true;
+    }
 
     const gtmInSource = await safeEvaluate(page, () => {
       for (const s of document.querySelectorAll("script")) {
-        const content = (s.src || "") + (s.innerHTML || "");
+        // GTM FIX: Catch lazy-loaded script attributes
+        const content =
+          (s.src || "") +
+          (s.innerHTML || "") +
+          (s.getAttribute("data-lazy-src") || "") +
+          (s.getAttribute("data-src") || "") +
+          (s.getAttribute("data-cfasync") || "");
         if (/GTM-[A-Z0-9]{4,}/i.test(content)) return true;
       }
       return false;
     });
-    if (gtmInSource) { logDebug("✅ GTM ID found in source after consent"); return true; }
+    if (gtmInSource) {
+      logDebug("✅ GTM ID found in source after consent");
+      return true;
+    }
 
     await safeWait(POST_CONSENT_POLL_MS);
   }
@@ -383,7 +573,7 @@ async function detectTrackingSetup(page, beacons) {
   let ga4Ids = new Set();
 
   let gtmStartFired = false; // set when dataLayer contains {event:"gtm.start"}
-  let gtmIframe     = false; // set when a live GTM noscript iframe is found
+  let gtmIframe = false; // set when a live GTM noscript iframe is found
 
   for (let attempt = 0; attempt < 4; attempt++) {
     const scan = await safeEvaluate(page, () => {
@@ -393,12 +583,22 @@ async function detectTrackingSetup(page, beacons) {
         for (const m of str.toUpperCase().matchAll(/GTM-[A-Z0-9]{4,}/g)) found.gtm.push(m[0]);
         for (const m of str.toUpperCase().matchAll(/\b(?:G|GT)-[A-Z0-9]{6,}\b/g)) found.ga4.push(m[0]);
       }
-      for (const s of document.querySelectorAll("script")) { extract(s.src); extract(s.innerHTML); }
+      for (const s of document.querySelectorAll("script")) {
+        // GTM FIX: Lazy-loaded data attributes
+        extract(s.src);
+        extract(s.innerHTML);
+        extract(s.getAttribute("data-lazy-src") || "");
+        extract(s.getAttribute("data-src") || "");
+        extract(s.getAttribute("data-cfasync") || "");
+      }
       for (const ns of document.querySelectorAll("noscript")) extract(ns.innerHTML);
       // Live iframes from GTM noscript fallback (always present even when JS blocked)
       for (const f of document.querySelectorAll("iframe")) {
         const src = f.getAttribute("src") || "";
-        if (/googletagmanager\.com\/ns\.html/i.test(src)) { found.gtmIframe = true; extract(src); }
+        if (/ns\.html\?id=GTM-/i.test(src) || /googletagmanager\.com\/ns\.html/i.test(src)) {
+          found.gtmIframe = true;
+          extract(src);
+        }
       }
       for (const m of document.querySelectorAll("meta")) {
         extract(m.getAttribute("content") || "");
@@ -427,16 +627,20 @@ async function detectTrackingSetup(page, beacons) {
         }
       }
       if (typeof window.gtag === "function" && window.gtag.q) {
-        for (const call of (window.gtag.q || [])) { try { extract(JSON.stringify(call)); } catch {} }
+        for (const call of window.gtag.q || []) {
+          try {
+            extract(JSON.stringify(call));
+          } catch {}
+        }
       }
       return found;
     });
 
     if (scan) {
-      scan.gtm.forEach(id => gtmIds.add(id));
-      scan.ga4.forEach(id => ga4Ids.add(id));
+      scan.gtm.forEach((id) => gtmIds.add(id));
+      scan.ga4.forEach((id) => ga4Ids.add(id));
       if (scan.gtmStartFired) gtmStartFired = true;
-      if (scan.gtmIframe)     gtmIframe     = true;
+      if (scan.gtmIframe) gtmIframe = true;
     }
 
     for (const b of beacons) {
@@ -450,9 +654,8 @@ async function detectTrackingSetup(page, beacons) {
       } catch {}
     }
 
-    const gtmInNetwork = beacons.some(b =>
-      /googletagmanager\.com\/(gtm\.js|ns\.html)/.test(b.url)
-    );
+    // GTM FIX: Domain-agnostic check
+    const gtmInNetwork = beacons.some((b) => b.type === "GTM" || /gtm\.js|ns\.html/i.test(b.url));
     const globalGtmObj = await safeEvaluate(page, () => !!window.google_tag_manager);
 
     if (gtmIds.size > 0 || gtmInNetwork || globalGtmObj || gtmStartFired || gtmIframe) break;
@@ -467,10 +670,10 @@ async function detectTrackingSetup(page, beacons) {
       const html = await page.content();
       if (html) {
         const headEnd = html.search(/<\/head>/i);
-        const region  = headEnd > 0 ? html.slice(0, headEnd + 200) : html.slice(0, 10000);
+        const region = headEnd > 0 ? html.slice(0, headEnd + 200) : html.slice(0, 10000);
         for (const m of region.toUpperCase().matchAll(/GTM-[A-Z0-9]{4,}/g)) gtmIds.add(m[0]);
         for (const m of region.toUpperCase().matchAll(/\b(?:G|GT)-[A-Z0-9]{6,}\b/g)) ga4Ids.add(m[0]);
-        if (/googletagmanager\.com\/ns\.html/i.test(region)) gtmIframe = true;
+        if (/ns\.html\?id=GTM-/i.test(region)) gtmIframe = true;
         logDebug(`page.content() GTM fallback: found ${gtmIds.size} GTM IDs`);
       }
     } catch (e) {
@@ -484,17 +687,17 @@ async function detectTrackingSetup(page, beacons) {
   if (gtmIds.size === 0 && !gtmStartFired && !gtmIframe) {
     try {
       const resp = await page.context().request.get(page.url(), {
-        headers: { "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" },
+        headers: { Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" },
         timeout: 8000,
       });
       if (resp.ok()) {
         const html = await resp.text().catch(() => "");
         if (html) {
           const headEnd = html.search(/<\/head>/i);
-          const region  = headEnd > 0 ? html.slice(0, headEnd + 200) : html.slice(0, 10000);
+          const region = headEnd > 0 ? html.slice(0, headEnd + 200) : html.slice(0, 10000);
           for (const m of region.toUpperCase().matchAll(/GTM-[A-Z0-9]{4,}/g)) gtmIds.add(m[0]);
           for (const m of region.toUpperCase().matchAll(/\b(?:G|GT)-[A-Z0-9]{6,}\b/g)) ga4Ids.add(m[0]);
-          if (/googletagmanager\.com\/ns\.html/i.test(region)) gtmIframe = true;
+          if (/ns\.html\?id=GTM-/i.test(region)) gtmIframe = true;
           logDebug(`Playwright HTTP GTM fallback: found ${gtmIds.size} GTM IDs`);
         }
       }
@@ -503,29 +706,30 @@ async function detectTrackingSetup(page, beacons) {
     }
   }
 
-  const linkedGa4   = new Set();
+  const linkedGa4 = new Set();
   const unlinkedGa4 = new Set();
   for (const b of beacons) {
     if (b.type === "GA4" && b.tid) {
       const tid = b.tid.toUpperCase();
       if (b.gtmHash) linkedGa4.add(tid);
-      else           unlinkedGa4.add(tid);
+      else unlinkedGa4.add(tid);
     }
   }
   for (const id of ga4Ids) {
     if (!linkedGa4.has(id)) unlinkedGa4.add(id);
   }
 
-  const gtmInNetwork   = beacons.some(b => /googletagmanager\.com\/(gtm\.js|ns\.html)/.test(b.url));
-  const ga4FiredViaGtm = beacons.some(b => b.type === "GA4" && !!b.gtmHash);
-  const globalGtmObj   = await safeEvaluate(page, () => !!window.google_tag_manager);
+  // GTM FIX: Domain-agnostic check
+  const gtmInNetwork = beacons.some((b) => b.type === "GTM" || /gtm\.js|ns\.html/i.test(b.url));
+  const ga4FiredViaGtm = beacons.some((b) => b.type === "GA4" && !!b.gtmHash);
+  const globalGtmObj = await safeEvaluate(page, () => !!window.google_tag_manager);
 
-  const has_gtm     = gtmIds.size > 0 || globalGtmObj || gtmInNetwork || ga4FiredViaGtm || gtmStartFired || gtmIframe;
-  const has_any_ga4 = ga4Ids.size > 0 || beacons.some(b => b.type === "GA4");
+  const has_gtm = gtmIds.size > 0 || globalGtmObj || gtmInNetwork || ga4FiredViaGtm || gtmStartFired || gtmIframe;
+  const has_any_ga4 = ga4Ids.size > 0 || beacons.some((b) => b.type === "GA4");
 
   return {
-    gtm:          Array.from(gtmIds),
-    ga4:          Array.from(linkedGa4),
+    gtm: Array.from(gtmIds),
+    ga4: Array.from(linkedGa4),
     unlinked_ga4: Array.from(unlinkedGa4),
     has_gtm,
     has_linked_ga4: linkedGa4.size > 0,
@@ -541,44 +745,47 @@ async function discoverCandidatePages(page, baseUrl) {
   const origin = safeUrlObj(currentUrl)?.origin || safeUrlObj(baseUrl)?.origin || null;
 
   let links = await safeEvaluate(page, () =>
-    Array.from(document.querySelectorAll("a[href]")).map(a => ({
+    Array.from(document.querySelectorAll("a[href]")).map((a) => ({
       href: a.getAttribute("href") || "",
-      text: (a.textContent || "").trim().slice(0, 120)
-    }))
+      text: (a.textContent || "").trim().slice(0, 120),
+    })),
   );
   if (!links) links = [];
 
   const seen = new Set([currentUrl]);
   const scored = links
-    .map(l => {
+    .map((l) => {
       try {
         const u = new URL(l.href, currentUrl);
         u.hash = "";
         const str = u.toString();
-        if (SOCIAL_DOMAINS.some(d => u.hostname.includes(d))) return null;
+        if (SOCIAL_DOMAINS.some((d) => u.hostname.includes(d))) return null;
         if (origin && !str.startsWith(origin)) return null;
         return { url: str, text: l.text };
-      } catch { return null; }
+      } catch {
+        return null;
+      }
     })
     .filter(Boolean)
-    .map(x => ({
+    .map((x) => ({
       ...x,
-      score: CONTACT_PAGE_KEYWORDS.reduce((acc, k) =>
-        (`${x.url} ${x.text}`.toLowerCase().includes(k) ? acc + 1 : acc), 0)
+      score: CONTACT_PAGE_KEYWORDS.reduce(
+        (acc, k) => (`${x.url} ${x.text}`.toLowerCase().includes(k) ? acc + 1 : acc),
+        0,
+      ),
     }))
-    .filter(x => x.score > 0)
+    .filter((x) => x.score > 0)
     .sort((a, b) => b.score - a.score);
 
-  const uniqueSorted = scored.filter(x => {
+  const uniqueSorted = scored.filter((x) => {
     if (seen.has(x.url)) return false;
     seen.add(x.url);
     return true;
   });
-  const firstContact = uniqueSorted.find(x => /contact/.test(x.url.toLowerCase()));
-  let discovered = [
-    firstContact?.url,
-    ...uniqueSorted.filter(x => x !== firstContact).map(x => x.url)
-  ].filter(Boolean).slice(0, Math.max(0, MAX_PAGES_TO_VISIT - 1));
+  const firstContact = uniqueSorted.find((x) => /contact/.test(x.url.toLowerCase()));
+  let discovered = [firstContact?.url, ...uniqueSorted.filter((x) => x !== firstContact).map((x) => x.url)]
+    .filter(Boolean)
+    .slice(0, Math.max(0, MAX_PAGES_TO_VISIT - 1));
 
   if (discovered.length === 0 && origin) {
     for (const p of COMMON_CONTACT_PATHS) {
@@ -598,146 +805,99 @@ async function discoverCandidatePages(page, baseUrl) {
 async function scanCTAsOnPage(page) {
   const clickable = await safeEvaluate(page, () => ({
     phones: Array.from(document.querySelectorAll("a[href^='tel:' i]"))
-              .map(a => ({ href: a.getAttribute("href"), text: (a.textContent || "").trim() }))
-              .filter(x => x.href),
+      .map((a) => ({ href: a.getAttribute("href"), text: (a.textContent || "").trim() }))
+      .filter((x) => x.href),
     emails: Array.from(document.querySelectorAll("a[href^='mailto:' i]"))
-              .map(a => ({ href: a.getAttribute("href"), text: (a.textContent || "").trim() }))
-              .filter(x => x.href)
+      .map((a) => ({ href: a.getAttribute("href"), text: (a.textContent || "").trim() }))
+      .filter((x) => x.href),
   }));
 
-  /* NON-CLICKABLE CONTACT DETECTION — disabled, too many false positives, re-enable when accurate
-  const plainText = await safeEvaluate(page, () => {
-    function normPhone(d) {
-      if (d.startsWith('+44')) return '0' + d.slice(3);
-      if (d.startsWith('0044')) return '0' + d.slice(4);
-      return d;
-    }
-    const linkedPhones = new Set(
-      Array.from(document.querySelectorAll("a[href^='tel:' i]"))
-        .map(a => normPhone((a.getAttribute("href") || "").replace(/[^\d\+]/g, ""))).filter(Boolean)
-    );
-    const linkedEmails = new Set(
-      Array.from(document.querySelectorAll("a[href^='mailto:' i]"))
-        .map(a => (a.getAttribute("href") || "").replace(/mailto:/i, "").trim().toLowerCase()).filter(Boolean)
-    );
-
-    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
-      acceptNode(node) {
-        const tag = node.parentElement?.tagName?.toLowerCase();
-        if (["script","style","noscript","head","template"].includes(tag)) return NodeFilter.FILTER_REJECT;
-        const el = node.parentElement;
-        if (el) {
-          try {
-            if (typeof el.checkVisibility === "function" && !el.checkVisibility({ checkVisibilityCSS: true }))
-              return NodeFilter.FILTER_REJECT;
-          } catch {}
-          if (el.offsetWidth === 0 && el.offsetHeight === 0) return NodeFilter.FILTER_REJECT;
-        }
-        return NodeFilter.FILTER_ACCEPT;
-      }
-    });
-
-    const phonePattern = /(?<![.\d])(\+?0[\d\s\-\(\)\.]{7,16}[\d]|\+[1-9]\d[\d\s\-\(\)\.]{6,14}[\d])(?![.\d])/g;
-    const emailPattern = /([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})/g;
-    const placeholderDomains = new Set(["example.com","example.org","example.net","example.co.uk","test.com","placeholder.com","domain.com","yourdomain.com","email.com"]);
-    const foundPhones = [], foundEmails = [];
-
-    let node;
-    while ((node = walker.nextNode())) {
-      const text = node.textContent || "";
-      if (node.parentElement?.closest("a[href]")) continue;
-
-      for (const m of text.matchAll(phonePattern)) {
-        const pureDigits = m[1].replace(/[^0-9]/g, "");
-        if (pureDigits.length < 10 || pureDigits.length > 13) continue;
-        if (/^\d{1,3}(?:[.\s]\d{1,3}){3}$/.test(m[1].trim())) continue;
-        const beforeInNode  = text.slice(Math.max(0, m.index - 80), m.index);
-        const parentCtx     = (node.parentElement?.innerText || "").slice(0, 300);
-        const labelInBefore = /(?:call|tel(?:ephone)?|phone|mobile|mob|fax|ring|speak\s+to|contact(?:\s+us)?(?:\s+on|\s+at)?)\s*[:|-]?\s*$/i.test(beforeInNode.trim());
-        const labelInParent = /(?:^|\b)(?:call|tel(?:ephone)?|phone|mobile|mob|fax)\b/i.test(parentCtx);
-        if (!labelInBefore && !labelInParent) continue;
-        const digits = normPhone(m[1].replace(/[^\d\+]/g, ""));
-        if (!linkedPhones.has(digits))
-          foundPhones.push({ raw: m[1].trim(), digits });
-      }
-
-      for (const m of text.matchAll(emailPattern)) {
-        const norm   = m[1].trim().toLowerCase();
-        const domain = norm.split("@")[1] || "";
-        if (placeholderDomains.has(domain)) continue;
-        if (!linkedEmails.has(norm)) foundEmails.push({ raw: m[1].trim(), norm });
-      }
-    }
-
-    const seenPh = new Set(), seenEm = new Set();
-    return {
-      phones: foundPhones.filter(p => { if (seenPh.has(p.digits)) return false; seenPh.add(p.digits); return true; }),
-      emails: foundEmails.filter(e => { if (seenEm.has(e.norm))   return false; seenEm.add(e.norm);   return true; })
-    };
-  });
-  */
-
   return {
-    phones:             (clickable?.phones || []),
-    emails:             (clickable?.emails || []),
-    nonClickablePhones: [], // disabled — see comment above
-    nonClickableEmails: []  // disabled — see comment above
+    phones: clickable?.phones || [],
+    emails: clickable?.emails || [],
+    nonClickablePhones: [], // disabled — too many false positives
+    nonClickableEmails: [], // disabled — too many false positives
   };
 }
 
-function normaliseTelHref(href)    { return href ? href.replace(/\s+/g, "").toLowerCase() : null; }
-function normaliseMailtoHref(href) { return href ? href.trim().toLowerCase() : null; }
+function normaliseTelHref(href) {
+  return href ? href.replace(/\s+/g, "").toLowerCase() : null;
+}
+function normaliseMailtoHref(href) {
+  return href ? href.trim().toLowerCase() : null;
+}
 
 // ─────────────────────────────────────────────
 // Low-level: click one element, poll for GA4 event
 // ─────────────────────────────────────────────
-async function clickAndPollForEvent(page, beacons, selector, fromIdx, ctaSearchValue, type, pollMs = POST_ACTION_POLL_MS) {
-  await page.locator(selector).first()
+async function clickAndPollForEvent(
+  page,
+  beacons,
+  selector,
+  fromIdx,
+  ctaSearchValue,
+  type,
+  pollMs = POST_ACTION_POLL_MS,
+) {
+  await page
+    .locator(selector)
+    .first()
     .click({ timeout: 2000, noWaitAfter: true })
     .catch(async () => {
-      await safeEvaluate(page, sel => {
-        const el = document.querySelector(sel);
-        if (el) el.click();
-      }, selector);
+      await safeEvaluate(
+        page,
+        (sel) => {
+          const el = document.querySelector(sel);
+          if (el) el.click();
+        },
+        selector,
+      );
     });
 
   const start = Date.now();
   while (Date.now() - start < pollMs) {
-    const newGa4 = beacons.slice(fromIdx).filter(b => b.type === "GA4");
+    const newGa4 = beacons.slice(fromIdx).filter((b) => b.type === "GA4");
 
-    const tier1 = newGa4.filter(b => {
+    const tier1 = newGa4.filter((b) => {
       const en = (b.event_name || "").toLowerCase();
       if (GENERIC_EVENTS.has(en)) return false;
       const hasPayload = ctaSearchValue && (b.payload_dump || "").includes(ctaSearchValue);
-      const strongName = (type === "phone" && /phone|call|tel|click_call|call_click/.test(en)) ||
-                         (type === "email" && /email|mail|click_email|email_click/.test(en));
+      const strongName =
+        (type === "phone" && /phone|call|tel|click_call|call_click/.test(en)) ||
+        (type === "email" && /email|mail|click_email|email_click/.test(en));
       return hasPayload || strongName;
     });
-    if (tier1.length) return {
-      fired: true, match_tier: "exact",
-      ga4_events: uniq(tier1.map(b => b.event_name)),
-      evidence_urls: tier1.slice(0, 3).map(b => b.url),
-      generic_events_seen: []
-    };
+    if (tier1.length)
+      return {
+        fired: true,
+        match_tier: "exact",
+        ga4_events: uniq(tier1.map((b) => b.event_name)),
+        evidence_urls: tier1.slice(0, 3).map((b) => b.url),
+        generic_events_seen: [],
+      };
 
-    const tier2 = newGa4.filter(b => {
+    const tier2 = newGa4.filter((b) => {
       const en = (b.event_name || "").toLowerCase();
       return !GENERIC_EVENTS.has(en) && en !== "";
     });
-    if (tier2.length) return {
-      fired: true, match_tier: "inferred",
-      ga4_events: uniq(tier2.map(b => b.event_name)),
-      evidence_urls: tier2.slice(0, 3).map(b => b.url),
-      generic_events_seen: []
-    };
+    if (tier2.length)
+      return {
+        fired: true,
+        match_tier: "inferred",
+        ga4_events: uniq(tier2.map((b) => b.event_name)),
+        evidence_urls: tier2.slice(0, 3).map((b) => b.url),
+        generic_events_seen: [],
+      };
 
     await safeWait(100);
   }
 
-  const allNewGa4 = beacons.slice(fromIdx).filter(b => b.type === "GA4");
+  const allNewGa4 = beacons.slice(fromIdx).filter((b) => b.type === "GA4");
   return {
-    fired: false, ga4_events: [], evidence_urls: [],
-    generic_events_seen: uniq(allNewGa4.map(b => b.event_name))
+    fired: false,
+    ga4_events: [],
+    evidence_urls: [],
+    generic_events_seen: uniq(allNewGa4.map((b) => b.event_name)),
   };
 }
 
@@ -745,11 +905,15 @@ async function clickAndPollForEvent(page, beacons, selector, fromIdx, ctaSearchV
 // testLinkCTA — primary click + duplicate-fire test
 // ─────────────────────────────────────────────
 async function testLinkCTA(page, beacons, rawHref, type, pageUrl) {
-  const hrefEsc        = escapeAttrValue(rawHref);
-  const selector       = `a[href="${hrefEsc}" i]`;
-  const ctaSearchValue = type === "phone"
-    ? rawHref.replace(/[^\d\+]/g, "")
-    : rawHref.replace(/mailto:/i, "").toLowerCase().trim();
+  const hrefEsc = escapeAttrValue(rawHref);
+  const selector = `a[href="${hrefEsc}" i]`;
+  const ctaSearchValue =
+    type === "phone"
+      ? rawHref.replace(/[^\d\+]/g, "")
+      : rawHref
+          .replace(/mailto:/i, "")
+          .toLowerCase()
+          .trim();
 
   try {
     const loc = page.locator(selector).first();
@@ -762,7 +926,13 @@ async function testLinkCTA(page, beacons, rawHref, type, pageUrl) {
 
     // ── Step 1: Primary click ──
     const click1 = await clickAndPollForEvent(
-      page, beacons, selector, beacons.length, ctaSearchValue, type, POST_ACTION_POLL_MS
+      page,
+      beacons,
+      selector,
+      beacons.length,
+      ctaSearchValue,
+      type,
+      POST_ACTION_POLL_MS,
     );
 
     if (!click1.fired) {
@@ -774,7 +944,7 @@ async function testLinkCTA(page, beacons, rawHref, type, pageUrl) {
         ga4_events: [],
         generic_events_seen: click1.generic_events_seen,
         page_url: pageUrl,
-        duplicate_fire_test: null
+        duplicate_fire_test: null,
       };
     }
 
@@ -782,40 +952,53 @@ async function testLinkCTA(page, beacons, rawHref, type, pageUrl) {
     await safeWait(DUPLICATE_TEST_SETTLE_MS);
     const beforeClick2 = beacons.length;
 
-    await safeEvaluate(page, sel => {
-      const el = document.querySelector(sel);
-      if (el) el.click();
-    }, selector);
+    await safeEvaluate(
+      page,
+      (sel) => {
+        const el = document.querySelector(sel);
+        if (el) el.click();
+      },
+      selector,
+    );
 
     const click2 = await clickAndPollForEvent(
-      page, beacons, selector, beforeClick2, ctaSearchValue, type, SECOND_CLICK_POLL_MS
+      page,
+      beacons,
+      selector,
+      beforeClick2,
+      ctaSearchValue,
+      type,
+      SECOND_CLICK_POLL_MS,
     );
 
     const duplicate_fire_test = click2.fired
       ? {
           result: "DUPLICATE_FIRED",
-          summary: `A second GA4 event fired after clicking the same ${type === "phone" ? "tel:" : "mailto:"} link again on the same page. ` +
+          summary:
+            `A second GA4 event fired after clicking the same ${type === "phone" ? "tel:" : "mailto:"} link again on the same page. ` +
             `The GTM tag is set to "Once per event" or "Unlimited" — it will fire on every click and double-count conversions.`,
           events_on_second_click: click2.ga4_events,
-          fix: `In GTM, open the GA4 Event tag for ${type === "phone" ? "click_call / click_phone" : "click_email"}, ` +
+          fix:
+            `In GTM, open the GA4 Event tag for ${type === "phone" ? "click_call / click_phone" : "click_email"}, ` +
             `go to Advanced Settings → Tag firing options, change from "Once per event" to "Once per page". ` +
-            `This ensures the event fires only once per page load no matter how many times the link is clicked.`
+            `This ensures the event fires only once per page load no matter how many times the link is clicked.`,
         }
       : {
           result: "CORRECTLY_SUPPRESSED",
-          summary: `No second GA4 event fired after re-clicking on the same page — tag is correctly set to "Once per page".`
+          summary: `No second GA4 event fired after re-clicking on the same page — tag is correctly set to "Once per page".`,
         };
 
     return {
       status: "PASS",
       match_tier: click1.match_tier,
-      ...(click1.match_tier === "inferred" ? { match_note: "Non-generic GA4 event fired — CTA value may be in custom dimensions" } : {}),
+      ...(click1.match_tier === "inferred"
+        ? { match_note: "Non-generic GA4 event fired — CTA value may be in custom dimensions" }
+        : {}),
       ga4_events: click1.ga4_events,
       evidence_urls: click1.evidence_urls,
       page_url: pageUrl,
-      duplicate_fire_test
+      duplicate_fire_test,
     };
-
   } catch (e) {
     return { status: "NOT_TESTED", reason: e.message, page_url: pageUrl, duplicate_fire_test: null };
   }
@@ -824,22 +1007,29 @@ async function testLinkCTA(page, beacons, rawHref, type, pageUrl) {
 // ─────────────────────────────────────────────
 // Per-page CTA orchestrator
 // ─────────────────────────────────────────────
-async function testCTAsOnPage(page, beacons, pageUrl,
-                               uniquePhones, uniqueEmails,
-                               phoneItems, emailItems,
-                               phoneDone, emailDone) {
+async function testCTAsOnPage(
+  page,
+  beacons,
+  pageUrl,
+  uniquePhones,
+  uniqueEmails,
+  phoneItems,
+  emailItems,
+  phoneDone,
+  emailDone,
+) {
   const ctas = await scanCTAsOnPage(page);
   const currentUrl = page.url();
 
   if (!phoneDone.value) {
-    for (const ctaObj of (ctas.phones || [])) {
+    for (const ctaObj of ctas.phones || []) {
       const rawTel = ctaObj.href;
-      const norm   = normaliseTelHref(rawTel);
+      const norm = normaliseTelHref(rawTel);
       if (!norm) continue;
       uniquePhones.add(norm);
 
       const result = await testLinkCTA(page, beacons, rawTel, "phone", currentUrl);
-      result.href         = rawTel;
+      result.href = rawTel;
       result.display_text = ctaObj.text || null;
       phoneItems.push(result);
       phoneDone.value = true;
@@ -847,20 +1037,20 @@ async function testCTAsOnPage(page, beacons, pageUrl,
     }
   }
 
-  for (const ctaObj of (ctas.phones || [])) {
+  for (const ctaObj of ctas.phones || []) {
     const norm = normaliseTelHref(ctaObj.href);
     if (norm) uniquePhones.add(norm);
   }
 
   if (!emailDone.value) {
-    for (const ctaObj of (ctas.emails || [])) {
+    for (const ctaObj of ctas.emails || []) {
       const rawMail = ctaObj.href;
-      const norm    = normaliseMailtoHref(rawMail);
+      const norm = normaliseMailtoHref(rawMail);
       if (!norm) continue;
       uniqueEmails.add(norm);
 
       const result = await testLinkCTA(page, beacons, rawMail, "email", currentUrl);
-      result.href         = rawMail;
+      result.href = rawMail;
       result.display_text = ctaObj.text || null;
       emailItems.push(result);
       emailDone.value = true;
@@ -868,14 +1058,14 @@ async function testCTAsOnPage(page, beacons, pageUrl,
     }
   }
 
-  for (const ctaObj of (ctas.emails || [])) {
+  for (const ctaObj of ctas.emails || []) {
     const norm = normaliseMailtoHref(ctaObj.href);
     if (norm) uniqueEmails.add(norm);
   }
 
   return {
     nonClickablePhones: ctas.nonClickablePhones || [],
-    nonClickableEmails: ctas.nonClickableEmails || []
+    nonClickableEmails: ctas.nonClickableEmails || [],
   };
 }
 
@@ -884,24 +1074,33 @@ async function testCTAsOnPage(page, beacons, pageUrl,
 // ─────────────────────────────────────────────
 async function discoverAllFormsOnPage(page, pageUrl) {
   const mainForms = await scanFrameForForms(page);
-  let frameForms  = [];
+  let frameForms = [];
   try {
     for (const frame of page.frames()) {
       if (frame === page.mainFrame()) continue;
       const ff = await scanFrameForForms(frame);
-      if (ff?.length) { ff.forEach(f => { f.isFrame = true; }); frameForms.push(...ff); }
+      if (ff?.length) {
+        ff.forEach((f) => {
+          f.isFrame = true;
+        });
+        frameForms.push(...ff);
+      }
     }
   } catch {}
-  const leadForms = [...mainForms, ...frameForms].filter(f => f.score >= 1);
+  const leadForms = [...mainForms, ...frameForms].filter((f) => f.score >= 1);
   leadForms.sort((a, b) => b.score - a.score);
-  const firstParty = [], thirdParty = [];
+  const firstParty = [],
+    thirdParty = [];
   for (const f of leadForms) {
     let isThirdParty = false;
     if (f.action) {
       try {
         const actionUrl = new URL(f.action, pageUrl);
-        if (actionUrl.origin !== new URL(pageUrl).origin &&
-            THIRD_PARTY_HINTS.some(h => actionUrl.href.toLowerCase().includes(h))) isThirdParty = true;
+        if (
+          actionUrl.origin !== new URL(pageUrl).origin &&
+          THIRD_PARTY_HINTS.some((h) => actionUrl.href.toLowerCase().includes(h))
+        )
+          isThirdParty = true;
       } catch {}
     }
     (isThirdParty ? thirdParty : firstParty).push(f);
@@ -912,28 +1111,48 @@ async function discoverAllFormsOnPage(page, pageUrl) {
 async function scanFrameForForms(frameOrPage) {
   return await safeEvaluate(frameOrPage, () => {
     const out = [];
-    function textOf(el) { return (el?.textContent || "").replace(/\s+/g, " ").trim().slice(0, 400); }
-    function attr(el, name) { return (el?.getAttribute?.(name)) || ""; }
-    function has(el, sel) { try { return !!el.querySelector(sel); } catch { return false; } }
+    function textOf(el) {
+      return (el?.textContent || "").replace(/\s+/g, " ").trim().slice(0, 400);
+    }
+    function attr(el, name) {
+      return el?.getAttribute?.(name) || "";
+    }
+    function has(el, sel) {
+      try {
+        return !!el.querySelector(sel);
+      } catch {
+        return false;
+      }
+    }
     for (let i = 0; i < document.querySelectorAll("form").length; i++) {
-      const f     = document.querySelectorAll("form")[i];
+      const f = document.querySelectorAll("form")[i];
       const action = attr(f, "action");
       const inputs = f.querySelectorAll("input,textarea,select");
       const hasTextarea = has(f, "textarea");
-      const hasEmail    = has(f, "input[type='email']") ||
-        Array.from(inputs).some(x => /email/i.test(attr(x,"name")+attr(x,"placeholder")+attr(x,"id")));
-      const hasPhone    = Array.from(inputs).some(x => /phone|tel|mobile/i.test(attr(x,"name")+attr(x,"placeholder")+attr(x,"id")+attr(x,"type")));
-      const hasName     = Array.from(inputs).some(x => /^(name|full.?name|first.?name)/i.test(attr(x,"name")+attr(x,"placeholder")+attr(x,"id")));
-      const submitBtn   = f.querySelector("button[type='submit'],input[type='submit']") ||
-        Array.from(f.querySelectorAll("button")).find(b => /send|submit|enquir|quote|request|book|contact|get.?in.?touch/i.test(textOf(b)));
-      const submitText  = submitBtn ? textOf(submitBtn) : "";
-      const hay = `${attr(f,"id")} ${attr(f,"class")} ${attr(f,"name")} ${submitText} ${textOf(f)}`.toLowerCase();
+      const hasEmail =
+        has(f, "input[type='email']") ||
+        Array.from(inputs).some((x) => /email/i.test(attr(x, "name") + attr(x, "placeholder") + attr(x, "id")));
+      const hasPhone = Array.from(inputs).some((x) =>
+        /phone|tel|mobile/i.test(attr(x, "name") + attr(x, "placeholder") + attr(x, "id") + attr(x, "type")),
+      );
+      const hasName = Array.from(inputs).some((x) =>
+        /^(name|full.?name|first.?name)/i.test(attr(x, "name") + attr(x, "placeholder") + attr(x, "id")),
+      );
+      const submitBtn =
+        f.querySelector("button[type='submit'],input[type='submit']") ||
+        Array.from(f.querySelectorAll("button")).find((b) =>
+          /send|submit|enquir|quote|request|book|contact|get.?in.?touch/i.test(textOf(b)),
+        );
+      const submitText = submitBtn ? textOf(submitBtn) : "";
+      const hay = `${attr(f, "id")} ${attr(f, "class")} ${attr(f, "name")} ${submitText} ${textOf(f)}`.toLowerCase();
       const isSearch = /search|login|sign.?in|subscribe|newsletter/.test(hay) && !hasTextarea && inputs.length < 3;
       let score = 0;
-      if (isSearch) { score -= 999; } else {
+      if (isSearch) {
+        score -= 999;
+      } else {
         if (hasTextarea) score += 3;
-        if (hasEmail)    score += 2;
-        if (hasPhone)    score += 2;
+        if (hasEmail) score += 2;
+        if (hasPhone) score += 2;
         if (hasName && inputs.length >= 2) score += 1;
         if (/send|submit|enquir|contact|book/i.test(submitText)) score += 2;
         if (/contact|enquir|quote|touch/i.test(hay)) score += 1;
@@ -946,46 +1165,53 @@ async function scanFrameForForms(frameOrPage) {
 
 async function detectFieldType(el) {
   try {
-    const tag  = await el.evaluate(e => e.tagName.toLowerCase()).catch(() => "");
+    const tag = await el.evaluate((e) => e.tagName.toLowerCase()).catch(() => "");
     const type = (await el.getAttribute("type").catch(() => "")) || "";
     const name = (await el.getAttribute("name").catch(() => "")) || "";
-    const ph   = (await el.getAttribute("placeholder").catch(() => "")) || "";
-    const id   = (await el.getAttribute("id").catch(() => "")) || "";
-    const c    = `${type} ${name} ${ph} ${id}`.toLowerCase();
-    if (tag === "select")                  return { type: "select" };
-    if (type === "checkbox")               return { type: "checkbox" };
-    if (type === "radio")                  return { type: "radio" };
-    if (type === "hidden")                 return { type: "hidden" };
-    if (type === "file")                   return { type: "file" };
-    if (type === "date")                   return { type: "date" };
-    if (type === "time")                   return { type: "time" };
-    if (type === "datetime-local")         return { type: "datetime-local" };
-    if (type === "month")                  return { type: "month" };
-    if (type === "week")                   return { type: "week" };
+    const ph = (await el.getAttribute("placeholder").catch(() => "")) || "";
+    const id = (await el.getAttribute("id").catch(() => "")) || "";
+    const c = `${type} ${name} ${ph} ${id}`.toLowerCase();
+    if (tag === "select") return { type: "select" };
+    if (type === "checkbox") return { type: "checkbox" };
+    if (type === "radio") return { type: "radio" };
+    if (type === "hidden") return { type: "hidden" };
+    if (type === "file") return { type: "file" };
+    if (type === "date") return { type: "date" };
+    if (type === "time") return { type: "time" };
+    if (type === "datetime-local") return { type: "datetime-local" };
+    if (type === "month") return { type: "month" };
+    if (type === "week") return { type: "week" };
     if (type === "number" || type === "range") return { type: "number" };
-    if (type === "url")                    return { type: "url" };
-    if (type === "color")                  return { type: "color" };
-    if (/email/.test(c))                   return { type: "email" };
-    if (/phone|tel|mobile/.test(c))        return { type: "phone" };
+    if (type === "url") return { type: "url" };
+    if (type === "color") return { type: "color" };
+    if (/email/.test(c)) return { type: "email" };
+    if (/phone|tel|mobile/.test(c)) return { type: "phone" };
     if (/message|enquiry|comment|details|how.?can/.test(c) || tag === "textarea") return { type: "message" };
-    if (/first.?name|forename/.test(c))    return { type: "firstName" };
-    if (/last.?name|surname/.test(c))      return { type: "lastName" };
+    if (/first.?name|forename/.test(c)) return { type: "firstName" };
+    if (/last.?name|surname/.test(c)) return { type: "lastName" };
     if (/company|business|organisation/.test(c)) return { type: "company" };
     if (/postcode|post.?code|zip/.test(c)) return { type: "postcode" };
-    if (/subject|topic/.test(c))           return { type: "subject" };
+    if (/subject|topic/.test(c)) return { type: "subject" };
     return { type: "text" };
-  } catch { return { type: "unknown" }; }
+  } catch {
+    return { type: "unknown" };
+  }
 }
 
 async function fillFormFieldSmart(el, fieldInfo) {
   try {
     const { type } = fieldInfo;
     if (type === "hidden") return;
-    if (!await el.isVisible({ timeout: 300 }).catch(() => false)) return;
+    if (!(await el.isVisible({ timeout: 300 }).catch(() => false))) return;
     if (type === "select") {
-      await el.evaluate(sel => {
-        if (sel.options.length > 1) { sel.selectedIndex = 1; sel.dispatchEvent(new Event("change", { bubbles: true })); }
-      }).catch(() => null);
+      await el
+        .evaluate((sel) => {
+          if (sel.options.length > 1) {
+            sel.selectedIndex = 1;
+            sel.dispatchEvent(new Event("change", { bubbles: true }));
+          }
+        })
+        .catch(() => null);
       return;
     }
     if (type === "checkbox" || type === "radio") {
@@ -1025,24 +1251,44 @@ async function fillFormFieldSmart(el, fieldInfo) {
     if (type === "file" || type === "color" || type === "range") return;
 
     const valueMap = {
-      email: TEST_VALUES.email, phone: TEST_VALUES.phone, message: TEST_VALUES.message,
-      firstName: TEST_VALUES.firstName, lastName: TEST_VALUES.lastName,
-      company: TEST_VALUES.company, postcode: TEST_VALUES.postcode, subject: TEST_VALUES.subject
+      email: TEST_VALUES.email,
+      phone: TEST_VALUES.phone,
+      message: TEST_VALUES.message,
+      firstName: TEST_VALUES.firstName,
+      lastName: TEST_VALUES.lastName,
+      company: TEST_VALUES.company,
+      postcode: TEST_VALUES.postcode,
+      subject: TEST_VALUES.subject,
     };
     await el.fill(valueMap[type] || TEST_VALUES.fullName, { timeout: 500 }).catch(() => null);
   } catch {}
 }
 
 async function hasVisibleValidationErrors(page, formIndex) {
-  return await safeEvaluate(page, idx => {
-    const form = document.querySelectorAll("form")[idx];
-    if (!form) return false;
-    if ([...form.querySelectorAll(":invalid")].some(el => el.offsetParent !== null)) return true;
-    return ['[role="alert"]','.error','.invalid-feedback','.wpcf7-not-valid-tip',
-      '.validation-error','.hs-error-msgs','.field-error','.form-error',
-      '[data-error]','.help-block','.alert-danger']
-      .some(sel => [...form.querySelectorAll(sel)].some(el => el.offsetParent !== null && el.innerText.trim().length > 0));
-  }, formIndex);
+  return await safeEvaluate(
+    page,
+    (idx) => {
+      const form = document.querySelectorAll("form")[idx];
+      if (!form) return false;
+      if ([...form.querySelectorAll(":invalid")].some((el) => el.offsetParent !== null)) return true;
+      return [
+        '[role="alert"]',
+        ".error",
+        ".invalid-feedback",
+        ".wpcf7-not-valid-tip",
+        ".validation-error",
+        ".hs-error-msgs",
+        ".field-error",
+        ".form-error",
+        "[data-error]",
+        ".help-block",
+        ".alert-danger",
+      ].some((sel) =>
+        [...form.querySelectorAll(sel)].some((el) => el.offsetParent !== null && el.innerText.trim().length > 0),
+      );
+    },
+    formIndex,
+  );
 }
 
 async function testFirstPartyForm(page, beacons, pageUrl, formMeta) {
@@ -1050,42 +1296,65 @@ async function testFirstPartyForm(page, beacons, pageUrl, formMeta) {
     if (formMeta.isFrame) return { status: "NOT_TESTED", reason: "Form is inside a cross-origin iframe" };
     const formLocator = page.locator("form").nth(formMeta.index);
     if (!(await formLocator.count())) return { status: "NOT_TESTED", reason: "Form not found in DOM" };
-    const botDetected = await safeEvaluate(page, () =>
-      !!document.querySelector("iframe[src*='recaptcha'],iframe[src*='turnstile'],.g-recaptcha,.h-captcha,[data-sitekey]")
+    const botDetected = await safeEvaluate(
+      page,
+      () =>
+        !!document.querySelector(
+          "iframe[src*='recaptcha'],iframe[src*='turnstile'],.g-recaptcha,.h-captcha,[data-sitekey]",
+        ),
     );
     if (botDetected) return { status: "FAIL", reason: "Bot Protection (CAPTCHA/Turnstile)" };
 
     // Check for multi-step form (Next/Continue button or step-progress widgets)
-    const multiStepBtn = await safeEvaluate(page, idx => {
-      const form = document.querySelectorAll("form")[idx];
-      if (!form) return null;
-      const visible = [...form.querySelectorAll("button,input[type='submit'],input[type='button']")]
-        .filter(b => b.offsetParent !== null);
-      const primaryBtn = visible.find(b => b.type === "submit") || visible[0];
-      const btnText = (primaryBtn?.textContent || primaryBtn?.value || "").trim();
-      const isNextStep = /^(next|continue|proceed|go to step|step\s*\d)/i.test(btnText);
-      const hasStepper = !!form.querySelector(
-        '[class*="step-"],[class*="wizard"],[class*="multi-step"],[data-step],[aria-current="step"],[class*="progress-step"]'
-      );
-      return (isNextStep || hasStepper) ? (btnText || "Next") : null;
-    }, formMeta.index);
+    const multiStepBtn = await safeEvaluate(
+      page,
+      (idx) => {
+        const form = document.querySelectorAll("form")[idx];
+        if (!form) return null;
+        const visible = [...form.querySelectorAll("button,input[type='submit'],input[type='button']")].filter(
+          (b) => b.offsetParent !== null,
+        );
+        const primaryBtn = visible.find((b) => b.type === "submit") || visible[0];
+        const btnText = (primaryBtn?.textContent || primaryBtn?.value || "").trim();
+        const isNextStep = /^(next|continue|proceed|go to step|step\s*\d)/i.test(btnText);
+        const hasStepper = !!form.querySelector(
+          '[class*="step-"],[class*="wizard"],[class*="multi-step"],[data-step],[aria-current="step"],[class*="progress-step"]',
+        );
+        return isNextStep || hasStepper ? btnText || "Next" : null;
+      },
+      formMeta.index,
+    );
     if (multiStepBtn !== null && multiStepBtn !== undefined) {
-      return { status: "NOT_TESTED", reason: `Multi-step form — button says "${multiStepBtn}"; automated testing cannot navigate all steps` };
+      return {
+        status: "NOT_TESTED",
+        reason: `Multi-step form — button says "${multiStepBtn}"; automated testing cannot navigate all steps`,
+      };
     }
 
     // Check for inputs the bot cannot fill before attempting
-    const unfillableFields = await safeEvaluate(page, idx => {
-      const form = document.querySelectorAll("form")[idx];
-      if (!form) return [];
-      const issues = [];
-      const visible = [...form.querySelectorAll("input,select,textarea")].filter(el => el.offsetParent !== null);
-      if (visible.some(el => el.type === "file")) issues.push("file upload");
-      if (form.querySelector("[class*='datepick'],[class*='flatpickr'],[class*='pikaday'],[class*='daterangepick'],[class*='react-datepick'],[class*='vue-datepick'],[class*='air-datepick']"))
-        issues.push("custom date picker widget");
-      return issues;
-    }, formMeta.index);
+    const unfillableFields = await safeEvaluate(
+      page,
+      (idx) => {
+        const form = document.querySelectorAll("form")[idx];
+        if (!form) return [];
+        const issues = [];
+        const visible = [...form.querySelectorAll("input,select,textarea")].filter((el) => el.offsetParent !== null);
+        if (visible.some((el) => el.type === "file")) issues.push("file upload");
+        if (
+          form.querySelector(
+            "[class*='datepick'],[class*='flatpickr'],[class*='pikaday'],[class*='daterangepick'],[class*='react-datepick'],[class*='vue-datepick'],[class*='air-datepick']",
+          )
+        )
+          issues.push("custom date picker widget");
+        return issues;
+      },
+      formMeta.index,
+    );
     if (unfillableFields.length > 0) {
-      return { status: "NOT_TESTED", reason: `Form contains fields the bot cannot fill: ${unfillableFields.join(", ")}` };
+      return {
+        status: "NOT_TESTED",
+        reason: `Form contains fields the bot cannot fill: ${unfillableFields.join(", ")}`,
+      };
     }
 
     const beforeBeaconIdx = beacons.length;
@@ -1097,41 +1366,63 @@ async function testFirstPartyForm(page, beacons, pageUrl, formMeta) {
     }
     await safeWait(300);
 
-    const btnLocator = formLocator.locator(
-      "button[type='submit'],input[type='submit'],button:has-text('Send'),button:has-text('Submit'),button:has-text('Enquire'),button:has-text('Book'),button:has-text('Request')"
-    ).first();
-    if (!((await btnLocator.count()) > 0 && await btnLocator.isVisible().catch(() => false))) {
+    const btnLocator = formLocator
+      .locator(
+        "button[type='submit'],input[type='submit'],button:has-text('Send'),button:has-text('Submit'),button:has-text('Enquire'),button:has-text('Book'),button:has-text('Request')",
+      )
+      .first();
+    if (!((await btnLocator.count()) > 0 && (await btnLocator.isVisible().catch(() => false)))) {
       return { status: "NOT_TESTED", reason: "No visible submit button found" };
     }
 
-    let submitted = await btnLocator.click({ timeout: 2000, noWaitAfter: true }).then(() => true).catch(() => false);
+    let submitted = await btnLocator
+      .click({ timeout: 2000, noWaitAfter: true })
+      .then(() => true)
+      .catch(() => false);
     if (!submitted) {
-      submitted = await safeEvaluate(page, idx => {
-        const f   = document.querySelectorAll("form")[idx];
-        const btn = f?.querySelector("button[type='submit'],input[type='submit']");
-        if (btn) { btn.click(); return true; }
-        return false;
-      }, formMeta.index).then(r => !!r);
+      submitted = await safeEvaluate(
+        page,
+        (idx) => {
+          const f = document.querySelectorAll("form")[idx];
+          const btn = f?.querySelector("button[type='submit'],input[type='submit']");
+          if (btn) {
+            btn.click();
+            return true;
+          }
+          return false;
+        },
+        formMeta.index,
+      ).then((r) => !!r);
     }
     if (!submitted) {
-      await safeEvaluate(page, idx => {
-        const f = document.querySelectorAll("form")[idx];
-        if (f) { try { f.dispatchEvent(new Event("submit",{bubbles:true,cancelable:true})); f.submit(); } catch {} }
-      }, formMeta.index);
+      await safeEvaluate(
+        page,
+        (idx) => {
+          const f = document.querySelectorAll("form")[idx];
+          if (f) {
+            try {
+              f.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+              f.submit();
+            } catch {}
+          }
+        },
+        formMeta.index,
+      );
     }
 
     await safeWait(800);
     if (await hasVisibleValidationErrors(page, formMeta.index))
       return { status: "NOT_TESTED", reason: "Form validation blocked submission" };
 
-    let newGa4 = [], meaningfulEvents = [];
+    let newGa4 = [],
+      meaningfulEvents = [];
     const submitStart = Date.now();
     while (Date.now() - submitStart < FORM_SUBMIT_WAIT_MS) {
       await safeWait(400);
-      const afterUrl  = page.url();
+      const afterUrl = page.url();
       const urlChanged = afterUrl !== beforeUrl;
-      newGa4 = beacons.slice(beforeBeaconIdx).filter(b => b.type === "GA4");
-      meaningfulEvents = newGa4.filter(b => {
+      newGa4 = beacons.slice(beforeBeaconIdx).filter((b) => b.type === "GA4");
+      meaningfulEvents = newGa4.filter((b) => {
         const en = (b.event_name || "").toLowerCase();
         if (GENERIC_EVENTS.has(en)) return false;
         if (en === "page_view" && urlChanged && /thank|success|confirm|sent/i.test(afterUrl)) return true;
@@ -1140,16 +1431,30 @@ async function testFirstPartyForm(page, beacons, pageUrl, formMeta) {
       if (meaningfulEvents.length > 0) break;
     }
     if (meaningfulEvents.length > 0) {
-      return { status: "PASS", ga4_events: uniq(meaningfulEvents.map(b => b.event_name)), evidence_urls: meaningfulEvents.slice(0,3).map(b => b.url) };
+      return {
+        status: "PASS",
+        ga4_events: uniq(meaningfulEvents.map((b) => b.event_name)),
+        evidence_urls: meaningfulEvents.slice(0, 3).map((b) => b.url),
+      };
     }
 
     const successVisible = await safeEvaluate(page, () =>
-      /thank|thanks|sent|success|confirm|received|we.ll be in touch|we will be in touch|message received/i.test(document.body.innerText)
+      /thank|thanks|sent|success|confirm|received|we.ll be in touch|we will be in touch|message received/i.test(
+        document.body.innerText,
+      ),
     );
     if (successVisible || /thank|success|confirm|sent/i.test(page.url())) {
-      return { status: "FAIL", reason: "Form submitted (success detected) but no GA4 event fired", ga4_events_seen: uniq(newGa4.map(b => b.event_name)) };
+      return {
+        status: "FAIL",
+        reason: "Form submitted (success detected) but no GA4 event fired",
+        ga4_events_seen: uniq(newGa4.map((b) => b.event_name)),
+      };
     }
-    return { status: "NOT_TESTED", reason: "Submission unconfirmed — no success message, URL change, or GA4 event", ga4_events_seen: uniq(newGa4.map(b => b.event_name)) };
+    return {
+      status: "NOT_TESTED",
+      reason: "Submission unconfirmed — no success message, URL change, or GA4 event",
+      ga4_events_seen: uniq(newGa4.map((b) => b.event_name)),
+    };
   } catch (e) {
     return { status: "NOT_TESTED", reason: `Unexpected error: ${e.message}` };
   }
@@ -1157,7 +1462,12 @@ async function testFirstPartyForm(page, beacons, pageUrl, formMeta) {
 
 async function testAllFormsOnPage(page, beacons, pageUrl) {
   const discovery = await discoverAllFormsOnPage(page, pageUrl);
-  const result = { page_url: pageUrl, total_lead_forms_found: discovery.totalLeadForms, first_party_forms: [], third_party_forms: [] };
+  const result = {
+    page_url: pageUrl,
+    total_lead_forms_found: discovery.totalLeadForms,
+    first_party_forms: [],
+    third_party_forms: [],
+  };
   for (const formMeta of discovery.firstPartyForms) {
     const res = await testFirstPartyForm(page, beacons, pageUrl, formMeta);
     result.first_party_forms.push(res);
@@ -1173,60 +1483,53 @@ async function trackingHealthCheckSiteInternal(url) {
   const targetUrl = normaliseUrl(url);
 
   // ── Working state (not returned) ──
-  const beacons              = [];
-  const interceptedForms     = [];
-  const uniquePhones         = new Set();
-  const uniqueEmails         = new Set();
-  // const uniqueNonClickPhones = new Set(); // disabled with non-clickable detection
-  // const uniqueNonClickEmails = new Set(); // disabled with non-clickable detection
-  const visitedUrls          = new Set();
-  const phoneItems           = [];
-  const emailItems           = [];
-  const phoneDone            = { value: false };
-  const emailDone            = { value: false };
+  const beacons = [];
+  const interceptedForms = [];
+  const uniquePhones = new Set();
+  const uniqueEmails = new Set();
+  const visitedUrls = new Set();
+  const phoneItems = [];
+  const emailItems = [];
+  const phoneDone = { value: false };
+  const emailDone = { value: false };
 
   // ── Return payload — maps directly to DB schema ──
   const results = {
-    url:            targetUrl,
-    timestamp:      nowIso(),
-    grade:          null,
-    health_status:  null,
+    url: targetUrl,
+    timestamp: nowIso(),
+    grade: null,
+    health_status: null,
     health_reasons: null,
 
     detected_gtm_ids: [],
     detected_ga4_ids: [],
 
-    phone_found:  0,
+    phone_found: 0,
     phone_tested: 0,
     phone_passed: 0,
     phone_failed: 0,
 
-    email_found:  0,
+    email_found: 0,
     email_tested: 0,
     email_passed: 0,
     email_failed: 0,
 
-    forms_found:  0,
+    forms_found: 0,
     forms_passed: 0,
     forms_failed: 0,
 
-    // cta_details: phones.items + phones.not_clickable_items, emails.items + emails.not_clickable_items
     cta_details: {
       phones: { items: [], not_clickable_items: [] },
-      emails: { items: [], not_clickable_items: [] }
+      emails: { items: [], not_clickable_items: [] },
     },
 
-    // form_details: forms.pages array
     form_details: [],
-
-    // fix: joined summary of all actionable fixes from failure_detail
     fix: null,
-
-    // failure_detail retained in full for callers that need structured issue data
     failure_detail: [],
   };
 
-  let context = null, page = null;
+  let context = null,
+    page = null;
 
   try {
     logInfo(`🔍 [${SCRIPT_VERSION}] Starting check`, { url: targetUrl });
@@ -1234,49 +1537,62 @@ async function trackingHealthCheckSiteInternal(url) {
 
     const ctxOpts = {
       viewport: { width: 1920, height: 1080 },
-      userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+      userAgent:
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
       locale: "en-GB",
-      timezoneId: "Europe/London"
+      timezoneId: "Europe/London",
     };
     try {
       context = await browser.newContext(ctxOpts);
     } catch (ctxErr) {
-      // Browser process died between getBrowser() and here — relaunch once
       if (/browser.*closed|Target.*closed/i.test(ctxErr.message)) {
-        globalBrowser = null; browserUses = 0;
+        globalBrowser = null;
+        browserUses = 0;
         const freshBrowser = await getBrowser();
         context = await freshBrowser.newContext(ctxOpts);
-      } else { throw ctxErr; }
+      } else {
+        throw ctxErr;
+      }
     }
     openContexts.set(context, { createdAt: Date.now(), url: targetUrl });
     page = await context.newPage();
 
-    await context.route("**/*", route => {
-      const req    = route.request();
-      const type   = req.resourceType();
+    await context.route("**/*", (route) => {
+      const req = route.request();
+      const type = req.resourceType();
       const reqUrl = req.url();
       const method = req.method();
-      if (["image","media","font"].includes(type)) return route.abort();
-      try { if (SOCIAL_DOMAINS.some(d => new URL(reqUrl).hostname.includes(d))) return route.abort(); } catch {}
-      const lower      = reqUrl.toLowerCase();
-      const isAnalytics = lower.includes("google-analytics") || lower.includes("googletagmanager") || lower.includes("/collect");
+      if (["image", "media", "font"].includes(type)) return route.abort();
+      try {
+        if (SOCIAL_DOMAINS.some((d) => new URL(reqUrl).hostname.includes(d))) return route.abort();
+      } catch {}
+      const lower = reqUrl.toLowerCase();
+      const isAnalytics =
+        lower.includes("google-analytics") || lower.includes("googletagmanager") || lower.includes("/collect");
       if (method === "POST" && !isAnalytics) {
         interceptedForms.push({ url: reqUrl, data: req.postData() });
-        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ success: true, message: "mocked" }) });
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ success: true, message: "mocked" }),
+        });
       }
       route.continue();
     });
 
-    page.on("request", req => {
+    page.on("request", (req) => {
       const b = classifyAndParseBeacon(req.url(), req.postData());
-      if (b) { beacons.push(b); logDebug("📡 Beacon", { type: b.type, event: b.event_name }); }
+      if (b) {
+        beacons.push(b);
+        logDebug("📡 Beacon", { type: b.type, event: b.event_name });
+      }
     });
-    page.on("response", async res => {
+    page.on("response", async (res) => {
       try {
         const req = res.request();
         if (req.method() === "POST") {
           const b = classifyAndParseBeacon(req.url(), req.postData());
-          if (b && !beacons.find(x => x.url === b.url && x.timestamp === b.timestamp)) beacons.push(b);
+          if (b && !beacons.find((x) => x.url === b.url && x.timestamp === b.timestamp)) beacons.push(b);
         }
       } catch {}
     });
@@ -1287,8 +1603,8 @@ async function trackingHealthCheckSiteInternal(url) {
       logInfo(`⚠️ Homepage failed to load: ${gotoResult.error}`);
       const pageHasContent = await safeEvaluate(page, () => (document.body?.innerText || "").length > 100);
       if (!pageHasContent) {
-        results.grade          = "T3";
-        results.health_status  = "SITE_UNAVAILABLE";
+        results.grade = "T3";
+        results.health_status = "SITE_UNAVAILABLE";
         results.health_reasons = `Site could not be reached: ${gotoResult.error}`;
         return results;
       }
@@ -1305,15 +1621,20 @@ async function trackingHealthCheckSiteInternal(url) {
     results.detected_ga4_ids = [...tracking.ga4, ...tracking.unlinked_ga4];
 
     if (!tracking.has_gtm) {
-      results.grade          = "FAIL";
-      results.health_status  = "NO_TRACKING";
-      results.health_reasons = "No GTM container detected after cookie consent was accepted. No GTM tag IDs in source, no GTM network requests, no google_tag_manager global object.";
-      results.failure_detail = [{
-        category: "Google Tag Manager", grade_impact: "FAIL",
-        summary: "No GTM container was found. GTM must be installed before any conversion tracking can work.",
-        fix: "Install a Google Tag Manager container. Add the GTM <head> snippet and <body> noscript snippet to every page, then republish."
-      }];
-      results.fix = "Install a Google Tag Manager container. Add the GTM <head> snippet and <body> noscript snippet to every page, then republish.";
+      results.grade = "FAIL";
+      results.health_status = "NO_TRACKING";
+      results.health_reasons =
+        "No GTM container detected after cookie consent was accepted. No GTM tag IDs in source, no GTM network requests, no google_tag_manager global object.";
+      results.failure_detail = [
+        {
+          category: "Google Tag Manager",
+          grade_impact: "FAIL",
+          summary: "No GTM container was found. GTM must be installed before any conversion tracking can work.",
+          fix: "Install a Google Tag Manager container. Add the GTM <head> snippet and <body> noscript snippet to every page, then republish.",
+        },
+      ];
+      results.fix =
+        "Install a Google Tag Manager container. Add the GTM <head> snippet and <body> noscript snippet to every page, then republish.";
       logInfo(`╔══════════════════════════════════════════════╗`);
       logInfo(`  GRADE : ❌ FAIL — NO GTM/GA4 DETECTED`);
       logInfo(`╚══════════════════════════════════════════════╝`);
@@ -1321,7 +1642,7 @@ async function trackingHealthCheckSiteInternal(url) {
     }
 
     // ── Discover and visit pages ──
-    const discovered   = await discoverCandidatePages(page, targetUrl);
+    const discovered = await discoverCandidatePages(page, targetUrl);
     const pagesToVisit = [targetUrl, ...discovered].slice(0, MAX_PAGES_TO_VISIT);
 
     for (let i = 0; i < pagesToVisit.length; i++) {
@@ -1329,9 +1650,15 @@ async function trackingHealthCheckSiteInternal(url) {
 
       if (i > 0) {
         const navResult = await safeGoto(page, pageUrl);
-        if (!navResult.ok) { logDebug(`⚠️ Skipping page (nav failed): ${pageUrl}`); continue; }
+        if (!navResult.ok) {
+          logDebug(`⚠️ Skipping page (nav failed): ${pageUrl}`);
+          continue;
+        }
         const finalUrl = page.url();
-        if (visitedUrls.has(finalUrl)) { logDebug(`Skipping duplicate: ${finalUrl}`); continue; }
+        if (visitedUrls.has(finalUrl)) {
+          logDebug(`Skipping duplicate: ${finalUrl}`);
+          continue;
+        }
         visitedUrls.add(finalUrl);
 
         await handleCookieConsent(page);
@@ -1339,33 +1666,16 @@ async function trackingHealthCheckSiteInternal(url) {
       }
 
       await testCTAsOnPage(
-        page, beacons, page.url(),
-        uniquePhones, uniqueEmails,
-        phoneItems, emailItems,
-        phoneDone, emailDone
+        page,
+        beacons,
+        page.url(),
+        uniquePhones,
+        uniqueEmails,
+        phoneItems,
+        emailItems,
+        phoneDone,
+        emailDone,
       );
-
-      /* NON-CLICKABLE PROCESSING — disabled, see scanCTAsOnPage comment
-      for (const ph of nonClickablePhones) {
-        if (uniqueNonClickPhones.has(ph.digits)) continue;
-        uniqueNonClickPhones.add(ph.digits);
-        results.cta_details.phones.not_clickable_items.push({
-          raw: ph.raw, digits: ph.digits, status: "NOT_CLICKABLE", page_url: page.url(),
-          reason: "Phone number found as plain text — no <a href=\"tel:\"> wrapping it. Cannot be tracked.",
-          fix: `Wrap in a tel: link: <a href="tel:${ph.digits}">${ph.raw}</a>. Then add a GTM Click – Just Links trigger for href contains tel: with a GA4 Event tag.`
-        });
-      }
-
-      for (const em of nonClickableEmails) {
-        if (uniqueNonClickEmails.has(em.norm)) continue;
-        uniqueNonClickEmails.add(em.norm);
-        results.cta_details.emails.not_clickable_items.push({
-          raw: em.raw, norm: em.norm, status: "NOT_CLICKABLE", page_url: page.url(),
-          reason: "Email address found as plain text — no <a href=\"mailto:\"> wrapping it. Cannot be tracked.",
-          fix: `Wrap in a mailto: link: <a href="mailto:${em.norm}">${em.raw}</a>. Then add a GTM Click – Just Links trigger for href contains mailto: with a GA4 Event tag.`
-        });
-      }
-      */
 
       const formRes = await testAllFormsOnPage(page, beacons, page.url());
       results.form_details.push(formRes);
@@ -1375,236 +1685,306 @@ async function trackingHealthCheckSiteInternal(url) {
     results.cta_details.phones.items = phoneItems;
     results.cta_details.emails.items = emailItems;
 
-    results.phone_found  = uniquePhones.size;
+    results.phone_found = uniquePhones.size;
     results.phone_tested = phoneItems.length;
-    results.phone_passed = phoneItems.filter(i => i.status === "PASS").length;
-    results.phone_failed = phoneItems.filter(i => i.status === "FAIL").length;
+    results.phone_passed = phoneItems.filter((i) => i.status === "PASS").length;
+    results.phone_failed = phoneItems.filter((i) => i.status === "FAIL").length;
 
-    results.email_found  = uniqueEmails.size;
+    results.email_found = uniqueEmails.size;
     results.email_tested = emailItems.length;
-    results.email_passed = emailItems.filter(i => i.status === "PASS").length;
-    results.email_failed = emailItems.filter(i => i.status === "FAIL").length;
+    results.email_passed = emailItems.filter((i) => i.status === "PASS").length;
+    results.email_failed = emailItems.filter((i) => i.status === "FAIL").length;
 
-    const allFormResults = results.form_details.flatMap(p => [...p.first_party_forms, ...p.third_party_forms]);
-    results.forms_found  = results.form_details.reduce((acc, p) => acc + p.total_lead_forms_found, 0);
-    results.forms_passed = allFormResults.filter(f => f.status === "PASS").length;
-    results.forms_failed = allFormResults.filter(f => f.status === "FAIL").length;
+    const allFormResults = results.form_details.flatMap((p) => [...p.first_party_forms, ...p.third_party_forms]);
+    results.forms_found = results.form_details.reduce((acc, p) => acc + p.total_lead_forms_found, 0);
+    results.forms_passed = allFormResults.filter((f) => f.status === "PASS").length;
+    results.forms_failed = allFormResults.filter((f) => f.status === "FAIL").length;
 
-    const phoneDuplicateItems = phoneItems.filter(i => i.duplicate_fire_test?.result === "DUPLICATE_FIRED");
-    const emailDuplicateItems = emailItems.filter(i => i.duplicate_fire_test?.result === "DUPLICATE_FIRED");
+    const phoneDuplicateItems = phoneItems.filter((i) => i.duplicate_fire_test?.result === "DUPLICATE_FIRED");
+    const emailDuplicateItems = emailItems.filter((i) => i.duplicate_fire_test?.result === "DUPLICATE_FIRED");
 
-    const hasNonClickable = false; // disabled — non-clickable detection commented out
+    const hasNonClickable = false; // disabled
 
     // ── Failure detail ──
     const failureDetail = [];
 
     // ── Phone calls ──
     if (uniquePhones.size > 0) {
-      const phoneFailed = phoneItems.filter(i => i.status === "FAIL");
-      const phoneNT     = phoneItems.filter(i => i.status === "NOT_TESTED");
-      const phonePassed = phoneItems.filter(i => i.status === "PASS");
+      const phoneFailed = phoneItems.filter((i) => i.status === "FAIL");
+      const phoneNT = phoneItems.filter((i) => i.status === "NOT_TESTED");
+      const phonePassed = phoneItems.filter((i) => i.status === "PASS");
 
       if (phonePassed.length === 0 && phoneNT.length === phoneItems.length) {
         failureDetail.push({
-          category: "Phone Calls", grade_impact: "T3",
-          found: uniquePhones.size, tested: phoneItems.length, passed: 0,
+          category: "Phone Calls",
+          grade_impact: "T3",
+          found: uniquePhones.size,
+          tested: phoneItems.length,
+          passed: 0,
           summary: `${uniquePhones.size} phone link(s) found but none could be tested automatically — manual verification required.`,
-          items: phoneItems.map(i => ({
-            href: i.href, display_text: i.display_text || null, page_url: i.page_url,
-            status: i.status, reason: i.reason || null,
-            fix: `Phone link could not be clicked (${i.reason || "unknown"}). Test manually in GTM Preview.`
-          }))
+          items: phoneItems.map((i) => ({
+            href: i.href,
+            display_text: i.display_text || null,
+            page_url: i.page_url,
+            status: i.status,
+            reason: i.reason || null,
+            fix: `Phone link could not be clicked (${i.reason || "unknown"}). Test manually in GTM Preview.`,
+          })),
         });
       } else if (phonePassed.length === 0 && phoneFailed.length > 0) {
         failureDetail.push({
-          category: "Phone Calls", grade_impact: "FAIL",
-          found: uniquePhones.size, tested: phoneItems.length, passed: 0,
+          category: "Phone Calls",
+          grade_impact: "FAIL",
+          found: uniquePhones.size,
+          tested: phoneItems.length,
+          passed: 0,
           summary: `${uniquePhones.size} phone link(s) found and tested — none fired a GA4 conversion event.`,
-          items: phoneItems.map(i => ({
-            href: i.href, display_text: i.display_text || null, page_url: i.page_url,
-            status: i.status, reason: i.reason || null, generic_events_seen: i.generic_events_seen || [],
-            fix: i.status === "FAIL"
-              ? (i.generic_events_seen?.length
-                ? `GTM fired but only generic events (${i.generic_events_seen.join(", ")}) — add a GA4 Event tag with a Click — Just Links trigger for href contains tel:.`
-                : "No GA4 beacon fired. Create a Click — Just Links trigger in GTM for href contains tel: and attach a GA4 Event tag (e.g. event name: click_phone).")
-              : `Could not be clicked (${i.reason || "unknown"}). Test manually in GTM Preview.`
-          }))
+          items: phoneItems.map((i) => ({
+            href: i.href,
+            display_text: i.display_text || null,
+            page_url: i.page_url,
+            status: i.status,
+            reason: i.reason || null,
+            generic_events_seen: i.generic_events_seen || [],
+            fix:
+              i.status === "FAIL"
+                ? i.generic_events_seen?.length
+                  ? `GTM fired but only generic events (${i.generic_events_seen.join(", ")}) — add a GA4 Event tag with a Click — Just Links trigger for href contains tel:.`
+                  : "No GA4 beacon fired. Create a Click — Just Links trigger in GTM for href contains tel: and attach a GA4 Event tag (e.g. event name: click_phone)."
+                : `Could not be clicked (${i.reason || "unknown"}). Test manually in GTM Preview.`,
+          })),
         });
       } else if (phonePassed.length > 0 && phoneFailed.length > 0) {
         failureDetail.push({
-          category: "Phone Calls — Partial", grade_impact: "T2",
-          found: uniquePhones.size, tested: phoneItems.length,
-          passed: phonePassed.length, failed: phoneFailed.length,
+          category: "Phone Calls — Partial",
+          grade_impact: "T2",
+          found: uniquePhones.size,
+          tested: phoneItems.length,
+          passed: phonePassed.length,
+          failed: phoneFailed.length,
           summary: `Phone tracking fires on some pages but not all — ${phonePassed.length} passed, ${phoneFailed.length} failed.`,
-          items: phoneItems.filter(i => i.status === "FAIL").map(i => ({
-            href: i.href, display_text: i.display_text || null, page_url: i.page_url,
-            status: i.status, reason: i.reason || null, generic_events_seen: i.generic_events_seen || [],
-            fix: i.generic_events_seen?.length
-              ? `GTM fired but only generic events (${i.generic_events_seen.join(", ")}) on ${i.page_url} — check the GTM trigger scope.`
-              : `No GA4 beacon fired on ${i.page_url}. Verify the Click — Just Links trigger is firing on all pages, not just certain page paths.`
-          }))
+          items: phoneItems
+            .filter((i) => i.status === "FAIL")
+            .map((i) => ({
+              href: i.href,
+              display_text: i.display_text || null,
+              page_url: i.page_url,
+              status: i.status,
+              reason: i.reason || null,
+              generic_events_seen: i.generic_events_seen || [],
+              fix: i.generic_events_seen?.length
+                ? `GTM fired but only generic events (${i.generic_events_seen.join(", ")}) on ${i.page_url} — check the GTM trigger scope.`
+                : `No GA4 beacon fired on ${i.page_url}. Verify the Click — Just Links trigger is firing on all pages, not just certain page paths.`,
+            })),
         });
       }
     }
 
     if (phoneDuplicateItems.length > 0) {
       failureDetail.push({
-        category: "Phone Call — Duplicate Firing", grade_impact: "T2",
+        category: "Phone Call — Duplicate Firing",
+        grade_impact: "T2",
         summary: `${phoneDuplicateItems.length} phone CTA(s) fired GA4 more than once on the same page — tag is set to "Once per event" and will double-count conversions.`,
-        items: phoneDuplicateItems.map(i => ({
-          href: i.href, page_url: i.page_url,
+        items: phoneDuplicateItems.map((i) => ({
+          href: i.href,
+          page_url: i.page_url,
           warning: i.duplicate_fire_test.summary,
           events_on_second_click: i.duplicate_fire_test.events_on_second_click,
-          fix: i.duplicate_fire_test.fix
-        }))
+          fix: i.duplicate_fire_test.fix,
+        })),
       });
     }
 
     // ── Email clicks ──
     if (uniqueEmails.size > 0) {
-      const emailFailed = emailItems.filter(i => i.status === "FAIL");
-      const emailNT     = emailItems.filter(i => i.status === "NOT_TESTED");
-      const emailPassed = emailItems.filter(i => i.status === "PASS");
+      const emailFailed = emailItems.filter((i) => i.status === "FAIL");
+      const emailNT = emailItems.filter((i) => i.status === "NOT_TESTED");
+      const emailPassed = emailItems.filter((i) => i.status === "PASS");
 
       if (emailPassed.length === 0 && emailNT.length === emailItems.length) {
         failureDetail.push({
-          category: "Email Clicks", grade_impact: "T3",
-          found: uniqueEmails.size, tested: emailItems.length, passed: 0,
+          category: "Email Clicks",
+          grade_impact: "T3",
+          found: uniqueEmails.size,
+          tested: emailItems.length,
+          passed: 0,
           summary: `${uniqueEmails.size} email link(s) found but none could be tested automatically — manual verification required.`,
-          items: emailItems.map(i => ({
-            href: i.href, display_text: i.display_text || null, page_url: i.page_url,
-            status: i.status, reason: i.reason || null,
-            fix: `Email link could not be clicked (${i.reason || "unknown"}). Test manually in GTM Preview.`
-          }))
+          items: emailItems.map((i) => ({
+            href: i.href,
+            display_text: i.display_text || null,
+            page_url: i.page_url,
+            status: i.status,
+            reason: i.reason || null,
+            fix: `Email link could not be clicked (${i.reason || "unknown"}). Test manually in GTM Preview.`,
+          })),
         });
       } else if (emailPassed.length === 0 && emailFailed.length > 0) {
         failureDetail.push({
-          category: "Email Clicks", grade_impact: "FAIL",
-          found: uniqueEmails.size, tested: emailItems.length, passed: 0,
+          category: "Email Clicks",
+          grade_impact: "FAIL",
+          found: uniqueEmails.size,
+          tested: emailItems.length,
+          passed: 0,
           summary: `${uniqueEmails.size} email link(s) found and tested — none fired a GA4 conversion event.`,
-          items: emailItems.map(i => ({
-            href: i.href, display_text: i.display_text || null, page_url: i.page_url,
-            status: i.status, reason: i.reason || null, generic_events_seen: i.generic_events_seen || [],
-            fix: i.status === "FAIL"
-              ? (i.generic_events_seen?.length
-                ? `GTM fired but only generic events (${i.generic_events_seen.join(", ")}) — add a GA4 Event tag with a Click — Just Links trigger for href contains mailto:.`
-                : "No GA4 beacon fired. Create a Click — Just Links trigger in GTM for href contains mailto: and attach a GA4 Event tag (e.g. event name: click_email).")
-              : `Could not be clicked (${i.reason || "unknown"}). Test manually in GTM Preview.`
-          }))
+          items: emailItems.map((i) => ({
+            href: i.href,
+            display_text: i.display_text || null,
+            page_url: i.page_url,
+            status: i.status,
+            reason: i.reason || null,
+            generic_events_seen: i.generic_events_seen || [],
+            fix:
+              i.status === "FAIL"
+                ? i.generic_events_seen?.length
+                  ? `GTM fired but only generic events (${i.generic_events_seen.join(", ")}) — add a GA4 Event tag with a Click — Just Links trigger for href contains mailto:.`
+                  : "No GA4 beacon fired. Create a Click — Just Links trigger in GTM for href contains mailto: and attach a GA4 Event tag (e.g. event name: click_email)."
+                : `Could not be clicked (${i.reason || "unknown"}). Test manually in GTM Preview.`,
+          })),
         });
       } else if (emailPassed.length > 0 && emailFailed.length > 0) {
         failureDetail.push({
-          category: "Email Clicks — Partial", grade_impact: "T2",
-          found: uniqueEmails.size, tested: emailItems.length,
-          passed: emailPassed.length, failed: emailFailed.length,
+          category: "Email Clicks — Partial",
+          grade_impact: "T2",
+          found: uniqueEmails.size,
+          tested: emailItems.length,
+          passed: emailPassed.length,
+          failed: emailFailed.length,
           summary: `Email tracking fires on some pages but not all — ${emailPassed.length} passed, ${emailFailed.length} failed.`,
-          items: emailItems.filter(i => i.status === "FAIL").map(i => ({
-            href: i.href, display_text: i.display_text || null, page_url: i.page_url,
-            status: i.status, reason: i.reason || null, generic_events_seen: i.generic_events_seen || [],
-            fix: i.generic_events_seen?.length
-              ? `GTM fired but only generic events (${i.generic_events_seen.join(", ")}) on ${i.page_url} — check the GTM trigger scope.`
-              : `No GA4 beacon fired on ${i.page_url}. Verify the Click — Just Links trigger is firing on all pages.`
-          }))
+          items: emailItems
+            .filter((i) => i.status === "FAIL")
+            .map((i) => ({
+              href: i.href,
+              display_text: i.display_text || null,
+              page_url: i.page_url,
+              status: i.status,
+              reason: i.reason || null,
+              generic_events_seen: i.generic_events_seen || [],
+              fix: i.generic_events_seen?.length
+                ? `GTM fired but only generic events (${i.generic_events_seen.join(", ")}) on ${i.page_url} — check the GTM trigger scope.`
+                : `No GA4 beacon fired on ${i.page_url}. Verify the Click — Just Links trigger is firing on all pages.`,
+            })),
         });
       }
     }
 
     if (emailDuplicateItems.length > 0) {
       failureDetail.push({
-        category: "Email Click — Duplicate Firing", grade_impact: "T2",
+        category: "Email Click — Duplicate Firing",
+        grade_impact: "T2",
         summary: `${emailDuplicateItems.length} email CTA(s) fired GA4 more than once on the same page — tag is set to "Once per event" and will double-count conversions.`,
-        items: emailDuplicateItems.map(i => ({
-          href: i.href, page_url: i.page_url,
+        items: emailDuplicateItems.map((i) => ({
+          href: i.href,
+          page_url: i.page_url,
           warning: i.duplicate_fire_test.summary,
           events_on_second_click: i.duplicate_fire_test.events_on_second_click,
-          fix: i.duplicate_fire_test.fix
-        }))
+          fix: i.duplicate_fire_test.fix,
+        })),
       });
     }
 
     if (hasNonClickable) {
       failureDetail.push({
-        category: "Non-Clickable Contacts", grade_impact: "T2",
+        category: "Non-Clickable Contacts",
+        grade_impact: "T2",
         summary: `${results.cta_details.phones.not_clickable_items.length} phone(s) and ${results.cta_details.emails.not_clickable_items.length} email(s) found as plain text — not wrapped in a link, cannot be tracked.`,
-        items: [...results.cta_details.phones.not_clickable_items, ...results.cta_details.emails.not_clickable_items]
-          .map(i => ({ raw: i.raw, page_url: i.page_url, status: "NOT_CLICKABLE", reason: i.reason, fix: i.fix }))
+        items: [
+          ...results.cta_details.phones.not_clickable_items,
+          ...results.cta_details.emails.not_clickable_items,
+        ].map((i) => ({ raw: i.raw, page_url: i.page_url, status: "NOT_CLICKABLE", reason: i.reason, fix: i.fix })),
       });
     }
 
     if (results.forms_found > 0 && results.forms_passed === 0) {
-      const botBlocked = allFormResults.some(f => f.reason?.includes("Bot Protection"));
-      const allNT      = allFormResults.every(f => f.status === "NOT_TESTED");
-      const formGrade  = botBlocked || allNT ? "T3" : "FAIL";
+      const botBlocked = allFormResults.some((f) => f.reason?.includes("Bot Protection"));
+      const allNT = allFormResults.every((f) => f.status === "NOT_TESTED");
+      const formGrade = botBlocked || allNT ? "T3" : "FAIL";
 
       failureDetail.push({
-        category: "Contact Forms", grade_impact: formGrade,
-        found: results.forms_found, tested: allFormResults.filter(f => f.status !== "NOT_TESTED").length, passed: 0,
+        category: "Contact Forms",
+        grade_impact: formGrade,
+        found: results.forms_found,
+        tested: allFormResults.filter((f) => f.status !== "NOT_TESTED").length,
+        passed: 0,
         summary: botBlocked
           ? `${results.forms_found} form(s) — CAPTCHA/bot protection blocked automated testing. Manual verification required.`
           : allNT
-          ? `${results.forms_found} form(s) — could not be submitted automatically. Manual verification required.`
-          : `${results.forms_found} form(s) submitted — none fired a GA4 conversion event.`,
+            ? `${results.forms_found} form(s) — could not be submitted automatically. Manual verification required.`
+            : `${results.forms_found} form(s) submitted — none fired a GA4 conversion event.`,
         items: allFormResults.map((f, idx) => ({
-          form_index: idx, page_url: f.page_url || null,
-          status: f.status, reason: f.reason || null,
+          form_index: idx,
+          page_url: f.page_url || null,
+          status: f.status,
+          reason: f.reason || null,
           ga4_events_seen: f.ga4_events_seen || f.ga4_events || [],
           fix: f.reason?.includes("Bot Protection")
             ? "CAPTCHA present — submit manually and verify GA4 event in GTM Preview."
             : f.status === "FAIL" && f.reason?.includes("success")
-            ? "Form submitted (success detected) but no GA4 event fired. Add a GTM trigger for Form Submission or Thank You page URL, with a GA4 Event tag."
-            : f.status === "FAIL"
-            ? "Form submitted but no GA4 event captured. Check GTM trigger scope — confirm the GA4 Event tag is published and the trigger matches this form."
-            : f.reason?.includes("Validation")
-            ? "Validation blocked submission. Fill and submit manually, then verify in GTM Preview."
-            : f.reason?.includes("No visible submit button")
-            ? "No standard submit button found — may use custom JS. Submit manually and verify in GTM Preview."
-            : `Could not test automatically (${f.reason || "unknown"}). Submit manually and verify in GTM Preview.`
-        }))
+              ? "Form submitted (success detected) but no GA4 event fired. Add a GTM trigger for Form Submission or Thank You page URL, with a GA4 Event tag."
+              : f.status === "FAIL"
+                ? "Form submitted but no GA4 event captured. Check GTM trigger scope — confirm the GA4 Event tag is published and the trigger matches this form."
+                : f.reason?.includes("Validation")
+                  ? "Validation blocked submission. Fill and submit manually, then verify in GTM Preview."
+                  : f.reason?.includes("No visible submit button")
+                    ? "No standard submit button found — may use custom JS. Submit manually and verify in GTM Preview."
+                    : `Could not test automatically (${f.reason || "unknown"}). Submit manually and verify in GTM Preview.`,
+        })),
       });
     }
 
     // ── Grading ──
-    const totalFound         = uniquePhones.size + uniqueEmails.size + results.forms_found;
-    const hasFail            = failureDetail.some(f => f.grade_impact === "FAIL");
-    const hasT2              = failureDetail.some(f => f.grade_impact === "T2");
-    const hasT3              = failureDetail.some(f => f.grade_impact === "T3");
-    const anyPassed          = results.phone_passed > 0 || results.email_passed > 0 || results.forms_passed > 0;
+    const totalFound = uniquePhones.size + uniqueEmails.size + results.forms_found;
+    const hasFail = failureDetail.some((f) => f.grade_impact === "FAIL");
+    const hasT2 = failureDetail.some((f) => f.grade_impact === "T2");
+    const hasT3 = failureDetail.some((f) => f.grade_impact === "T3");
+    const anyPassed = results.phone_passed > 0 || results.email_passed > 0 || results.forms_passed > 0;
     const hasDuplicateFiring = phoneDuplicateItems.length > 0 || emailDuplicateItems.length > 0;
 
     let grade, health_status, health_reasons;
 
     if (totalFound === 0 && !hasNonClickable) {
-      grade = "T3"; health_status = "NOT_TESTED";
-      health_reasons = "No trackable CTAs were found on any page visited. Check that the site has clickable phone numbers (tel: links), email addresses (mailto: links), or contact forms visible on the pages the runner visited.";
+      grade = "T3";
+      health_status = "NOT_TESTED";
+      health_reasons =
+        "No trackable CTAs were found on any page visited. Check that the site has clickable phone numbers (tel: links), email addresses (mailto: links), or contact forms visible on the pages the runner visited.";
     } else if (hasFail && !anyPassed) {
-      grade = "FAIL"; health_status = "NO_CONVERSIONS_TRACKED";
-      health_reasons = "GTM is installed but no GA4 conversion event fired for any tested CTA or form. Check: (1) the GA4 tag is published in GTM — not just saved, (2) trigger conditions match the actual click events, (3) the GA4 Measurement ID is correct and the property is receiving data.";
+      grade = "FAIL";
+      health_status = "NO_CONVERSIONS_TRACKED";
+      health_reasons =
+        "GTM is installed but no GA4 conversion event fired for any tested CTA or form. Check: (1) the GA4 tag is published in GTM — not just saved, (2) trigger conditions match the actual click events, (3) the GA4 Measurement ID is correct and the property is receiving data.";
     } else if (hasT3 && !hasFail && !hasT2 && !hasNonClickable && !hasDuplicateFiring) {
-      grade = "T3"; health_status = "NOT_TESTED";
-      const t3FormDetail = failureDetail.find(f => f.grade_impact === "T3" && f.category === "Contact Forms");
+      grade = "T3";
+      health_status = "NOT_TESTED";
+      const t3FormDetail = failureDetail.find((f) => f.grade_impact === "T3" && f.category === "Contact Forms");
       health_reasons = t3FormDetail
         ? `${t3FormDetail.summary} Open GTM Preview, submit each form manually, and verify a GA4 event fires in the network tab.`
         : "CTAs were found but could not be tested automatically. Open GTM Preview, test manually, and verify GA4 events fire.";
     } else if (hasT2 || hasNonClickable || hasDuplicateFiring || (hasFail && anyPassed)) {
-      grade = "T2"; health_status = "TRACKING_ISSUES_FOUND";
+      grade = "T2";
+      health_status = "TRACKING_ISSUES_FOUND";
       const t2lines = [];
-      if (hasNonClickable) t2lines.push(
-        `${results.cta_details.phones.not_clickable_items.length} phone(s) and ` +
-        `${results.cta_details.emails.not_clickable_items.length} email(s) found as plain text — wrap in tel:/mailto: links and add GTM Click triggers.`
-      );
-      if (hasDuplicateFiring) t2lines.push(
-        `${phoneDuplicateItems.length + emailDuplicateItems.length} CTA(s) firing GA4 more than once per click — change the GTM tag firing option from "Once per event" to "Once per page".`
-      );
-      failureDetail.filter(f => f.grade_impact === "T2").forEach(f => t2lines.push(f.summary));
-      failureDetail.filter(f => f.grade_impact === "FAIL" && anyPassed).forEach(f => t2lines.push(f.summary));
-      health_reasons = "Tracking is working but has issues. " + (t2lines.length > 0 ? t2lines.join(" | ") : failureDetail.map(f => f.category).join(", "));
+      if (hasNonClickable)
+        t2lines.push(
+          `${results.cta_details.phones.not_clickable_items.length} phone(s) and ` +
+            `${results.cta_details.emails.not_clickable_items.length} email(s) found as plain text — wrap in tel:/mailto: links and add GTM Click triggers.`,
+        );
+      if (hasDuplicateFiring)
+        t2lines.push(
+          `${phoneDuplicateItems.length + emailDuplicateItems.length} CTA(s) firing GA4 more than once per click — change the GTM tag firing option from "Once per event" to "Once per page".`,
+        );
+      failureDetail.filter((f) => f.grade_impact === "T2").forEach((f) => t2lines.push(f.summary));
+      failureDetail.filter((f) => f.grade_impact === "FAIL" && anyPassed).forEach((f) => t2lines.push(f.summary));
+      health_reasons =
+        "Tracking is working but has issues. " +
+        (t2lines.length > 0 ? t2lines.join(" | ") : failureDetail.map((f) => f.category).join(", "));
     } else {
-      grade = "T1"; health_status = "PASS";
-      health_reasons = "All tracked CTAs are firing correctly. Every phone link, email link, and form tested fired a GA4 conversion event with no double-firing and no plain-text contacts found.";
+      grade = "T1";
+      health_status = "PASS";
+      health_reasons =
+        "All tracked CTAs are firing correctly. Every phone link, email link, and form tested fired a GA4 conversion event with no double-firing and no plain-text contacts found.";
     }
 
-    results.grade          = grade;
-    results.health_status  = health_status;
+    results.grade = grade;
+    results.health_status = health_status;
     results.health_reasons = health_reasons;
     results.failure_detail = failureDetail;
 
@@ -1613,61 +1993,78 @@ async function trackingHealthCheckSiteInternal(url) {
     if (!tracking.has_gtm) {
       fixLines.push("Install GTM: add the <head> and <body> snippets to every page then republish.");
     } else {
-      if (hasNonClickable) fixLines.push(
-        "Wrap plain-text phone/email in tel:/mailto: links, then add GTM Click – Just Links triggers with GA4 Event tags."
-      );
-      if (hasDuplicateFiring) fixLines.push(
-        "Change duplicate-firing tag(s) in GTM from 'Once per event' to 'Once per page'."
-      );
-      const formFails = failureDetail.find(f => f.category === "Contact Forms" && f.grade_impact !== "T3");
-      if (formFails) fixLines.push(
-        "Form submitted but no GA4 event fired — add a GTM Form Submission trigger (or Thank You page URL trigger) with a GA4 Event tag."
-      );
-      const phoneFails = failureDetail.find(f => f.category.startsWith("Phone Calls") && f.grade_impact === "FAIL");
-      if (phoneFails) fixLines.push(
-        "Phone click not tracked — create a GTM Click – Just Links trigger for href contains tel: and attach a GA4 Event tag (event name: click_call)."
-      );
-      const emailFails = failureDetail.find(f => f.category.startsWith("Email Clicks") && f.grade_impact === "FAIL");
-      if (emailFails) fixLines.push(
-        "Email click not tracked — create a GTM Click – Just Links trigger for href contains mailto: and attach a GA4 Event tag (event name: click_email)."
-      );
+      if (hasNonClickable)
+        fixLines.push(
+          "Wrap plain-text phone/email in tel:/mailto: links, then add GTM Click – Just Links triggers with GA4 Event tags.",
+        );
+      if (hasDuplicateFiring)
+        fixLines.push("Change duplicate-firing tag(s) in GTM from 'Once per event' to 'Once per page'.");
+      const formFails = failureDetail.find((f) => f.category === "Contact Forms" && f.grade_impact !== "T3");
+      if (formFails)
+        fixLines.push(
+          "Form submitted but no GA4 event fired — add a GTM Form Submission trigger (or Thank You page URL trigger) with a GA4 Event tag.",
+        );
+      const phoneFails = failureDetail.find((f) => f.category.startsWith("Phone Calls") && f.grade_impact === "FAIL");
+      if (phoneFails)
+        fixLines.push(
+          "Phone click not tracked — create a GTM Click – Just Links trigger for href contains tel: and attach a GA4 Event tag (event name: click_call).",
+        );
+      const emailFails = failureDetail.find((f) => f.category.startsWith("Email Clicks") && f.grade_impact === "FAIL");
+      if (emailFails)
+        fixLines.push(
+          "Email click not tracked — create a GTM Click – Just Links trigger for href contains mailto: and attach a GA4 Event tag (event name: click_email).",
+        );
     }
     results.fix = fixLines.length > 0 ? fixLines.join(" | ") : null;
 
     // ── Console output ──
-    const GRADE_LABEL = { T1: "✅ T1 — PASS", T2: "⚠️  T2 — ISSUES FOUND", T3: "🔍 T3 — NOT TESTED", FAIL: "❌ FAIL — NO CONVERSIONS TRACKED" };
+    const GRADE_LABEL = {
+      T1: "✅ T1 — PASS",
+      T2: "⚠️  T2 — ISSUES FOUND",
+      T3: "🔍 T3 — NOT TESTED",
+      FAIL: "❌ FAIL — NO CONVERSIONS TRACKED",
+    };
     logInfo(`\n╔══════════════════════════════════════════════╗`);
     logInfo(`  TRACKING HEALTH CHECK RESULT`);
     logInfo(`  URL        : ${targetUrl}`);
     logInfo(`  GRADE      : ${GRADE_LABEL[grade]}`);
     logInfo(`  WHY        : ${health_reasons}`);
-    logInfo(`  SCORES     : Forms ${results.forms_passed}/${results.forms_found} | Calls ${results.phone_passed}/${results.phone_found} | Emails ${results.email_passed}/${results.email_found}`);
-    logInfo(`  NON-CLICK  : Phones ${results.cta_details.phones.not_clickable_items.length} | Emails ${results.cta_details.emails.not_clickable_items.length}`);
+    logInfo(
+      `  SCORES     : Forms ${results.forms_passed}/${results.forms_found} | Calls ${results.phone_passed}/${results.phone_found} | Emails ${results.email_passed}/${results.email_found}`,
+    );
+    logInfo(
+      `  NON-CLICK  : Phones ${results.cta_details.phones.not_clickable_items.length} | Emails ${results.cta_details.emails.not_clickable_items.length}`,
+    );
     logInfo(`  DUPE FIRES : Phones ${phoneDuplicateItems.length} | Emails ${emailDuplicateItems.length}`);
     logInfo(`  GTM IDs    : ${results.detected_gtm_ids.join(", ") || "none"}`);
     logInfo(`  GA4 IDs    : ${results.detected_ga4_ids.join(", ") || "none"}`);
 
     if (failureDetail.length > 0) {
       logInfo(`\n  ── FAILURES ──`);
-      failureDetail.forEach(f => {
+      failureDetail.forEach((f) => {
         logInfo(`\n  [${f.grade_impact}] ${f.category.toUpperCase()} — ${f.summary}`);
         (f.items || []).forEach((item, idx) => {
           logInfo(`    ${idx + 1}. ${item.href || item.raw || "N/A"}  [${item.page_url || ""}]`);
-          if (item.status)  logInfo(`       Status : ${item.status}`);
-          if (item.reason)  logInfo(`       Reason : ${item.reason}`);
+          if (item.status) logInfo(`       Status : ${item.status}`);
+          if (item.reason) logInfo(`       Reason : ${item.reason}`);
           if (item.warning) logInfo(`       ⚠️      : ${item.warning}`);
-          if (item.events_on_second_click?.length) logInfo(`       2nd click events : ${item.events_on_second_click.join(", ")}`);
+          if (item.events_on_second_click?.length)
+            logInfo(`       2nd click events : ${item.events_on_second_click.join(", ")}`);
           logInfo(`       Fix    : ${item.fix}`);
         });
       });
     }
 
-    const passingCTAs = [...phoneItems, ...emailItems].filter(i => i.status === "PASS");
+    const passingCTAs = [...phoneItems, ...emailItems].filter((i) => i.status === "PASS");
     if (passingCTAs.length > 0) {
       logInfo(`\n  ── PASSING CTAs ──`);
-      passingCTAs.forEach(i => {
-        const dup = i.duplicate_fire_test?.result === "DUPLICATE_FIRED" ? "⚠️ DUPLICATE FIRE"
-          : i.duplicate_fire_test?.result === "CORRECTLY_SUPPRESSED" ? "✅ once-per-page OK" : "—";
+      passingCTAs.forEach((i) => {
+        const dup =
+          i.duplicate_fire_test?.result === "DUPLICATE_FIRED"
+            ? "⚠️ DUPLICATE FIRE"
+            : i.duplicate_fire_test?.result === "CORRECTLY_SUPPRESSED"
+              ? "✅ once-per-page OK"
+              : "—";
         logInfo(`    ✅ ${i.href}  [${i.page_url}]  dup-test: ${dup}`);
       });
     }
@@ -1675,13 +2072,22 @@ async function trackingHealthCheckSiteInternal(url) {
     logInfo(`╚══════════════════════════════════════════════╝\n`);
     logInfo("✅ Check complete", { url: targetUrl, grade, status: health_status });
     return results;
-
   } catch (error) {
     logInfo(`❌ Fatal error`, { url: targetUrl, error: error.message });
     return { ...results, grade: "T2", health_status: "ERROR", health_reasons: `Fatal error: ${error.message}` };
   } finally {
-    if (page)    { try { page.removeAllListeners(); await page.close();    } catch {} }
-    if (context) { openContexts.delete(context); try { await context.close(); } catch {} }
+    if (page) {
+      try {
+        page.removeAllListeners();
+        await page.close();
+      } catch {}
+    }
+    if (context) {
+      openContexts.delete(context);
+      try {
+        await context.close();
+      } catch {}
+    }
   }
 }
 
@@ -1691,7 +2097,7 @@ async function trackingHealthCheckSite(url) {
     return await withTimeout(
       trackingHealthCheckSiteInternal(url),
       GLOBAL_TIMEOUT_MS,
-      `Global timeout (${GLOBAL_TIMEOUT_MS}ms) exceeded for ${url}`
+      `Global timeout (${GLOBAL_TIMEOUT_MS}ms) exceeded for ${url}`,
     );
   } catch (e) {
     logInfo(`⏱ Check aborted: ${e.message}`, { url });
@@ -1707,17 +2113,15 @@ async function trackingHealthCheckSite(url) {
 const batchJobs = new Map();
 
 async function runBatchHealthCheck(jobId, clients, callbackUrl = null) {
-  const clientList = clients.map((c, i) =>
-    typeof c === 'string' ? { url: c, _index: i } : { ...c, _index: i }
-  );
+  const clientList = clients.map((c, i) => (typeof c === "string" ? { url: c, _index: i } : { ...c, _index: i }));
 
   batchJobs.set(jobId, {
     total: clientList.length,
     completed: 0,
     results: [],
-    status: 'running',
+    status: "running",
     startedAt: new Date().toISOString(),
-    callbackUrl
+    callbackUrl,
   });
 
   logInfo(`🚀 Starting batch job ${jobId} with ${clientList.length} clients`);
@@ -1737,8 +2141,12 @@ async function runBatchHealthCheck(jobId, clients, callbackUrl = null) {
       const job = batchJobs.get(jobId);
       if (job) {
         job.results.push({
-          ...metadata, url, index: _index,
-          grade: "T2", health_status: "ERROR", health_reasons: error.message
+          ...metadata,
+          url,
+          index: _index,
+          grade: "T2",
+          health_status: "ERROR",
+          health_reasons: error.message,
         });
         job.completed++;
         logDebug(`✗ Batch job ${jobId}: error for ${url} - ${error.message}`);
@@ -1751,17 +2159,23 @@ async function runBatchHealthCheck(jobId, clients, callbackUrl = null) {
     await Promise.all(promises);
     const job = batchJobs.get(jobId);
     if (job) {
-      job.status = 'complete';
+      job.status = "complete";
       job.results.sort((a, b) => a.index - b.index);
       logInfo(`✅ Batch job ${jobId} completed: ${job.completed}/${job.total} processed`);
       if (callbackUrl) sendBatchCallback(jobId, job, callbackUrl);
       // Auto-cleanup: remove job from memory after 4 hours to prevent unbounded RAM growth
-      setTimeout(() => { batchJobs.delete(jobId); logDebug(`🗑 Batch job ${jobId} evicted from memory`); }, 4 * 60 * 60 * 1000);
+      setTimeout(
+        () => {
+          batchJobs.delete(jobId);
+          logDebug(`🗑 Batch job ${jobId} evicted from memory`);
+        },
+        4 * 60 * 60 * 1000,
+      );
     }
   } catch (error) {
     const job = batchJobs.get(jobId);
     if (job) {
-      job.status = 'error';
+      job.status = "error";
       job.error = error.message;
       logInfo(`❌ Batch job ${jobId} failed: ${error.message}`);
     }
@@ -1773,10 +2187,10 @@ function getBatchJob(jobId) {
 }
 
 async function sendBatchCallback(jobId, job, callbackUrl) {
-  const url = require('url');
+  const url = require("url");
   const parsedUrl = url.parse(callbackUrl);
-  const isHttps = parsedUrl.protocol === 'https:';
-  const httpModule = isHttps ? require('https') : require('http');
+  const isHttps = parsedUrl.protocol === "https:";
+  const httpModule = isHttps ? require("https") : require("http");
 
   const payload = JSON.stringify({
     job_id: jobId,
@@ -1785,18 +2199,18 @@ async function sendBatchCallback(jobId, job, callbackUrl) {
     completed: job.completed,
     results: job.results,
     startedAt: job.startedAt,
-    completedAt: new Date().toISOString()
+    completedAt: new Date().toISOString(),
   });
 
   const options = {
     hostname: parsedUrl.hostname,
     port: parsedUrl.port || (isHttps ? 443 : 80),
     path: parsedUrl.path,
-    method: 'POST',
+    method: "POST",
     headers: {
-      'Content-Type': 'application/json',
-      'Content-Length': Buffer.byteLength(payload)
-    }
+      "Content-Type": "application/json",
+      "Content-Length": Buffer.byteLength(payload),
+    },
   };
 
   logInfo(`📞 Sending batch completion callback to ${callbackUrl}`);
@@ -1805,7 +2219,7 @@ async function sendBatchCallback(jobId, job, callbackUrl) {
     logDebug(`Callback response status: ${res.statusCode}`);
   });
 
-  req.on('error', (error) => {
+  req.on("error", (error) => {
     logInfo(`❌ Callback failed: ${error.message}`, { jobId, callbackUrl });
   });
 
@@ -1816,5 +2230,5 @@ async function sendBatchCallback(jobId, job, callbackUrl) {
 module.exports = {
   trackingHealthCheckSite,
   runBatchHealthCheck,
-  getBatchJob
+  getBatchJob,
 };
