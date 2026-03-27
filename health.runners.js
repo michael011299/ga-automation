@@ -135,7 +135,6 @@ async function getBrowser() {
           "--mute-audio",
           // Misc stability flags
           "--no-first-run", "--no-default-browser-check",
-          "--disable-background-networking",
           "--disable-background-timer-throttling",
           "--proxy-server='direct://'", "--proxy-bypass-list=*",
         ],
@@ -1096,7 +1095,12 @@ async function scanFrameForForms(frameOrPage) {
 async function detectFieldType(el) {
   try {
     const tag  = await el.evaluate(e => e.tagName.toLowerCase()).catch(() => "");
-    const type = (await el.getAttribute("type").catch(() => "")) || "";
+    // Read both the HTML attribute and the DOM property — JS frameworks sometimes
+    // set el.type without setting the attribute, so the attribute returns "text"
+    // even though the field is actually a time/date/etc. input.
+    const attrType = (await el.getAttribute("type").catch(() => "")) || "";
+    const domType  = await el.evaluate(e => e.type || "").catch(() => "");
+    const type     = domType || attrType;
     const name = (await el.getAttribute("name").catch(() => "")) || "";
     const ph   = (await el.getAttribute("placeholder").catch(() => "")) || "";
     const id   = (await el.getAttribute("id").catch(() => "")) || "";
@@ -1379,14 +1383,33 @@ async function trackingHealthCheckSiteInternal(url) {
 
   try {
     logInfo(`🔍 [${SCRIPT_VERSION}] Starting check`, { url: targetUrl });
-    const browser = await getBrowser();
+    let browser = await getBrowser();
 
-    context = await browser.newContext({
-      viewport: { width: 1920, height: 1080 },
-      userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-      locale: "en-GB",
-      timezoneId: "Europe/London"
-    });
+    // Guard against the race where the browser crashes between getBrowser()
+    // and newContext() — retry once with a fresh browser before giving up.
+    try {
+      context = await browser.newContext({
+        viewport: { width: 1920, height: 1080 },
+        userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        locale: "en-GB",
+        timezoneId: "Europe/London"
+      });
+    } catch (ctxErr) {
+      if (/browser.*closed|Target.*closed/i.test(ctxErr.message)) {
+        logInfo("⚠️ browser.newContext failed (browser closed) — relaunching and retrying once");
+        globalBrowser = null;
+        browserUses   = 0;
+        browser  = await getBrowser();
+        context  = await browser.newContext({
+          viewport: { width: 1920, height: 1080 },
+          userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+          locale: "en-GB",
+          timezoneId: "Europe/London"
+        });
+      } else {
+        throw ctxErr;
+      }
+    }
 
     // Patch JS properties that bot detectors fingerprint before any page script runs.
     // addInitScript has zero network cost — it executes synchronously in the renderer.
