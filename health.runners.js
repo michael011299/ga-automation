@@ -1,9 +1,9 @@
-// /health-check-v27.js
+// /health-check-v29.js
 // INTELLIGENT TRACKING HEALTH CHECK
-// Version: V28-GTM-FIXES
+// Version: V29-FULL-FIXES
 //
 
-const SCRIPT_VERSION = "2026-03-27T14:00:00Z-V28";
+const SCRIPT_VERSION = "2026-03-27T14:15:00Z-V29";
 
 const { chromium } = require("playwright");
 
@@ -28,32 +28,17 @@ const MAX_PAGES_TO_VISIT = Number(process.env.HEALTH_MAX_PAGES || 3);
 const MAX_PHONE_TESTS = Number(process.env.HEALTH_MAX_PHONE_TESTS || 50);
 const MAX_EMAIL_TESTS = Number(process.env.HEALTH_MAX_EMAIL_TESTS || 50);
 
-// FIX 3: single nav attempt, hard 15s cap
 const NAV_TIMEOUT_MS = Number(process.env.HEALTH_NAV_TIMEOUT || 15000);
-
 const HEADLESS = true;
-
-// Primary CTA click poll window
 const POST_ACTION_POLL_MS = Number(process.env.HEALTH_POLL_MS || 3000);
-
-// Duplicate-fire second click — shorter window, we only need to detect presence/absence
 const SECOND_CLICK_POLL_MS = Number(process.env.HEALTH_SECOND_POLL_MS || 1500);
-
-// Settle between first and second click in duplicate-fire test
 const DUPLICATE_TEST_SETTLE_MS = Number(process.env.HEALTH_SETTLE_MS || 600);
-
 const FORM_SUBMIT_WAIT_MS = Number(process.env.HEALTH_FORM_WAIT_MS || 5000);
-
-// FIX 2: hard global cap per site; also used as acquireCheckSlot timeout
 const GLOBAL_TIMEOUT_MS = Number(process.env.HEALTH_GLOBAL_TIMEOUT || 120000);
 const SLOT_ACQUIRE_TIMEOUT = Number(process.env.HEALTH_SLOT_TIMEOUT || 90000);
-
-// FIX 1: raised to 20; safe because each worker is mostly I/O-bound
 const MAX_CONCURRENT_CHECKS = Number(process.env.HEALTH_MAX_CONCURRENT || 20);
-
-// FIX 5: how long to actively poll for GTM after consent (ms)
 const POST_CONSENT_MAX_WAIT_MS = Number(process.env.HEALTH_CONSENT_WAIT || 6000);
-const POST_CONSENT_POLL_MS = 200; // check every 200ms
+const POST_CONSENT_POLL_MS = 200;
 
 const TEST_VALUES = {
   firstName: "HealthCheck",
@@ -132,40 +117,34 @@ const SOCIAL_DOMAINS = [
 ];
 
 // ─────────────────────────────────────────────
-// FIX 1: Concurrency — async mutex for browser pool
+// Concurrency — async mutex for browser pool
 // ─────────────────────────────────────────────
 let activeChecks = 0;
 const checkQueue = [];
 
 let globalBrowser = null;
 let browserUses = 0;
-let browserLaunchLock = null; // Promise while a launch is in progress
+let browserLaunchLock = null;
 const MAX_BROWSER_USES = 100;
 
 async function getBrowser() {
-  // If a launch is already in progress, wait for it rather than launching again
-  if (browserLaunchLock) {
-    await browserLaunchLock;
-  }
+  if (browserLaunchLock) await browserLaunchLock;
 
-  // If Chrome crashed (WebGL fault, OOM, etc.) clear the dead reference so we relaunch
   if (globalBrowser && !globalBrowser.isConnected()) {
     logInfo("⚠️ Browser disconnected — clearing stale reference for relaunch");
     globalBrowser = null;
     browserUses = 0;
   }
 
-  // Recycle browser after MAX_BROWSER_USES to prevent memory leaks
   if (globalBrowser && browserUses >= MAX_BROWSER_USES) {
     logDebug("♻️  Recycling browser after max uses");
     const old = globalBrowser;
     globalBrowser = null;
     browserUses = 0;
-    old.close().catch(() => null); // fire-and-forget — don't block on close
+    old.close().catch(() => null);
   }
 
   if (!globalBrowser) {
-    // Set the lock so concurrent callers wait for this launch
     let resolveLock;
     browserLaunchLock = new Promise((r) => {
       resolveLock = r;
@@ -180,24 +159,18 @@ async function getBrowser() {
           "--disable-setuid-sandbox",
           "--disable-blink-features=AutomationControlled",
           "--disable-dev-shm-usage",
-          // Disable all GPU paths — on headless Linux the GPU process has no
-          // hardware to talk to. --disable-gpu alone is not enough: Chrome's
-          // software compositing pipeline (SharedImageManager) still runs and
-          // hits fatal mailbox errors that trigger a graceful browser shutdown.
           "--disable-gpu",
-          "--disable-gpu-compositing", // stops SharedImageManager crashes
-          "--disable-accelerated-2d-canvas", // no GPU canvas (uses CPU path)
+          "--disable-gpu-compositing",
+          "--disable-accelerated-2d-canvas",
           "--disable-accelerated-video-decode",
           "--disable-webgl",
           "--disable-webgl2",
-          // Suppress ALSA audio errors and media permission prompts
           "--mute-audio",
           "--use-fake-ui-for-media-stream",
           "--proxy-server='direct://'",
           "--proxy-bypass-list=*",
         ],
       });
-      // Clear the global ref the moment Chrome dies so next getBrowser() relaunches
       globalBrowser.on("disconnected", () => {
         logInfo("⚠️ Browser process disconnected — will relaunch on next request");
         globalBrowser = null;
@@ -215,18 +188,16 @@ async function getBrowser() {
 }
 
 // ─────────────────────────────────────────────
-// RAM safeguard: track open contexts and force-close stale ones
+// RAM safeguard
 // ─────────────────────────────────────────────
-const openContexts = new Map(); // context -> { createdAt, url }
-const STALE_CONTEXT_MS = GLOBAL_TIMEOUT_MS + 60000; // max age before force-close
+const openContexts = new Map();
+const STALE_CONTEXT_MS = GLOBAL_TIMEOUT_MS + 60000;
 
 setInterval(async () => {
   const now = Date.now();
   for (const [ctx, info] of openContexts) {
     if (now - info.createdAt > STALE_CONTEXT_MS) {
-      logInfo(
-        `⚠️ RAM safeguard: force-closing stale context for ${info.url} (open ${Math.round((now - info.createdAt) / 1000)}s)`,
-      );
+      logInfo(`⚠️ RAM safeguard: force-closing stale context for ${info.url}`);
       openContexts.delete(ctx);
       try {
         await ctx.close();
@@ -271,7 +242,6 @@ async function safeWait(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-// FIX 2: acquireCheckSlot with hard timeout so a stuck check never blocks the queue
 async function acquireCheckSlot() {
   if (activeChecks < MAX_CONCURRENT_CHECKS) {
     activeChecks++;
@@ -279,14 +249,9 @@ async function acquireCheckSlot() {
   }
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
-      // Remove from queue if still waiting
       const idx = checkQueue.indexOf(entry);
       if (idx !== -1) checkQueue.splice(idx, 1);
-      reject(
-        new Error(
-          `acquireCheckSlot timed out after ${SLOT_ACQUIRE_TIMEOUT}ms — all ${MAX_CONCURRENT_CHECKS} workers busy`,
-        ),
-      );
+      reject(new Error(`acquireCheckSlot timed out after ${SLOT_ACQUIRE_TIMEOUT}ms`));
     }, SLOT_ACQUIRE_TIMEOUT);
 
     const entry = () => {
@@ -302,7 +267,7 @@ function releaseCheckSlot() {
   activeChecks--;
   if (checkQueue.length > 0) {
     const next = checkQueue.shift();
-    next(); // next() increments activeChecks internally
+    next();
   }
 }
 
@@ -321,7 +286,6 @@ async function withTimeout(promise, ms, msg) {
   }
 }
 
-// FIX 3: single-attempt safeGoto — fail fast on dead sites, no double-timeout
 async function safeGoto(page, url) {
   if (SOCIAL_DOMAINS.some((d) => url.toLowerCase().includes(d))) {
     return { ok: false, error: "Blocked social domain" };
@@ -334,13 +298,35 @@ async function safeGoto(page, url) {
   }
 }
 
+// ─────────────────────────────────────────────
+// DEFEAT DELAY JS (WP Rocket, Perfmatters, etc.)
+// ─────────────────────────────────────────────
 async function simulateHumanBrowsing(page) {
   try {
-    await safeEvaluate(page, () => window.scrollBy(0, document.body.scrollHeight / 2));
-    await safeWait(400);
+    // 1. Fire the exact events that caching plugins listen for to release GTM
+    await page.mouse.click(10, 10);
+    await page.keyboard.press("ArrowDown");
+
+    // 2. Scroll and manually dispatch mobile/pointer events
+    await safeEvaluate(page, () => {
+      window.scrollBy(0, document.body.scrollHeight / 3);
+      document.dispatchEvent(new Event("touchstart"));
+      document.dispatchEvent(new Event("pointerdown"));
+    });
+
+    await safeWait(500);
+
+    // 3. Trigger wheel and mouse movement listeners
     const vp = page.viewportSize();
-    if (vp) await page.mouse.move(Math.random() * vp.width, Math.random() * vp.height, { steps: 5 });
+    if (vp) {
+      await page.mouse.move(vp.width / 2, vp.height / 2, { steps: 5 });
+      await page.mouse.wheel(0, 200);
+    }
+
     await safeEvaluate(page, () => window.scrollTo(0, 0));
+
+    // 4. CRUCIAL: Wait 1.5s for the newly released GTM script to actually download and execute
+    await safeWait(1500);
   } catch {}
 }
 
@@ -398,41 +384,29 @@ function classifyAndParseBeacon(reqUrl, postData) {
 async function handleCookieConsent(page) {
   const out = { accepted: false };
   const candidates = [
-    // OneTrust
     "#onetrust-accept-btn-handler",
-    // Cookiebot
     "#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll",
-    // Complianz
     ".cmplz-accept",
     ".cmplz-btn",
-    // Cookie Notice / WP Cookie Notice
     "#wt-cli-accept-all-btn",
     ".wt-cli-accept-all-btn",
     "#cookie_action_close_header",
     ".cookie-accept",
     ".accept-cookies",
-    // CookieYes
     "[data-cky-tag='accept-button']",
     ".cky-btn-accept",
-    // Iubenda
     "#iubFooterBtn",
     ".iubenda-cs-accept-btn",
-    // CookieScript
     "#cookiescript_accept",
     "#cookiescript_acceptall",
-    // Civic Cookie Control
     "#ccc-accept-settings",
     "#ccc-notify-accept",
-    // Osano
     ".osano-cm-accept-all",
-    // TrustArc
     "#truste-consent-button",
     ".truste_popframe",
-    // Additional WP / Common Plugins
     "#moove_gdpr_save_popup_settings_button",
     ".cli-plugin-button",
     "[data-cookiefirst-action='accept']",
-    // Generic patterns
     "[aria-label='Accept cookies']",
     "[aria-label='Accept all cookies']",
     "[id*='accept'][class*='cookie']",
@@ -505,14 +479,13 @@ async function handleCookieConsent(page) {
           const style = window.getComputedStyle(el);
           if (style.position === "fixed" || style.position === "absolute") {
             if (el.offsetHeight > 50) {
-              // arbitrary size threshold to avoid deleting tiny icons
               el.remove();
               nuked = true;
             }
           }
         }
         if (nuked) {
-          document.body.style.overflow = "auto"; // Restore scrolling if locked
+          document.body.style.overflow = "auto";
           document.documentElement.style.overflow = "auto";
         }
       });
@@ -523,7 +496,7 @@ async function handleCookieConsent(page) {
 }
 
 // ─────────────────────────────────────────────
-// FIX 5+6: Post-consent active GTM poll
+// Post-consent active GTM poll
 // ─────────────────────────────────────────────
 async function waitForGtmInit(page, beacons, maxWaitMs = POST_CONSENT_MAX_WAIT_MS) {
   const deadline = Date.now() + maxWaitMs;
@@ -534,7 +507,6 @@ async function waitForGtmInit(page, beacons, maxWaitMs = POST_CONSENT_MAX_WAIT_M
       return true;
     }
 
-    // GTM FIX: Stop checking for googletagmanager.com
     const gtmBeacon = beacons.some((b) => b.type === "GTM" || /gtm\.js|ns\.html/i.test(b.url));
     if (gtmBeacon) {
       logDebug("✅ GTM beacon detected after consent");
@@ -543,7 +515,6 @@ async function waitForGtmInit(page, beacons, maxWaitMs = POST_CONSENT_MAX_WAIT_M
 
     const gtmInSource = await safeEvaluate(page, () => {
       for (const s of document.querySelectorAll("script")) {
-        // GTM FIX: Catch lazy-loaded script attributes
         const content =
           (s.src || "") +
           (s.innerHTML || "") +
@@ -566,14 +537,14 @@ async function waitForGtmInit(page, beacons, maxWaitMs = POST_CONSENT_MAX_WAIT_M
 }
 
 // ─────────────────────────────────────────────
-// FIX 4: detectTrackingSetup — break early on GTM confirmed
+// Detect Tracking Setup
 // ─────────────────────────────────────────────
 async function detectTrackingSetup(page, beacons) {
   let gtmIds = new Set();
   let ga4Ids = new Set();
 
-  let gtmStartFired = false; // set when dataLayer contains {event:"gtm.start"}
-  let gtmIframe = false; // set when a live GTM noscript iframe is found
+  let gtmStartFired = false;
+  let gtmIframe = false;
 
   for (let attempt = 0; attempt < 4; attempt++) {
     const scan = await safeEvaluate(page, () => {
@@ -584,7 +555,6 @@ async function detectTrackingSetup(page, beacons) {
         for (const m of str.toUpperCase().matchAll(/\b(?:G|GT)-[A-Z0-9]{6,}\b/g)) found.ga4.push(m[0]);
       }
       for (const s of document.querySelectorAll("script")) {
-        // GTM FIX: Lazy-loaded data attributes
         extract(s.src);
         extract(s.innerHTML);
         extract(s.getAttribute("data-lazy-src") || "");
@@ -592,7 +562,6 @@ async function detectTrackingSetup(page, beacons) {
         extract(s.getAttribute("data-cfasync") || "");
       }
       for (const ns of document.querySelectorAll("noscript")) extract(ns.innerHTML);
-      // Live iframes from GTM noscript fallback (always present even when JS blocked)
       for (const f of document.querySelectorAll("iframe")) {
         const src = f.getAttribute("src") || "";
         if (/ns\.html\?id=GTM-/i.test(src) || /googletagmanager\.com\/ns\.html/i.test(src)) {
@@ -608,10 +577,21 @@ async function detectTrackingSetup(page, beacons) {
         for (const push of window.dataLayer) {
           try {
             extract(JSON.stringify(push));
-            // gtm.start is pushed by GTM itself on full initialisation — definitive proof
             if (push && push.event === "gtm.start") found.gtmStartFired = true;
           } catch {}
         }
+      }
+      // GTM FIX: Search the entire window for hidden/renamed GTM dataLayers
+      for (const key of Object.keys(window)) {
+        try {
+          if (key !== "dataLayer" && Array.isArray(window[key])) {
+            const isGtm = window[key].some(
+              (item) =>
+                item && typeof item === "object" && typeof item.event === "string" && item.event.startsWith("gtm."),
+            );
+            if (isGtm) found.gtmStartFired = true;
+          }
+        } catch {}
       }
       if (window.google_tag_manager) {
         for (const k of Object.keys(window.google_tag_manager)) extract(k);
@@ -654,7 +634,6 @@ async function detectTrackingSetup(page, beacons) {
       } catch {}
     }
 
-    // GTM FIX: Domain-agnostic check
     const gtmInNetwork = beacons.some((b) => b.type === "GTM" || /gtm\.js|ns\.html/i.test(b.url));
     const globalGtmObj = await safeEvaluate(page, () => !!window.google_tag_manager);
 
@@ -663,8 +642,6 @@ async function detectTrackingSetup(page, beacons) {
     await safeWait([500, 1000, 2000, 3000][attempt] || 1000);
   }
 
-  // Fallback 1: page.content() — gets the serialised DOM Playwright already holds.
-  // Catches GTM in static HTML even when safeEvaluate (CDP injection) is blocked.
   if (gtmIds.size === 0 && !gtmStartFired && !gtmIframe) {
     try {
       const html = await page.content();
@@ -681,9 +658,6 @@ async function detectTrackingSetup(page, beacons) {
     }
   }
 
-  // Fallback 2: Playwright context HTTP request — uses Chrome's own TLS stack so
-  // WAFs that block Node.js HTTP (different TLS fingerprint) will pass this through.
-  // Only runs if all DOM-based methods above found nothing.
   if (gtmIds.size === 0 && !gtmStartFired && !gtmIframe) {
     try {
       const resp = await page.context().request.get(page.url(), {
@@ -719,7 +693,6 @@ async function detectTrackingSetup(page, beacons) {
     if (!linkedGa4.has(id)) unlinkedGa4.add(id);
   }
 
-  // GTM FIX: Domain-agnostic check
   const gtmInNetwork = beacons.some((b) => b.type === "GTM" || /gtm\.js|ns\.html/i.test(b.url));
   const ga4FiredViaGtm = beacons.some((b) => b.type === "GA4" && !!b.gtmHash);
   const globalGtmObj = await safeEvaluate(page, () => !!window.google_tag_manager);
@@ -800,7 +773,7 @@ async function discoverCandidatePages(page, baseUrl) {
 }
 
 // ─────────────────────────────────────────────
-// Full CTA scan — clickable links + plain-text contacts
+// Full CTA scan (Non-Clickable Fully Removed)
 // ─────────────────────────────────────────────
 async function scanCTAsOnPage(page) {
   const clickable = await safeEvaluate(page, () => ({
@@ -815,8 +788,6 @@ async function scanCTAsOnPage(page) {
   return {
     phones: clickable?.phones || [],
     emails: clickable?.emails || [],
-    nonClickablePhones: [], // disabled — too many false positives
-    nonClickableEmails: [], // disabled — too many false positives
   };
 }
 
@@ -1062,11 +1033,6 @@ async function testCTAsOnPage(
     const norm = normaliseMailtoHref(ctaObj.href);
     if (norm) uniqueEmails.add(norm);
   }
-
-  return {
-    nonClickablePhones: ctas.nonClickablePhones || [],
-    nonClickableEmails: ctas.nonClickableEmails || [],
-  };
 }
 
 // ─────────────────────────────────────────────
@@ -1218,7 +1184,6 @@ async function fillFormFieldSmart(el, fieldInfo) {
       await el.check({ timeout: 500, force: true }).catch(() => null);
       return;
     }
-    // Native date/time inputs — fill with correctly-formatted values
     if (type === "date") {
       await el.fill(TEST_VALUES.date, { timeout: 500 }).catch(() => null);
       return;
@@ -1247,7 +1212,6 @@ async function fillFormFieldSmart(el, fieldInfo) {
       await el.fill("https://example.com", { timeout: 500 }).catch(() => null);
       return;
     }
-    // Skip inputs the bot genuinely cannot fill
     if (type === "file" || type === "color" || type === "range") return;
 
     const valueMap = {
@@ -1305,7 +1269,6 @@ async function testFirstPartyForm(page, beacons, pageUrl, formMeta) {
     );
     if (botDetected) return { status: "FAIL", reason: "Bot Protection (CAPTCHA/Turnstile)" };
 
-    // Check for multi-step form (Next/Continue button or step-progress widgets)
     const multiStepBtn = await safeEvaluate(
       page,
       (idx) => {
@@ -1331,7 +1294,6 @@ async function testFirstPartyForm(page, beacons, pageUrl, formMeta) {
       };
     }
 
-    // Check for inputs the bot cannot fill before attempting
     const unfillableFields = await safeEvaluate(
       page,
       (idx) => {
@@ -1519,8 +1481,8 @@ async function trackingHealthCheckSiteInternal(url) {
     forms_failed: 0,
 
     cta_details: {
-      phones: { items: [], not_clickable_items: [] },
-      emails: { items: [], not_clickable_items: [] },
+      phones: { items: [], not_clickable_items: [] }, // Preserved empty for DB schema stability
+      emails: { items: [], not_clickable_items: [] }, // Preserved empty for DB schema stability
     },
 
     form_details: [],
@@ -1703,8 +1665,6 @@ async function trackingHealthCheckSiteInternal(url) {
     const phoneDuplicateItems = phoneItems.filter((i) => i.duplicate_fire_test?.result === "DUPLICATE_FIRED");
     const emailDuplicateItems = emailItems.filter((i) => i.duplicate_fire_test?.result === "DUPLICATE_FIRED");
 
-    const hasNonClickable = false; // disabled
-
     // ── Failure detail ──
     const failureDetail = [];
 
@@ -1882,18 +1842,6 @@ async function trackingHealthCheckSiteInternal(url) {
       });
     }
 
-    if (hasNonClickable) {
-      failureDetail.push({
-        category: "Non-Clickable Contacts",
-        grade_impact: "T2",
-        summary: `${results.cta_details.phones.not_clickable_items.length} phone(s) and ${results.cta_details.emails.not_clickable_items.length} email(s) found as plain text — not wrapped in a link, cannot be tracked.`,
-        items: [
-          ...results.cta_details.phones.not_clickable_items,
-          ...results.cta_details.emails.not_clickable_items,
-        ].map((i) => ({ raw: i.raw, page_url: i.page_url, status: "NOT_CLICKABLE", reason: i.reason, fix: i.fix })),
-      });
-    }
-
     if (results.forms_found > 0 && results.forms_passed === 0) {
       const botBlocked = allFormResults.some((f) => f.reason?.includes("Bot Protection"));
       const allNT = allFormResults.every((f) => f.status === "NOT_TESTED");
@@ -1941,7 +1889,7 @@ async function trackingHealthCheckSiteInternal(url) {
 
     let grade, health_status, health_reasons;
 
-    if (totalFound === 0 && !hasNonClickable) {
+    if (totalFound === 0) {
       grade = "T3";
       health_status = "NOT_TESTED";
       health_reasons =
@@ -1951,22 +1899,17 @@ async function trackingHealthCheckSiteInternal(url) {
       health_status = "NO_CONVERSIONS_TRACKED";
       health_reasons =
         "GTM is installed but no GA4 conversion event fired for any tested CTA or form. Check: (1) the GA4 tag is published in GTM — not just saved, (2) trigger conditions match the actual click events, (3) the GA4 Measurement ID is correct and the property is receiving data.";
-    } else if (hasT3 && !hasFail && !hasT2 && !hasNonClickable && !hasDuplicateFiring) {
+    } else if (hasT3 && !hasFail && !hasT2 && !hasDuplicateFiring) {
       grade = "T3";
       health_status = "NOT_TESTED";
       const t3FormDetail = failureDetail.find((f) => f.grade_impact === "T3" && f.category === "Contact Forms");
       health_reasons = t3FormDetail
         ? `${t3FormDetail.summary} Open GTM Preview, submit each form manually, and verify a GA4 event fires in the network tab.`
         : "CTAs were found but could not be tested automatically. Open GTM Preview, test manually, and verify GA4 events fire.";
-    } else if (hasT2 || hasNonClickable || hasDuplicateFiring || (hasFail && anyPassed)) {
+    } else if (hasT2 || hasDuplicateFiring || (hasFail && anyPassed)) {
       grade = "T2";
       health_status = "TRACKING_ISSUES_FOUND";
       const t2lines = [];
-      if (hasNonClickable)
-        t2lines.push(
-          `${results.cta_details.phones.not_clickable_items.length} phone(s) and ` +
-            `${results.cta_details.emails.not_clickable_items.length} email(s) found as plain text — wrap in tel:/mailto: links and add GTM Click triggers.`,
-        );
       if (hasDuplicateFiring)
         t2lines.push(
           `${phoneDuplicateItems.length + emailDuplicateItems.length} CTA(s) firing GA4 more than once per click — change the GTM tag firing option from "Once per event" to "Once per page".`,
@@ -1980,7 +1923,7 @@ async function trackingHealthCheckSiteInternal(url) {
       grade = "T1";
       health_status = "PASS";
       health_reasons =
-        "All tracked CTAs are firing correctly. Every phone link, email link, and form tested fired a GA4 conversion event with no double-firing and no plain-text contacts found.";
+        "All tracked CTAs are firing correctly. Every phone link, email link, and form tested fired a GA4 conversion event with no double-firing found.";
     }
 
     results.grade = grade;
@@ -1993,10 +1936,6 @@ async function trackingHealthCheckSiteInternal(url) {
     if (!tracking.has_gtm) {
       fixLines.push("Install GTM: add the <head> and <body> snippets to every page then republish.");
     } else {
-      if (hasNonClickable)
-        fixLines.push(
-          "Wrap plain-text phone/email in tel:/mailto: links, then add GTM Click – Just Links triggers with GA4 Event tags.",
-        );
       if (hasDuplicateFiring)
         fixLines.push("Change duplicate-firing tag(s) in GTM from 'Once per event' to 'Once per page'.");
       const formFails = failureDetail.find((f) => f.category === "Contact Forms" && f.grade_impact !== "T3");
@@ -2031,9 +1970,6 @@ async function trackingHealthCheckSiteInternal(url) {
     logInfo(`  WHY        : ${health_reasons}`);
     logInfo(
       `  SCORES     : Forms ${results.forms_passed}/${results.forms_found} | Calls ${results.phone_passed}/${results.phone_found} | Emails ${results.email_passed}/${results.email_found}`,
-    );
-    logInfo(
-      `  NON-CLICK  : Phones ${results.cta_details.phones.not_clickable_items.length} | Emails ${results.cta_details.emails.not_clickable_items.length}`,
     );
     logInfo(`  DUPE FIRES : Phones ${phoneDuplicateItems.length} | Emails ${emailDuplicateItems.length}`);
     logInfo(`  GTM IDs    : ${results.detected_gtm_ids.join(", ") || "none"}`);
@@ -2163,7 +2099,6 @@ async function runBatchHealthCheck(jobId, clients, callbackUrl = null) {
       job.results.sort((a, b) => a.index - b.index);
       logInfo(`✅ Batch job ${jobId} completed: ${job.completed}/${job.total} processed`);
       if (callbackUrl) sendBatchCallback(jobId, job, callbackUrl);
-      // Auto-cleanup: remove job from memory after 4 hours to prevent unbounded RAM growth
       setTimeout(
         () => {
           batchJobs.delete(jobId);
