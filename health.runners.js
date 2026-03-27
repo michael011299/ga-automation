@@ -131,8 +131,12 @@ async function getBrowser() {
           // GPU and the software WebGL fallback is disabled by default in recent
           // builds.  --enable-unsafe-swiftshader keeps the software path alive.
           "--disable-gpu",
-          // Suppress ALSA / audio errors (no sound card in a headless container)
-          "--mute-audio",
+          // Disable WebGL entirely — headless Linux has no GPU and the software
+          // fallback (SwiftShader) was removed in recent Chrome builds. Without
+          // this flag Chrome crashes on any site that touches WebGL.
+          "--disable-webgl", "--disable-webgl2",
+          // Suppress ALSA / audio errors and media permission prompts
+          "--mute-audio", "--use-fake-ui-for-media-stream",
           // Misc stability flags
           "--no-first-run", "--no-default-browser-check",
           "--disable-background-timer-throttling",
