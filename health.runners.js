@@ -97,13 +97,21 @@ async function getBrowser() {
     await browserLaunchLock;
   }
 
+  // If the browser process died (crash, OOM, WebGL fault), clear the stale reference
+  // so we relaunch rather than returning a dead browser to every waiting caller.
+  if (globalBrowser && !globalBrowser.isConnected()) {
+    logInfo("⚠️ Browser disconnected — clearing stale reference for relaunch");
+    globalBrowser = null;
+    browserUses   = 0;
+  }
+
   // Recycle browser after MAX_BROWSER_USES to prevent memory leaks
   if (globalBrowser && browserUses >= MAX_BROWSER_USES) {
     logDebug("♻️  Recycling browser after max uses");
     const old = globalBrowser;
     globalBrowser = null;
     browserUses   = 0;
-    old.close().catch(() => null); // fire-and-forget — don't block on close
+    old.close().catch(() => null);
   }
 
   if (!globalBrowser) {
@@ -116,12 +124,31 @@ async function getBrowser() {
         headless: HEADLESS,
         timeout: 30000,
         args: [
-          "--no-sandbox","--disable-setuid-sandbox",
+          "--no-sandbox", "--disable-setuid-sandbox",
           "--disable-blink-features=AutomationControlled",
-          "--disable-dev-shm-usage","--disable-gpu",
-          "--proxy-server='direct://'","--proxy-bypass-list=*"
+          "--disable-dev-shm-usage",
+          // GPU / WebGL — on headless Linux, Chrome crashes if it can't find a
+          // GPU and the software WebGL fallback is disabled by default in recent
+          // builds.  --enable-unsafe-swiftshader keeps the software path alive.
+          "--disable-gpu", "--enable-unsafe-swiftshader",
+          // Suppress ALSA / audio errors (no sound card in a headless container)
+          "--mute-audio",
+          // Misc stability flags
+          "--no-first-run", "--no-default-browser-check",
+          "--disable-background-networking",
+          "--disable-background-timer-throttling",
+          "--proxy-server='direct://'", "--proxy-bypass-list=*",
         ],
       });
+
+      // Clear the global ref the moment Chrome dies so the next getBrowser()
+      // call relaunches instead of returning a dead browser.
+      globalBrowser.on("disconnected", () => {
+        logInfo("⚠️ Browser process disconnected — will relaunch on next request");
+        globalBrowser = null;
+        browserUses   = 0;
+      });
+
       logDebug("🚀 Browser launched");
     } finally {
       browserLaunchLock = null;
