@@ -2515,19 +2515,11 @@ if (!websiteUrl || !websiteName) {
   throw new Error(`Missing websiteUrl or websiteName. Got: ${JSON.stringify(req.body)}`);
 }
 
-// Wait for navigation after terms acceptance
 await page.waitForLoadState('domcontentloaded', { timeout: 30000 });
-await page.waitForTimeout(2000);
+await page.waitForTimeout(1500);
 console.log('📍 URL after terms:', page.url());
 
-// ── Locators ──────────────────────────────────────────────────────────────
-// Web picker button — covers "Web", "Website", "Web stream" (GA changes labels)
-const webOptionBtn = page
-  .locator('button, [role="button"], [role="option"]')
-  .filter({ hasText: /\bweb(site|stream)?\b/i })
-  .first();
-
-// URL input — covers every placeholder/aria variant GA has shipped
+// ── URL input locator (used regardless of which path we take) ─────────────
 const websiteUrlInput = page.locator(
   [
     'input[type="url"]',
@@ -2541,43 +2533,76 @@ const websiteUrlInput = page.locator(
   ].join(', ')
 ).first();
 
-// ── Try picker or form with a short timeout first ─────────────────────────
-console.log('⏳ Looking for Web picker or URL form (20s)...');
-const step6State = await Promise.race([
-  webOptionBtn.waitFor({ state: 'visible', timeout: 20000 }).then(() => 'PICKER'),
-  websiteUrlInput.waitFor({ state: 'visible', timeout: 20000 }).then(() => 'FORM'),
-]).catch(() => 'UNKNOWN');
+// ── Strategy: poll for property ID in URL, then navigate directly ─────────
+// GA4's post-terms UI changes frequently; the stream creation URL is stable.
+// We poll up to 15s for the property ID to appear after terms acceptance.
+let s6AccountId = null, s6PropertyId = null;
+const s6Deadline = Date.now() + 15000;
+while (Date.now() < s6Deadline) {
+  const u = page.url();
+  // Format 1: #/a123p456/...   Format 2: #/p456/...
+  const m1 = u.match(/#\/a(\d+)p(\d+)/);
+  const m2 = !m1 && u.match(/#\/p(\d+)/);
+  if (m1) { s6AccountId = m1[1]; s6PropertyId = m1[2]; break; }
+  if (m2) { s6PropertyId = m2[1]; break; }
+  await page.waitForTimeout(500);
+}
+console.log(`📍 Extracted — accountId: ${s6AccountId}, propertyId: ${s6PropertyId}`);
 
-if (step6State === 'PICKER') {
-  console.log('🧭 Stream picker visible — clicking Web...');
-  await webOptionBtn.click({ timeout: 15000 });
+if (s6PropertyId) {
+  // Primary path: navigate directly — bypasses whatever picker/interstitial GA is showing
+  const streamUrl = s6AccountId
+    ? `https://analytics.google.com/analytics/web/#/a${s6AccountId}p${s6PropertyId}/admin/streams/new/web`
+    : `https://analytics.google.com/analytics/web/#/p${s6PropertyId}/admin/streams/new/web`;
+  console.log(`🔗 Navigating directly to stream creation: ${streamUrl}`);
+  await page.goto(streamUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+  await page.waitForTimeout(2000);
+
+  // After direct navigation the platform picker may still appear (GA sometimes
+  // shows it even on the /new/web URL). Handle it the same as before.
+  const webPickerBtn = page
+    .locator('button, [role="button"], [role="option"]')
+    .filter({ hasText: /\bweb(site|stream)?\b/i })
+    .first();
+
+  const s6DirectState = await Promise.race([
+    webPickerBtn.waitFor({ state: 'visible', timeout: 8000 }).then(() => 'PICKER'),
+    websiteUrlInput.waitFor({ state: 'visible', timeout: 8000 }).then(() => 'FORM'),
+  ]).catch(() => 'FORM'); // if neither appears, assume form and let waitFor below catch it
+
+  if (s6DirectState === 'PICKER') {
+    console.log('🧭 Picker still showing after direct nav — clicking Web...');
+    await webPickerBtn.click({ timeout: 10000 });
+  }
+
   await websiteUrlInput.waitFor({ state: 'visible', timeout: 30000 });
-  console.log('✅ Web stream form appeared after picker click');
-} else if (step6State === 'FORM') {
-  console.log('✅ Already on web stream form');
+  console.log('✅ Web stream form ready (direct URL path)');
 } else {
-  // GA4 changed the post-terms UI — neither picker nor form appeared.
-  // Extract property + account IDs from the current URL and navigate
-  // directly to the web stream creation page.
-  console.log('⚠️ Picker/form not found after 20s. Attempting direct navigation...');
+  // Fallback: property ID never appeared — try the picker the traditional way
+  console.log('⚠️ No property ID found in URL after 15s — falling back to picker');
   await page.screenshot({ path: 'step6_fallback.png', fullPage: true }).catch(() => {});
 
-  const currentUrl  = page.url();
-  const propIdMatch = currentUrl.match(/#\/a(\d+)p(\d+)/);
-  if (propIdMatch) {
-    const [, aId, pId] = propIdMatch;
-    const streamUrl = `https://analytics.google.com/analytics/web/#/a${aId}p${pId}/admin/streams/new/web`;
-    console.log(`🔗 Navigating to stream creation: ${streamUrl}`);
-    await page.goto(streamUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await page.waitForTimeout(2000);
+  const webPickerBtn = page
+    .locator('button, [role="button"], [role="option"]')
+    .filter({ hasText: /\bweb(site|stream)?\b/i })
+    .first();
+
+  const s6FallbackState = await Promise.race([
+    webPickerBtn.waitFor({ state: 'visible', timeout: 20000 }).then(() => 'PICKER'),
+    websiteUrlInput.waitFor({ state: 'visible', timeout: 20000 }).then(() => 'FORM'),
+  ]).catch(() => 'UNKNOWN');
+
+  if (s6FallbackState === 'PICKER') {
+    console.log('🧭 Picker found — clicking Web...');
+    await webPickerBtn.click({ timeout: 15000 });
     await websiteUrlInput.waitFor({ state: 'visible', timeout: 30000 });
-    console.log('✅ Reached web stream form via direct URL');
+  } else if (s6FallbackState === 'FORM') {
+    console.log('✅ Already on web stream form');
   } else {
-    // No property ID in URL yet — fall back to clickWebPlatform helper
-    console.log('⚠️ No property ID in URL, trying clickWebPlatform helper...');
     await clickWebPlatform(page);
     await websiteUrlInput.waitFor({ state: 'visible', timeout: 30000 });
   }
+  console.log('✅ Web stream form ready (picker fallback path)');
 }
 
 console.log('📝 Filling web stream form...');
