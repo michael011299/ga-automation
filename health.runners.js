@@ -130,7 +130,7 @@ async function getBrowser() {
           // GPU / WebGL — on headless Linux, Chrome crashes if it can't find a
           // GPU and the software WebGL fallback is disabled by default in recent
           // builds.  --enable-unsafe-swiftshader keeps the software path alive.
-          "--disable-gpu", "--enable-unsafe-swiftshader",
+          "--disable-gpu",
           // Suppress ALSA / audio errors (no sound card in a headless container)
           "--mute-audio",
           // Misc stability flags
@@ -211,7 +211,7 @@ async function fetchRawHtml(url, redirectsLeft = 3) {
       const lib    = parsed.protocol === "https:" ? https : http;
       const req    = lib.get(url, {
         headers: {
-          "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+          "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
           "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
           "Accept-Language": "en-GB,en;q=0.9",
           "Accept-Encoding": "gzip, deflate, br",
@@ -1400,7 +1400,7 @@ async function trackingHealthCheckSiteInternal(url) {
     try {
       context = await browser.newContext({
         viewport: { width: 1920, height: 1080 },
-        userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         locale: "en-GB",
         timezoneId: "Europe/London"
       });
@@ -1412,7 +1412,7 @@ async function trackingHealthCheckSiteInternal(url) {
         browser  = await getBrowser();
         context  = await browser.newContext({
           viewport: { width: 1920, height: 1080 },
-          userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+          userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
           locale: "en-GB",
           timezoneId: "Europe/London"
         });
@@ -1420,51 +1420,6 @@ async function trackingHealthCheckSiteInternal(url) {
         throw ctxErr;
       }
     }
-
-    // Patch JS properties that bot detectors fingerprint before any page script runs.
-    // addInitScript has zero network cost — it executes synchronously in the renderer.
-    await context.addInitScript(() => {
-      // 1. Hide the automation flag (belt-and-suspenders on top of --disable-blink-features)
-      Object.defineProperty(navigator, "webdriver", { get: () => undefined });
-
-      // 2. Spoof window.chrome — headless has no chrome.runtime at all
-      window.chrome = {
-        runtime: {
-          id: undefined,
-          connect:      () => ({}),
-          sendMessage:  () => {},
-          onMessage:    { addListener: () => {}, removeListener: () => {} },
-          onConnect:    { addListener: () => {}, removeListener: () => {} },
-        },
-        loadTimes: () => ({}),
-        csi:       () => ({}),
-        app:       {},
-      };
-
-      // 3. Spoof plugins — headless reports 0, real Chrome has 3
-      const _plugins = [
-        { name: "Chrome PDF Plugin",    filename: "internal-pdf-viewer",         description: "Portable Document Format", length: 1 },
-        { name: "Chrome PDF Viewer",    filename: "mhjfbmdgcfjbbpaeojofohoefgiehjai", description: "",                   length: 1 },
-        { name: "Native Client",        filename: "internal-nacl-plugin",         description: "",                       length: 0 },
-      ];
-      Object.defineProperty(navigator, "plugins", {
-        get: () => Object.assign(_plugins, { refresh: () => {}, item: i => _plugins[i], namedItem: n => _plugins.find(p => p.name === n) || null }),
-      });
-
-      // 4. Match languages to the en-GB locale set on the context
-      Object.defineProperty(navigator, "languages", { get: () => ["en-GB", "en"] });
-
-      // 5. Fix permissions.query — headless returns "denied" for notifications, real Chrome returns "default"
-      const _origQuery = window.Permissions?.prototype?.query;
-      if (_origQuery) {
-        window.Permissions.prototype.query = function (params) {
-          if (params?.name === "notifications") {
-            return Promise.resolve({ state: Notification.permission || "default", onchange: null });
-          }
-          return _origQuery.call(this, params);
-        };
-      }
-    });
 
     openContexts.set(context, { createdAt: Date.now(), url: targetUrl });
     page = await context.newPage();
