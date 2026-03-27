@@ -581,28 +581,31 @@ async function scanCTAsOnPage(page) {
     let node;
     while ((node = walker.nextNode())) {
       const text = node.textContent || "";
-      const parentAnchor = node.parentElement?.closest("a[href]");
-      const isPhoneLink  = parentAnchor && (parentAnchor.getAttribute("href") || "").toLowerCase().startsWith("tel:");
-      const isEmailLink  = parentAnchor && (parentAnchor.getAttribute("href") || "").toLowerCase().startsWith("mailto:");
+      // Skip anything already inside any anchor — it's already a link
+      if (node.parentElement?.closest("a[href]")) continue;
 
-      if (!isPhoneLink) {
-        for (const m of text.matchAll(phonePattern)) {
-          const pureDigits = m[1].replace(/[^0-9]/g, "");
-          // Must be 10–13 digits; exclude IP addresses (e.g. 192.168.1.1)
-          if (pureDigits.length < 10 || pureDigits.length > 13) continue;
-          if (/^\d{1,3}(?:[.\s]\d{1,3}){3}$/.test(m[1].trim())) continue;
-          const digits = normPhone(m[1].replace(/[^\d\+]/g, ""));
-          if (!linkedPhones.has(digits))
-            foundPhones.push({ raw: m[1].trim(), digits });
-        }
+      for (const m of text.matchAll(phonePattern)) {
+        const pureDigits = m[1].replace(/[^0-9]/g, "");
+        // Must be 10–13 digits; exclude IP addresses
+        if (pureDigits.length < 10 || pureDigits.length > 13) continue;
+        if (/^\d{1,3}(?:[.\s]\d{1,3}){3}$/.test(m[1].trim())) continue;
+        // Only flag as non-clickable if there's a phone-related label nearby.
+        // Check the text before the number in the same node, and the parent element text.
+        const beforeInNode  = text.slice(Math.max(0, m.index - 80), m.index);
+        const parentCtx     = (node.parentElement?.innerText || "").slice(0, 300);
+        const labelInBefore = /(?:call|tel(?:ephone)?|phone|mobile|mob|fax|ring|speak\s+to|contact(?:\s+us)?(?:\s+on|\s+at)?)\s*[:|-]?\s*$/i.test(beforeInNode.trim());
+        const labelInParent = /(?:^|\b)(?:call|tel(?:ephone)?|phone|mobile|mob|fax)\b/i.test(parentCtx);
+        if (!labelInBefore && !labelInParent) continue;
+        const digits = normPhone(m[1].replace(/[^\d\+]/g, ""));
+        if (!linkedPhones.has(digits))
+          foundPhones.push({ raw: m[1].trim(), digits });
       }
-      if (!isEmailLink) {
-        for (const m of text.matchAll(emailPattern)) {
-          const norm   = m[1].trim().toLowerCase();
-          const domain = norm.split("@")[1] || "";
-          if (placeholderDomains.has(domain)) continue;
-          if (!linkedEmails.has(norm)) foundEmails.push({ raw: m[1].trim(), norm });
-        }
+
+      for (const m of text.matchAll(emailPattern)) {
+        const norm   = m[1].trim().toLowerCase();
+        const domain = norm.split("@")[1] || "";
+        if (placeholderDomains.has(domain)) continue;
+        if (!linkedEmails.has(norm)) foundEmails.push({ raw: m[1].trim(), norm });
       }
     }
 
@@ -990,6 +993,39 @@ async function testFirstPartyForm(page, beacons, pageUrl, formMeta) {
       !!document.querySelector("iframe[src*='recaptcha'],iframe[src*='turnstile'],.g-recaptcha,.h-captcha,[data-sitekey]")
     );
     if (botDetected) return { status: "FAIL", reason: "Bot Protection (CAPTCHA/Turnstile)" };
+
+    // Check for multi-step form (Next/Continue button or step-progress widgets)
+    const multiStepBtn = await safeEvaluate(page, idx => {
+      const form = document.querySelectorAll("form")[idx];
+      if (!form) return null;
+      const visible = [...form.querySelectorAll("button,input[type='submit'],input[type='button']")]
+        .filter(b => b.offsetParent !== null);
+      const primaryBtn = visible.find(b => b.type === "submit") || visible[0];
+      const btnText = (primaryBtn?.textContent || primaryBtn?.value || "").trim();
+      const isNextStep = /^(next|continue|proceed|go to step|step\s*\d)/i.test(btnText);
+      const hasStepper = !!form.querySelector(
+        '[class*="step-"],[class*="wizard"],[class*="multi-step"],[data-step],[aria-current="step"],[class*="progress-step"]'
+      );
+      return (isNextStep || hasStepper) ? (btnText || "Next") : null;
+    }, formMeta.index);
+    if (multiStepBtn !== null && multiStepBtn !== undefined) {
+      return { status: "NOT_TESTED", reason: `Multi-step form — button says "${multiStepBtn}"; automated testing cannot navigate all steps` };
+    }
+
+    // Check for inputs the bot cannot fill before attempting
+    const unfillableFields = await safeEvaluate(page, idx => {
+      const form = document.querySelectorAll("form")[idx];
+      if (!form) return [];
+      const issues = [];
+      const visible = [...form.querySelectorAll("input,select,textarea")].filter(el => el.offsetParent !== null);
+      if (visible.some(el => el.type === "file")) issues.push("file upload");
+      if (form.querySelector("[class*='datepick'],[class*='flatpickr'],[class*='pikaday'],[class*='daterangepick'],[class*='react-datepick'],[class*='vue-datepick'],[class*='air-datepick']"))
+        issues.push("custom date picker widget");
+      return issues;
+    }, formMeta.index);
+    if (unfillableFields.length > 0) {
+      return { status: "NOT_TESTED", reason: `Form contains fields the bot cannot fill: ${unfillableFields.join(", ")}` };
+    }
 
     const beforeBeaconIdx = beacons.length;
     const beforeUrl = page.url();
@@ -1466,30 +1502,43 @@ async function trackingHealthCheckSiteInternal(url) {
     }
 
     // ── Grading ──
-    const totalFound = uniquePhones.size + uniqueEmails.size + results.forms_found;
-    const hasFail    = failureDetail.some(f => f.grade_impact === "FAIL");
-    const hasT2      = failureDetail.some(f => f.grade_impact === "T2");
-    const hasT3      = failureDetail.some(f => f.grade_impact === "T3");
-    const anyPassed  = results.phone_passed > 0 || results.email_passed > 0 || results.forms_passed > 0;
+    const totalFound         = uniquePhones.size + uniqueEmails.size + results.forms_found;
+    const hasFail            = failureDetail.some(f => f.grade_impact === "FAIL");
+    const hasT2              = failureDetail.some(f => f.grade_impact === "T2");
+    const hasT3              = failureDetail.some(f => f.grade_impact === "T3");
+    const anyPassed          = results.phone_passed > 0 || results.email_passed > 0 || results.forms_passed > 0;
+    const hasDuplicateFiring = phoneDuplicateItems.length > 0 || emailDuplicateItems.length > 0;
 
     let grade, health_status, health_reasons;
 
     if (totalFound === 0 && !hasNonClickable) {
       grade = "T3"; health_status = "NOT_TESTED";
-      health_reasons = "No actionable CTAs (phone links, email links, or forms) were found on any visited page.";
+      health_reasons = "No trackable CTAs were found on any page visited. Check that the site has clickable phone numbers (tel: links), email addresses (mailto: links), or contact forms visible on the pages the runner visited.";
     } else if (hasFail && !anyPassed) {
       grade = "FAIL"; health_status = "NO_CONVERSIONS_TRACKED";
-      health_reasons = "GTM is installed but no conversion events fired for any tested CTA or form. See failure_detail for fixes.";
-    } else if (hasT2 || (hasFail && anyPassed)) {
-      grade = "T2"; health_status = "TRACKING_ISSUES_FOUND";
-      const t2cats = failureDetail.filter(f => f.grade_impact === "T2" || f.grade_impact === "FAIL").map(f => f.category);
-      health_reasons = `Tracking is partially working but has issues: ${t2cats.join(", ")}. See failure_detail for fixes.`;
-    } else if (hasT3 && !hasT2 && !hasFail) {
+      health_reasons = "GTM is installed but no GA4 conversion event fired for any tested CTA or form. Check: (1) the GA4 tag is published in GTM — not just saved, (2) trigger conditions match the actual click events, (3) the GA4 Measurement ID is correct and the property is receiving data.";
+    } else if (hasT3 && !hasFail && !hasT2 && !hasNonClickable && !hasDuplicateFiring) {
       grade = "T3"; health_status = "NOT_TESTED";
-      health_reasons = `CTAs found but could not be tested automatically (${failureDetail.map(f => f.category).join(", ")}). Manual verification required.`;
+      const t3FormDetail = failureDetail.find(f => f.grade_impact === "T3" && f.category === "Contact Forms");
+      health_reasons = t3FormDetail
+        ? `${t3FormDetail.summary} Open GTM Preview, submit each form manually, and verify a GA4 event fires in the network tab.`
+        : "CTAs were found but could not be tested automatically. Open GTM Preview, test manually, and verify GA4 events fire.";
+    } else if (hasT2 || hasNonClickable || hasDuplicateFiring || (hasFail && anyPassed)) {
+      grade = "T2"; health_status = "TRACKING_ISSUES_FOUND";
+      const t2lines = [];
+      if (hasNonClickable) t2lines.push(
+        `${results.cta_details.phones.not_clickable_items.length} phone(s) and ` +
+        `${results.cta_details.emails.not_clickable_items.length} email(s) found as plain text — wrap in tel:/mailto: links and add GTM Click triggers.`
+      );
+      if (hasDuplicateFiring) t2lines.push(
+        `${phoneDuplicateItems.length + emailDuplicateItems.length} CTA(s) firing GA4 more than once per click — change the GTM tag firing option from "Once per event" to "Once per page".`
+      );
+      failureDetail.filter(f => f.grade_impact === "T2").forEach(f => t2lines.push(f.summary));
+      failureDetail.filter(f => f.grade_impact === "FAIL" && anyPassed).forEach(f => t2lines.push(f.summary));
+      health_reasons = "Tracking is working but has issues. " + (t2lines.length > 0 ? t2lines.join(" | ") : failureDetail.map(f => f.category).join(", "));
     } else {
       grade = "T1"; health_status = "PASS";
-      health_reasons = "All detected conversion CTAs and forms are firing GA4 events correctly on every tested page.";
+      health_reasons = "All tracked CTAs are firing correctly. Every phone link, email link, and form tested fired a GA4 conversion event with no double-firing and no plain-text contacts found.";
     }
 
     results.grade          = grade;
@@ -1498,8 +1547,30 @@ async function trackingHealthCheckSiteInternal(url) {
     results.failure_detail = failureDetail;
 
     // ── Consolidated fix text for the fix column ──
-    const allFixes = failureDetail.flatMap(f => (f.items || []).map(i => i.fix).filter(Boolean));
-    results.fix = allFixes.length > 0 ? allFixes.join(" | ") : null;
+    const fixLines = [];
+    if (!tracking.has_gtm) {
+      fixLines.push("Install GTM: add the <head> and <body> snippets to every page then republish.");
+    } else {
+      if (hasNonClickable) fixLines.push(
+        "Wrap plain-text phone/email in tel:/mailto: links, then add GTM Click – Just Links triggers with GA4 Event tags."
+      );
+      if (hasDuplicateFiring) fixLines.push(
+        "Change duplicate-firing tag(s) in GTM from 'Once per event' to 'Once per page'."
+      );
+      const formFails = failureDetail.find(f => f.category === "Contact Forms" && f.grade_impact !== "T3");
+      if (formFails) fixLines.push(
+        "Form submitted but no GA4 event fired — add a GTM Form Submission trigger (or Thank You page URL trigger) with a GA4 Event tag."
+      );
+      const phoneFails = failureDetail.find(f => f.category.startsWith("Phone Calls") && f.grade_impact === "FAIL");
+      if (phoneFails) fixLines.push(
+        "Phone click not tracked — create a GTM Click – Just Links trigger for href contains tel: and attach a GA4 Event tag (event name: click_call)."
+      );
+      const emailFails = failureDetail.find(f => f.category.startsWith("Email Clicks") && f.grade_impact === "FAIL");
+      if (emailFails) fixLines.push(
+        "Email click not tracked — create a GTM Click – Just Links trigger for href contains mailto: and attach a GA4 Event tag (event name: click_email)."
+      );
+    }
+    results.fix = fixLines.length > 0 ? fixLines.join(" | ") : null;
 
     // ── Console output ──
     const GRADE_LABEL = { T1: "✅ T1 — PASS", T2: "⚠️  T2 — ISSUES FOUND", T3: "🔍 T3 — NOT TESTED", FAIL: "❌ FAIL — NO CONVERSIONS TRACKED" };
