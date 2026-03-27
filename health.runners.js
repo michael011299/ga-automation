@@ -791,7 +791,12 @@ async function scanCTAsOnPage(page) {
       }
     });
 
-    const phonePattern = /(\+?[\d][\d\s\-\(\)\.]{6,}[\d])/g;
+    // Require number to start with 0 (UK national) or + (international).
+    // Random numeric strings (order IDs, reference numbers, IP addresses,
+    // version numbers) almost never start with 0 or +, so this single
+    // requirement eliminates the vast majority of false positives.
+    // Negative lookahead/lookbehind stop partial matches inside longer strings.
+    const phonePattern = /(?<![.\d])(\+?0[\d\s\-\(\)\.]{7,16}[\d]|\+[1-9]\d[\d\s\-\(\)\.]{6,14}[\d])(?![.\d])/g;
     const emailPattern = /([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})/g;
     // Reserved / placeholder domains that will never be real contact emails
     const placeholderDomains = new Set(["example.com","example.org","example.net","example.co.uk","test.com","placeholder.com","domain.com","yourdomain.com","email.com"]);
@@ -804,9 +809,14 @@ async function scanCTAsOnPage(page) {
       const parentAnchor = node.parentElement?.closest("a[href]");
       if (!parentAnchor) {
         for (const m of text.matchAll(phonePattern)) {
-          const rawDigits = m[1].replace(/[^\d\+]/g, "");
-          const digits    = normPhone(rawDigits);
-          if (digits.replace(/[^0-9]/g, "").length >= 9 && !linkedPhones.has(digits))
+          const rawDigits  = m[1].replace(/[^\d\+]/g, "");
+          const digits     = normPhone(rawDigits);
+          const pureDigits = digits.replace(/[^0-9]/g, "");
+          // UK phones: 10–11 digits. Allow up to 13 for international formats.
+          if (pureDigits.length < 10 || pureDigits.length > 13) continue;
+          // Skip IP addresses (e.g. 0.0.0.0 style — unlikely but defensive)
+          if (/^\d{1,3}(?:[.\s]\d{1,3}){3}$/.test(m[1].trim())) continue;
+          if (!linkedPhones.has(digits))
             foundPhones.push({ raw: m[1].trim(), digits });
         }
         for (const m of text.matchAll(emailPattern)) {
