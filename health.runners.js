@@ -460,8 +460,8 @@ async function detectTrackingSetup(page, beacons) {
     await safeWait([500, 1000, 2000, 3000][attempt] || 1000);
   }
 
-  // Last-resort fallback: if safeEvaluate failed entirely (WAF blocking CDP injection),
-  // scan the serialised page HTML that Playwright already has in memory
+  // Fallback 1: page.content() — gets the serialised DOM Playwright already holds.
+  // Catches GTM in static HTML even when safeEvaluate (CDP injection) is blocked.
   if (gtmIds.size === 0 && !gtmStartFired && !gtmIframe) {
     try {
       const html = await page.content();
@@ -475,6 +475,31 @@ async function detectTrackingSetup(page, beacons) {
       }
     } catch (e) {
       logDebug(`page.content() GTM fallback failed: ${e.message}`);
+    }
+  }
+
+  // Fallback 2: Playwright context HTTP request — uses Chrome's own TLS stack so
+  // WAFs that block Node.js HTTP (different TLS fingerprint) will pass this through.
+  // Only runs if all DOM-based methods above found nothing.
+  if (gtmIds.size === 0 && !gtmStartFired && !gtmIframe) {
+    try {
+      const resp = await page.context().request.get(page.url(), {
+        headers: { "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" },
+        timeout: 8000,
+      });
+      if (resp.ok()) {
+        const html = await resp.text().catch(() => "");
+        if (html) {
+          const headEnd = html.search(/<\/head>/i);
+          const region  = headEnd > 0 ? html.slice(0, headEnd + 200) : html.slice(0, 10000);
+          for (const m of region.toUpperCase().matchAll(/GTM-[A-Z0-9]{4,}/g)) gtmIds.add(m[0]);
+          for (const m of region.toUpperCase().matchAll(/\b(?:G|GT)-[A-Z0-9]{6,}\b/g)) ga4Ids.add(m[0]);
+          if (/googletagmanager\.com\/ns\.html/i.test(region)) gtmIframe = true;
+          logDebug(`Playwright HTTP GTM fallback: found ${gtmIds.size} GTM IDs`);
+        }
+      }
+    } catch (e) {
+      logDebug(`Playwright HTTP GTM fallback failed: ${e.message}`);
     }
   }
 
@@ -580,6 +605,7 @@ async function scanCTAsOnPage(page) {
               .filter(x => x.href)
   }));
 
+  /* NON-CLICKABLE CONTACT DETECTION — disabled, too many false positives, re-enable when accurate
   const plainText = await safeEvaluate(page, () => {
     function normPhone(d) {
       if (d.startsWith('+44')) return '0' + d.slice(3);
@@ -611,26 +637,20 @@ async function scanCTAsOnPage(page) {
       }
     });
 
-    // Require UK (starts 0) or international (starts +) — at least 10 pure digits, max 13
     const phonePattern = /(?<![.\d])(\+?0[\d\s\-\(\)\.]{7,16}[\d]|\+[1-9]\d[\d\s\-\(\)\.]{6,14}[\d])(?![.\d])/g;
     const emailPattern = /([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})/g;
-    // Reserved / placeholder domains that will never be real contact emails
     const placeholderDomains = new Set(["example.com","example.org","example.net","example.co.uk","test.com","placeholder.com","domain.com","yourdomain.com","email.com"]);
     const foundPhones = [], foundEmails = [];
 
     let node;
     while ((node = walker.nextNode())) {
       const text = node.textContent || "";
-      // Skip anything already inside any anchor — it's already a link
       if (node.parentElement?.closest("a[href]")) continue;
 
       for (const m of text.matchAll(phonePattern)) {
         const pureDigits = m[1].replace(/[^0-9]/g, "");
-        // Must be 10–13 digits; exclude IP addresses
         if (pureDigits.length < 10 || pureDigits.length > 13) continue;
         if (/^\d{1,3}(?:[.\s]\d{1,3}){3}$/.test(m[1].trim())) continue;
-        // Only flag as non-clickable if there's a phone-related label nearby.
-        // Check the text before the number in the same node, and the parent element text.
         const beforeInNode  = text.slice(Math.max(0, m.index - 80), m.index);
         const parentCtx     = (node.parentElement?.innerText || "").slice(0, 300);
         const labelInBefore = /(?:call|tel(?:ephone)?|phone|mobile|mob|fax|ring|speak\s+to|contact(?:\s+us)?(?:\s+on|\s+at)?)\s*[:|-]?\s*$/i.test(beforeInNode.trim());
@@ -655,12 +675,13 @@ async function scanCTAsOnPage(page) {
       emails: foundEmails.filter(e => { if (seenEm.has(e.norm))   return false; seenEm.add(e.norm);   return true; })
     };
   });
+  */
 
   return {
     phones:             (clickable?.phones || []),
     emails:             (clickable?.emails || []),
-    nonClickablePhones: (plainText?.phones || []),
-    nonClickableEmails: (plainText?.emails || [])
+    nonClickablePhones: [], // disabled — see comment above
+    nonClickableEmails: []  // disabled — see comment above
   };
 }
 
@@ -1156,8 +1177,8 @@ async function trackingHealthCheckSiteInternal(url) {
   const interceptedForms     = [];
   const uniquePhones         = new Set();
   const uniqueEmails         = new Set();
-  const uniqueNonClickPhones = new Set();
-  const uniqueNonClickEmails = new Set();
+  // const uniqueNonClickPhones = new Set(); // disabled with non-clickable detection
+  // const uniqueNonClickEmails = new Set(); // disabled with non-clickable detection
   const visitedUrls          = new Set();
   const phoneItems           = [];
   const emailItems           = [];
@@ -1317,13 +1338,14 @@ async function trackingHealthCheckSiteInternal(url) {
         await waitForGtmInit(page, beacons, POST_CONSENT_MAX_WAIT_MS / 2);
       }
 
-      const { nonClickablePhones, nonClickableEmails } = await testCTAsOnPage(
+      await testCTAsOnPage(
         page, beacons, page.url(),
         uniquePhones, uniqueEmails,
         phoneItems, emailItems,
         phoneDone, emailDone
       );
 
+      /* NON-CLICKABLE PROCESSING — disabled, see scanCTAsOnPage comment
       for (const ph of nonClickablePhones) {
         if (uniqueNonClickPhones.has(ph.digits)) continue;
         uniqueNonClickPhones.add(ph.digits);
@@ -1343,6 +1365,7 @@ async function trackingHealthCheckSiteInternal(url) {
           fix: `Wrap in a mailto: link: <a href="mailto:${em.norm}">${em.raw}</a>. Then add a GTM Click – Just Links trigger for href contains mailto: with a GA4 Event tag.`
         });
       }
+      */
 
       const formRes = await testAllFormsOnPage(page, beacons, page.url());
       results.form_details.push(formRes);
@@ -1370,8 +1393,7 @@ async function trackingHealthCheckSiteInternal(url) {
     const phoneDuplicateItems = phoneItems.filter(i => i.duplicate_fire_test?.result === "DUPLICATE_FIRED");
     const emailDuplicateItems = emailItems.filter(i => i.duplicate_fire_test?.result === "DUPLICATE_FIRED");
 
-    const hasNonClickable = results.cta_details.phones.not_clickable_items.length > 0 ||
-                            results.cta_details.emails.not_clickable_items.length > 0;
+    const hasNonClickable = false; // disabled — non-clickable detection commented out
 
     // ── Failure detail ──
     const failureDetail = [];
