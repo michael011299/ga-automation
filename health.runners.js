@@ -122,9 +122,15 @@ async function getBrowser() {
         args: [
           "--no-sandbox","--disable-setuid-sandbox",
           "--disable-blink-features=AutomationControlled",
-          "--disable-dev-shm-usage","--disable-gpu",
-          // Headless Linux has no GPU — Chrome crashes when sites use WebGL
-          // because the software fallback (SwiftShader) was removed in recent builds.
+          "--disable-dev-shm-usage",
+          // Disable all GPU paths — on headless Linux the GPU process has no
+          // hardware to talk to. --disable-gpu alone is not enough: Chrome's
+          // software compositing pipeline (SharedImageManager) still runs and
+          // hits fatal mailbox errors that trigger a graceful browser shutdown.
+          "--disable-gpu",
+          "--disable-gpu-compositing",       // stops SharedImageManager crashes
+          "--disable-accelerated-2d-canvas", // no GPU canvas (uses CPU path)
+          "--disable-accelerated-video-decode",
           "--disable-webgl","--disable-webgl2",
           // Suppress ALSA audio errors and media permission prompts
           "--mute-audio","--use-fake-ui-for-media-stream",
