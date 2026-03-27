@@ -376,9 +376,12 @@ async function detectTrackingSetup(page, beacons) {
   let gtmIds = new Set();
   let ga4Ids = new Set();
 
+  let gtmStartFired = false; // set when dataLayer contains {event:"gtm.start"}
+  let gtmIframe     = false; // set when a live GTM noscript iframe is found
+
   for (let attempt = 0; attempt < 4; attempt++) {
     const scan = await safeEvaluate(page, () => {
-      const found = { gtm: [], ga4: [] };
+      const found = { gtm: [], ga4: [], gtmStartFired: false, gtmIframe: false };
       function extract(str) {
         if (typeof str !== "string" || !str) return;
         for (const m of str.toUpperCase().matchAll(/GTM-[A-Z0-9]{4,}/g)) found.gtm.push(m[0]);
@@ -386,12 +389,23 @@ async function detectTrackingSetup(page, beacons) {
       }
       for (const s of document.querySelectorAll("script")) { extract(s.src); extract(s.innerHTML); }
       for (const ns of document.querySelectorAll("noscript")) extract(ns.innerHTML);
+      // Live iframes from GTM noscript fallback (always present even when JS blocked)
+      for (const f of document.querySelectorAll("iframe")) {
+        const src = f.getAttribute("src") || "";
+        if (/googletagmanager\.com\/ns\.html/i.test(src)) { found.gtmIframe = true; extract(src); }
+      }
       for (const m of document.querySelectorAll("meta")) {
         extract(m.getAttribute("content") || "");
         extract(m.getAttribute("name") || "");
       }
       if (Array.isArray(window.dataLayer)) {
-        for (const push of window.dataLayer) { try { extract(JSON.stringify(push)); } catch {} }
+        for (const push of window.dataLayer) {
+          try {
+            extract(JSON.stringify(push));
+            // gtm.start is pushed by GTM itself on full initialisation — definitive proof
+            if (push && push.event === "gtm.start") found.gtmStartFired = true;
+          } catch {}
+        }
       }
       if (window.google_tag_manager) {
         for (const k of Object.keys(window.google_tag_manager)) extract(k);
@@ -415,6 +429,8 @@ async function detectTrackingSetup(page, beacons) {
     if (scan) {
       scan.gtm.forEach(id => gtmIds.add(id));
       scan.ga4.forEach(id => ga4Ids.add(id));
+      if (scan.gtmStartFired) gtmStartFired = true;
+      if (scan.gtmIframe)     gtmIframe     = true;
     }
 
     for (const b of beacons) {
@@ -429,13 +445,31 @@ async function detectTrackingSetup(page, beacons) {
     }
 
     const gtmInNetwork = beacons.some(b =>
-      /googletagmanager\.com\/gtm\.js/.test(b.url)
+      /googletagmanager\.com\/(gtm\.js|ns\.html)/.test(b.url)
     );
     const globalGtmObj = await safeEvaluate(page, () => !!window.google_tag_manager);
 
-    if (gtmIds.size > 0 || gtmInNetwork || globalGtmObj) break;
+    if (gtmIds.size > 0 || gtmInNetwork || globalGtmObj || gtmStartFired || gtmIframe) break;
 
     await safeWait([500, 1000, 2000, 3000][attempt] || 1000);
+  }
+
+  // Last-resort fallback: if safeEvaluate failed entirely (WAF blocking CDP injection),
+  // scan the serialised page HTML that Playwright already has in memory
+  if (gtmIds.size === 0 && !gtmStartFired && !gtmIframe) {
+    try {
+      const html = await page.content();
+      if (html) {
+        const headEnd = html.search(/<\/head>/i);
+        const region  = headEnd > 0 ? html.slice(0, headEnd + 200) : html.slice(0, 10000);
+        for (const m of region.toUpperCase().matchAll(/GTM-[A-Z0-9]{4,}/g)) gtmIds.add(m[0]);
+        for (const m of region.toUpperCase().matchAll(/\b(?:G|GT)-[A-Z0-9]{6,}\b/g)) ga4Ids.add(m[0]);
+        if (/googletagmanager\.com\/ns\.html/i.test(region)) gtmIframe = true;
+        logDebug(`page.content() GTM fallback: found ${gtmIds.size} GTM IDs`);
+      }
+    } catch (e) {
+      logDebug(`page.content() GTM fallback failed: ${e.message}`);
+    }
   }
 
   const linkedGa4   = new Set();
@@ -451,11 +485,11 @@ async function detectTrackingSetup(page, beacons) {
     if (!linkedGa4.has(id)) unlinkedGa4.add(id);
   }
 
-  const gtmInNetwork   = beacons.some(b => /googletagmanager\.com\/gtm\.js/.test(b.url));
+  const gtmInNetwork   = beacons.some(b => /googletagmanager\.com\/(gtm\.js|ns\.html)/.test(b.url));
   const ga4FiredViaGtm = beacons.some(b => b.type === "GA4" && !!b.gtmHash);
   const globalGtmObj   = await safeEvaluate(page, () => !!window.google_tag_manager);
 
-  const has_gtm     = gtmIds.size > 0 || globalGtmObj || gtmInNetwork || ga4FiredViaGtm;
+  const has_gtm     = gtmIds.size > 0 || globalGtmObj || gtmInNetwork || ga4FiredViaGtm || gtmStartFired || gtmIframe;
   const has_any_ga4 = ga4Ids.size > 0 || beacons.some(b => b.type === "GA4");
 
   return {
