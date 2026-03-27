@@ -245,7 +245,7 @@ function classifyAndParseBeacon(reqUrl, postData) {
   if (u.includes("/g/collect") || u.includes("/r/collect")) type = "GA4";
   else if (u.includes("gtag/js"))                           type = "GTAG";
   else if (u.includes("google-analytics.com"))              type = "GA";
-  else if (u.includes("googletagmanager.com") || u.includes("/gtm.js")) type = "GTM";
+  else if (/googletagmanager\.com\/gtm\.js/.test(u)) type = "GTM";
   if (type === "OTHER") return null;
 
   let event_name = null;
@@ -350,7 +350,7 @@ async function waitForGtmInit(page, beacons, maxWaitMs = POST_CONSENT_MAX_WAIT_M
     if (gtmReady) { logDebug("✅ GTM object detected after consent"); return true; }
 
     const gtmBeacon = beacons.some(b =>
-      b.url.includes("googletagmanager.com") || b.url.includes("/gtm.js")
+      /googletagmanager\.com\/gtm\.js/.test(b.url)
     );
     if (gtmBeacon) { logDebug("✅ GTM beacon detected after consent"); return true; }
 
@@ -429,7 +429,7 @@ async function detectTrackingSetup(page, beacons) {
     }
 
     const gtmInNetwork = beacons.some(b =>
-      b.url.includes("googletagmanager.com") || b.url.includes("/gtm.js")
+      /googletagmanager\.com\/gtm\.js/.test(b.url)
     );
     const globalGtmObj = await safeEvaluate(page, () => !!window.google_tag_manager);
 
@@ -451,7 +451,7 @@ async function detectTrackingSetup(page, beacons) {
     if (!linkedGa4.has(id)) unlinkedGa4.add(id);
   }
 
-  const gtmInNetwork   = beacons.some(b => b.url.includes("googletagmanager.com") || b.url.includes("/gtm.js"));
+  const gtmInNetwork   = beacons.some(b => /googletagmanager\.com\/gtm\.js/.test(b.url));
   const ga4FiredViaGtm = beacons.some(b => b.type === "GA4" && !!b.gtmHash);
   const globalGtmObj   = await safeEvaluate(page, () => !!window.google_tag_manager);
 
@@ -541,9 +541,14 @@ async function scanCTAsOnPage(page) {
   }));
 
   const plainText = await safeEvaluate(page, () => {
+    function normPhone(d) {
+      if (d.startsWith('+44')) return '0' + d.slice(3);
+      if (d.startsWith('0044')) return '0' + d.slice(4);
+      return d;
+    }
     const linkedPhones = new Set(
       Array.from(document.querySelectorAll("a[href^='tel:' i]"))
-        .map(a => (a.getAttribute("href") || "").replace(/[^\d\+]/g, "")).filter(Boolean)
+        .map(a => normPhone((a.getAttribute("href") || "").replace(/[^\d\+]/g, ""))).filter(Boolean)
     );
     const linkedEmails = new Set(
       Array.from(document.querySelectorAll("a[href^='mailto:' i]"))
@@ -553,7 +558,15 @@ async function scanCTAsOnPage(page) {
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
       acceptNode(node) {
         const tag = node.parentElement?.tagName?.toLowerCase();
-        if (["script","style","noscript","head"].includes(tag)) return NodeFilter.FILTER_REJECT;
+        if (["script","style","noscript","head","template"].includes(tag)) return NodeFilter.FILTER_REJECT;
+        const el = node.parentElement;
+        if (el) {
+          try {
+            if (typeof el.checkVisibility === "function" && !el.checkVisibility({ checkVisibilityCSS: true }))
+              return NodeFilter.FILTER_REJECT;
+          } catch {}
+          if (el.offsetWidth === 0 && el.offsetHeight === 0) return NodeFilter.FILTER_REJECT;
+        }
         return NodeFilter.FILTER_ACCEPT;
       }
     });
@@ -561,6 +574,8 @@ async function scanCTAsOnPage(page) {
     // Require UK (starts 0) or international (starts +) — at least 10 pure digits, max 13
     const phonePattern = /(?<![.\d])(\+?0[\d\s\-\(\)\.]{7,16}[\d]|\+[1-9]\d[\d\s\-\(\)\.]{6,14}[\d])(?![.\d])/g;
     const emailPattern = /([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})/g;
+    // Reserved / placeholder domains that will never be real contact emails
+    const placeholderDomains = new Set(["example.com","example.org","example.net","example.co.uk","test.com","placeholder.com","domain.com","yourdomain.com","email.com"]);
     const foundPhones = [], foundEmails = [];
 
     let node;
@@ -576,14 +591,16 @@ async function scanCTAsOnPage(page) {
           // Must be 10–13 digits; exclude IP addresses (e.g. 192.168.1.1)
           if (pureDigits.length < 10 || pureDigits.length > 13) continue;
           if (/^\d{1,3}(?:[.\s]\d{1,3}){3}$/.test(m[1].trim())) continue;
-          const digits = m[1].replace(/[^\d\+]/g, "");
+          const digits = normPhone(m[1].replace(/[^\d\+]/g, ""));
           if (!linkedPhones.has(digits))
             foundPhones.push({ raw: m[1].trim(), digits });
         }
       }
       if (!isEmailLink) {
         for (const m of text.matchAll(emailPattern)) {
-          const norm = m[1].trim().toLowerCase();
+          const norm   = m[1].trim().toLowerCase();
+          const domain = norm.split("@")[1] || "";
+          if (placeholderDomains.has(domain)) continue;
           if (!linkedEmails.has(norm)) foundEmails.push({ raw: m[1].trim(), norm });
         }
       }
@@ -875,6 +892,15 @@ async function detectFieldType(el) {
     if (type === "checkbox")               return { type: "checkbox" };
     if (type === "radio")                  return { type: "radio" };
     if (type === "hidden")                 return { type: "hidden" };
+    if (type === "file")                   return { type: "file" };
+    if (type === "date")                   return { type: "date" };
+    if (type === "time")                   return { type: "time" };
+    if (type === "datetime-local")         return { type: "datetime-local" };
+    if (type === "month")                  return { type: "month" };
+    if (type === "week")                   return { type: "week" };
+    if (type === "number" || type === "range") return { type: "number" };
+    if (type === "url")                    return { type: "url" };
+    if (type === "color")                  return { type: "color" };
     if (/email/.test(c))                   return { type: "email" };
     if (/phone|tel|mobile/.test(c))        return { type: "phone" };
     if (/message|enquiry|comment|details|how.?can/.test(c) || tag === "textarea") return { type: "message" };
@@ -902,6 +928,38 @@ async function fillFormFieldSmart(el, fieldInfo) {
       await el.check({ timeout: 500, force: true }).catch(() => null);
       return;
     }
+    // Native date/time inputs — fill with correctly-formatted values
+    if (type === "date") {
+      await el.fill(TEST_VALUES.date, { timeout: 500 }).catch(() => null);
+      return;
+    }
+    if (type === "time") {
+      await el.fill("10:00", { timeout: 500 }).catch(() => null);
+      return;
+    }
+    if (type === "datetime-local") {
+      await el.fill(`${TEST_VALUES.date}T10:00`, { timeout: 500 }).catch(() => null);
+      return;
+    }
+    if (type === "month") {
+      await el.fill("2026-12", { timeout: 500 }).catch(() => null);
+      return;
+    }
+    if (type === "week") {
+      await el.fill("2026-W52", { timeout: 500 }).catch(() => null);
+      return;
+    }
+    if (type === "number") {
+      await el.fill(TEST_VALUES.number, { timeout: 500 }).catch(() => null);
+      return;
+    }
+    if (type === "url") {
+      await el.fill("https://example.com", { timeout: 500 }).catch(() => null);
+      return;
+    }
+    // Skip inputs the bot genuinely cannot fill
+    if (type === "file" || type === "color" || type === "range") return;
+
     const valueMap = {
       email: TEST_VALUES.email, phone: TEST_VALUES.phone, message: TEST_VALUES.message,
       firstName: TEST_VALUES.firstName, lastName: TEST_VALUES.lastName,
