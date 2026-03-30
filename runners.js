@@ -2487,22 +2487,6 @@ app.post("/run", async (req, res) => {
       await page.waitForTimeout(1500);
       console.log("📍 URL after terms:", page.url());
 
-      // ── URL input locator (used regardless of which path we take) ─────────────
-      const websiteUrlInput = page
-        .locator(
-          [
-            'input[type="url"]',
-            'input[aria-label*="Website URL" i]',
-            'input[aria-label*="Website" i]',
-            'input[placeholder*="website" i]',
-            'input[placeholder*="example" i]',
-            'input[placeholder*="mywebsite" i]',
-            'input[placeholder*="www" i]',
-            'input[placeholder*="domain" i]',
-          ].join(", "),
-        )
-        .first();
-
       // ── Strategy: poll for property ID in URL, then navigate directly ─────────
       // GA4's post-terms UI changes frequently; the stream creation URL is stable.
       // We poll up to 15s for the property ID to appear after terms acceptance.
@@ -2527,6 +2511,12 @@ app.post("/run", async (req, res) => {
       }
       console.log(`📍 Extracted — accountId: ${s6AccountId}, propertyId: ${s6PropertyId}`);
 
+      // ── Platform picker button (shared across both paths) ─────────────────────
+      const webPickerBtn = page
+        .locator('button, [role="button"], [role="option"]')
+        .filter({ hasText: /\bweb(site|stream)?\b/i })
+        .first();
+
       if (s6PropertyId) {
         // Primary path: navigate directly — bypasses whatever picker/interstitial GA is showing
         const streamUrl = s6AccountId
@@ -2534,51 +2524,36 @@ app.post("/run", async (req, res) => {
           : `https://analytics.google.com/analytics/web/#/p${s6PropertyId}/admin/streams/new/web`;
         console.log(`🔗 Navigating directly to stream creation: ${streamUrl}`);
         await page.goto(streamUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
-        await page.waitForTimeout(2000);
+        // Allow the Angular SPA to finish routing — networkidle is the most reliable signal
+        await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
+        await page.waitForTimeout(1500);
+        console.log(`📍 URL after direct nav: ${page.url()}`);
 
-        // After direct navigation the platform picker may still appear (GA sometimes
-        // shows it even on the /new/web URL). Handle it the same as before.
-        const webPickerBtn = page
-          .locator('button, [role="button"], [role="option"]')
-          .filter({ hasText: /\bweb(site|stream)?\b/i })
-          .first();
-
-        const s6DirectState = await Promise.race([
-          webPickerBtn.waitFor({ state: "visible", timeout: 8000 }).then(() => "PICKER"),
-          websiteUrlInput.waitFor({ state: "visible", timeout: 8000 }).then(() => "FORM"),
-        ]).catch(() => "FORM"); // if neither appears, assume form and let waitFor below catch it
-
-        if (s6DirectState === "PICKER") {
+        // If the platform picker is still showing, click Web
+        const pickerVisible = await webPickerBtn.isVisible().catch(() => false);
+        if (pickerVisible) {
           console.log("🧭 Picker still showing after direct nav — clicking Web...");
           await webPickerBtn.click({ timeout: 10000 });
+          await page.waitForTimeout(1000);
         }
-
-        await websiteUrlInput.waitFor({ state: "visible", timeout: 30000 });
         console.log("✅ Web stream form ready (direct URL path)");
       } else {
         // Fallback: property ID never appeared — try the picker the traditional way
         console.log("⚠️ No property ID found in URL after 15s — falling back to picker");
         await page.screenshot({ path: "step6_fallback.png", fullPage: true }).catch(() => {});
 
-        const webPickerBtn = page
-          .locator('button, [role="button"], [role="option"]')
-          .filter({ hasText: /\bweb(site|stream)?\b/i })
-          .first();
+        const pickerVisible = await webPickerBtn
+          .waitFor({ state: "visible", timeout: 20000 })
+          .then(() => true)
+          .catch(() => false);
 
-        const s6FallbackState = await Promise.race([
-          webPickerBtn.waitFor({ state: "visible", timeout: 20000 }).then(() => "PICKER"),
-          websiteUrlInput.waitFor({ state: "visible", timeout: 20000 }).then(() => "FORM"),
-        ]).catch(() => "UNKNOWN");
-
-        if (s6FallbackState === "PICKER") {
+        if (pickerVisible) {
           console.log("🧭 Picker found — clicking Web...");
           await webPickerBtn.click({ timeout: 15000 });
-          await websiteUrlInput.waitFor({ state: "visible", timeout: 30000 });
-        } else if (s6FallbackState === "FORM") {
-          console.log("✅ Already on web stream form");
+          await page.waitForTimeout(1000);
         } else {
+          // Last resort — try the legacy clickWebPlatform helper
           await clickWebPlatform(page);
-          await websiteUrlInput.waitFor({ state: "visible", timeout: 30000 });
         }
         console.log("✅ Web stream form ready (picker fallback path)");
       }
