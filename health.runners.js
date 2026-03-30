@@ -1508,8 +1508,8 @@ async function trackingHealthCheckSiteInternal(url) {
 
   // ── Return payload — maps directly to DB schema ──
   const results = {
-    url: targetUrl,
-    timestamp: nowIso(),
+    website_url: targetUrl,
+    ran_at: nowIso(),
     grade: null,
     health_status: null,
     health_reasons: null,
@@ -1544,10 +1544,14 @@ async function trackingHealthCheckSiteInternal(url) {
 
     // failure_detail retained in full for callers that need structured issue data
     failure_detail: [],
+
+    ga4_events_captured: [],
+    duration_ms: null,
   };
 
   let context = null,
     page = null;
+  const _checkStart = Date.now();
 
   try {
     logInfo(`🔍 [${SCRIPT_VERSION}] Starting check`, { url: targetUrl });
@@ -2062,12 +2066,15 @@ async function trackingHealthCheckSiteInternal(url) {
       });
     }
 
+    results.ga4_events_captured = [...new Set(beacons.filter(b => b.type === "GA4" && b.event_name).map(b => b.event_name))];
+    results.duration_ms = Date.now() - _checkStart;
+
     logInfo(`╚══════════════════════════════════════════════╝\n`);
     logInfo("✅ Check complete", { url: targetUrl, grade, status: health_status });
     return results;
   } catch (error) {
     logInfo(`❌ Fatal error`, { url: targetUrl, error: error.message });
-    return { ...results, grade: "Partial", health_status: "ERROR", health_reasons: `Fatal error: ${error.message}` };
+    return { ...results, grade: "Partial", health_status: "ERROR", health_reasons: `Fatal error: ${error.message}`, duration_ms: Date.now() - _checkStart };
   } finally {
     if (page) {
       try {
@@ -2094,7 +2101,7 @@ async function trackingHealthCheckSite(url) {
     );
   } catch (e) {
     logInfo(`⏱ Check aborted: ${e.message}`, { url });
-    return { url: normaliseUrl(url), grade: "Partial", health_status: "ERROR", health_reasons: e.message };
+    return { website_url: normaliseUrl(url), grade: "Partial", health_status: "ERROR", health_reasons: e.message };
   } finally {
     releaseCheckSlot();
   }
