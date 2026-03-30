@@ -15,7 +15,7 @@ app.use(
   createProxyMiddleware({
     target: `http://127.0.0.1:${HEALTH_RUNNER_PORT}`,
     changeOrigin: true,
-    pathRewrite: { "^/health": "" },
+
     proxyTimeout: 120000,
     timeout: 120000,
   })
