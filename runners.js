@@ -1719,7 +1719,13 @@ app.post("/run", async (req, res) => {
     /* ================= LOGIN ================= */
     await page.goto("https://analytics.google.com", { waitUntil: "domcontentloaded" });
 
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < 15; i++) {
+      const url = page.url();
+
+      // ── Reached Analytics — done ──────────────────────────────────────────────
+      if (url.startsWith("https://analytics.google.com")) break;
+
+      // ── Email input ───────────────────────────────────────────────────────────
       if ((await page.locator('input[type="email"]:visible').count()) > 0) {
         await page.fill('input[type="email"]:visible', google_email);
         await page.keyboard.press("Enter");
@@ -1727,6 +1733,7 @@ app.post("/run", async (req, res) => {
         continue;
       }
 
+      // ── Password input ────────────────────────────────────────────────────────
       if ((await page.locator('input[name="Passwd"]:visible').count()) > 0) {
         await page.fill('input[name="Passwd"]:visible', google_password);
         await page.keyboard.press("Enter");
@@ -1734,14 +1741,14 @@ app.post("/run", async (req, res) => {
         continue;
       }
 
-      if (page.url().includes("onelogin.com")) {
+      // ── SSO (OneLogin) ────────────────────────────────────────────────────────
+      if (url.includes("onelogin.com")) {
         if ((await page.locator('input[name="username"]:visible').count()) > 0) {
           await page.fill('input[name="username"]:visible', sso_username);
           await page.keyboard.press("Enter");
           await page.waitForTimeout(3000);
           continue;
         }
-
         if ((await page.locator('input[name="password"]:visible').count()) > 0) {
           await page.fill('input[name="password"]:visible', sso_password);
           await page.keyboard.press("Enter");
@@ -1750,7 +1757,7 @@ app.post("/run", async (req, res) => {
         }
       }
 
-      //code needed?
+      // ── OTP / 2FA input ───────────────────────────────────────────────────────
       if ((await page.locator('input[type="tel"]:visible').count()) > 0) {
         const sessionId = `otp_${Date.now()}`;
         sessions[sessionId] = page;
@@ -1758,7 +1765,44 @@ app.post("/run", async (req, res) => {
         return res.json({ status: "need_code", stage: "google_otp", sessionId });
       }
 
-      if (page.url().startsWith("https://analytics.google.com")) break;
+      // ── "Choose an account" picker ────────────────────────────────────────────
+      // Google shows this when multiple accounts are signed in to the browser
+      const accountPickerEmail = page
+        .locator(`[data-identifier*="${google_email}"], li:has-text("${google_email}"), [data-email*="${google_email}"]`)
+        .first();
+      if (await accountPickerEmail.isVisible().catch(() => false)) {
+        await accountPickerEmail.click();
+        await page.waitForTimeout(3000);
+        continue;
+      }
+      // Generic picker — just click the first listed account
+      const anyPickerAccount = page.locator('[data-identifier], .OVnw0d').first();
+      if (await anyPickerAccount.isVisible().catch(() => false)) {
+        await anyPickerAccount.click();
+        await page.waitForTimeout(3000);
+        continue;
+      }
+
+      // ── "Stay signed in?" / "Don't ask again" interstitial ───────────────────
+      const staySignedIn = page
+        .locator('button:has-text("Yes"), button:has-text("Stay signed in"), [jsname="LgbsSe"]:has-text("Yes")')
+        .first();
+      if (await staySignedIn.isVisible().catch(() => false)) {
+        await staySignedIn.click();
+        await page.waitForTimeout(3000);
+        continue;
+      }
+
+      // ── "Continue" interstitial (Google account confirmation screen) ──────────
+      const continueBtn = page
+        .locator('button:has-text("Continue"), a:has-text("Continue")')
+        .first();
+      if (await continueBtn.isVisible().catch(() => false)) {
+        await continueBtn.click();
+        await page.waitForTimeout(3000);
+        continue;
+      }
+
       await page.waitForTimeout(3000);
     }
 
@@ -1988,9 +2032,17 @@ app.post("/run", async (req, res) => {
         throw new Error("Could not reach Account Create page (GA kept bouncing to Reports)");
       }
 
-      // 4) Continue your existing wizard steps (UNCHANGED)
+      // 4) Fill account name and verify it stuck before clicking Next
       await accountInput.waitFor({ timeout: 30000 });
       await accountInput.fill(account_name);
+      await page.waitForTimeout(300);
+      // Verify the value took — Angular inputs can silently lose fills
+      const filledValue = await accountInput.inputValue().catch(() => "");
+      if (filledValue !== account_name) {
+        await accountInput.click({ force: true });
+        await accountInput.fill(account_name);
+        await page.waitForTimeout(300);
+      }
       await page.click('button:has-text("Next")');
 
       /* ======================================================
@@ -2451,6 +2503,13 @@ app.post("/run", async (req, res) => {
           const panel = page
             .locator('div[role="dialog"]:visible, .cdk-overlay-pane:visible, .mat-dialog-container:visible')
             .first();
+
+          // Scroll the terms content to the bottom — GA4 sometimes requires it before Accept enables
+          await panel.evaluate((el) => {
+            const scrollable = el.querySelector('[class*="content"], [class*="body"], [class*="scroll"]') || el;
+            scrollable.scrollTop = scrollable.scrollHeight;
+          }).catch(() => {});
+          await page.waitForTimeout(500);
 
           const cbs = panel.locator('input[type="checkbox"]');
           const n = await cbs.count();
@@ -4275,17 +4334,18 @@ app.post("/run", async (req, res) => {
     }
   } catch (err) {
     console.error("❌ ERROR:", err);
-    if (browser) await browser.close();
-
     return res.json({
       status: "failed",
       reason: "automation_error",
       error: err.message,
     });
+  } finally {
+    // Always close the browser — prevents process leaks if res.json() itself throws
+    if (browser) await browser.close().catch(() => {});
   }
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(3000, "0.0.0.0", () => {
-  console.log(`🚀 V29 RUNNER DEPLOYED ON ALL INTERFACES: Port 3000`);
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`🚀 Runner listening on port ${PORT}`);
 });
