@@ -1,9 +1,23 @@
-// /health-check-v27.js
+// health.runners.js
 // INTELLIGENT TRACKING HEALTH CHECK
-// Version: V27-CONCURRENCY-FIX
+//
+// Version history:
+//   V27  2026-03-13  Concurrency fix — raised MAX_CONCURRENT to 20, async queue with slot
+//                    acquire/release, 120s global timeout per site
+//   V28  2026-03-25  Roll back to clean base; add WebGL crash fix (--disable-webgl/2),
+//                    browser crash recovery (disconnected event + newContext retry),
+//                    tightened phone regex (pureDigits 10–13 chars, IP exclusion)
+//   V29  2026-03-25  Restore feedback improvements: 4-attempt GTM retry loop with delays,
+//                    live iframe scan, gtm.start dataLayer signal, page.content() fallback,
+//                    Playwright HTTP fallback (Chrome TLS), non-clickable false-positive fix
+//   V30  2026-03-25  Remove GPU compositing crash (--disable-gpu-compositing,
+//                    --disable-accelerated-2d-canvas, --disable-accelerated-video-decode),
+//                    comment out non-clickable contact detection (too many false positives)
+//   V31  2026-03-30  GTM final retry delay increased 3s → 6s; non-clickable detection
+//                    removed entirely; grade output simplified to Perfect / Partial / Fail
 //
 
-const SCRIPT_VERSION = "2026-03-13T18:00:00Z-V27";
+const SCRIPT_VERSION = "2026-03-30T00:00:00Z-V31";
 
 const { chromium } = require("playwright");
 
