@@ -92,33 +92,77 @@ async function fillWebStreamForm(page, { websiteUrl, websiteName }) {
     .first();
   const scope = (await dialog.count()) > 0 ? dialog : page;
 
-  // 1) Wait for the Website URL/domain input to exist (most stable selector)
-  let domainInput = scope.getByPlaceholder("www.mywebsite.com");
+  // 1) Find the URL/domain input — try every known selector GA4 has ever used,
+  //    then fall back to positional heuristics (first text input on the form).
+  //    Google changes these attributes frequently so we cast a wide net.
+  let domainInput = null;
 
-  if ((await domainInput.count()) === 0) {
-    // Fallback if placeholder changes
-    domainInput = scope
-      .locator(
-        'input[aria-label*="Website"], input[aria-label*="website"], input[name*="website"], input[name*="domain"]',
-      )
-      .first();
+  const urlSelectors = [
+    // Placeholder variants GA4 has used historically
+    () => scope.getByPlaceholder("www.mywebsite.com"),
+    () => scope.getByPlaceholder(/example\.com/i),
+    () => scope.getByPlaceholder(/https?:\/\//i),
+    () => scope.getByPlaceholder(/your.*site|site.*url|website/i),
+    // Attribute-based
+    () => scope.locator('input[type="url"]').first(),
+    () => scope.locator('input[aria-label*="URL" i]').first(),
+    () => scope.locator('input[aria-label*="Website" i]').first(),
+    () => scope.locator('input[aria-label*="Stream URL" i]').first(),
+    () => scope.locator('input[aria-label*="domain" i]').first(),
+    () => scope.locator('input[name*="url" i], input[name*="website" i], input[name*="domain" i]').first(),
+  ];
+
+  for (const sel of urlSelectors) {
+    try {
+      const loc = sel();
+      if ((await loc.count()) > 0 && (await loc.first().isVisible().catch(() => false))) {
+        domainInput = loc.first();
+        console.log("✅ Found domain input via selector");
+        break;
+      }
+    } catch {}
   }
 
-  await domainInput.waitFor({ timeout: 30000 });
+  // Last resort: find ALL visible text inputs on the form and pick the first one
+  // that is not the stream name field (which typically comes second)
+  if (!domainInput) {
+    console.log("⚠️ No URL input found via known selectors — scanning all visible inputs");
+    await page.screenshot({ path: "fillWebStreamForm_scan.png", fullPage: true }).catch(() => {});
 
-  // 2) Parse URL and fill only hostname (GA expects domain because protocol is separate)
+    const allInputs = scope.locator('input[type="text"]:visible, input:not([type]):visible').filter({ hasText: "" });
+    const inputCount = await allInputs.count();
+    console.log(`   Found ${inputCount} visible text inputs on scope`);
+
+    if (inputCount > 0) {
+      domainInput = allInputs.first();
+    } else {
+      // Absolute fallback — any visible input on the whole page
+      await page.screenshot({ path: "fillWebStreamForm_noinput.png", fullPage: true }).catch(() => {});
+      throw new Error(
+        `fillWebStreamForm: cannot find URL input. Page URL: ${page.url()}. ` +
+        `Check fillWebStreamForm_noinput.png on the server for the current GA4 form state.`
+      );
+    }
+  }
+
+  // 2) Parse URL — GA4 expects just the domain (hostname) in the URL field;
+  //    the protocol is handled by a separate dropdown on the form
   const cleaned = String(websiteUrl || "").trim();
   const withProto = /^https?:\/\//i.test(cleaned) ? cleaned : `https://${cleaned}`;
   const urlObj = new URL(withProto);
 
+  await domainInput.click({ timeout: 10000 }).catch(() => {});
   await domainInput.fill(urlObj.hostname);
+  await page.waitForTimeout(300);
 
   // 3) Fill Stream name
   let streamNameInput = scope.getByLabel(/Stream name/i);
+  if ((await streamNameInput.count()) === 0)
+    streamNameInput = scope.locator('input[aria-label*="Stream" i], input[name*="stream" i]').first();
   if ((await streamNameInput.count()) === 0) {
-    streamNameInput = scope
-      .locator('input[aria-label*="Stream"], input[aria-label*="stream"], input[name*="stream"]')
-      .first();
+    // Second visible text input on the form
+    const allInputs2 = scope.locator('input[type="text"]:visible, input:not([type]):visible');
+    if ((await allInputs2.count()) > 1) streamNameInput = allInputs2.nth(1);
   }
   await streamNameInput.waitFor({ timeout: 20000 });
   await streamNameInput.fill(String(websiteName || "").trim());
