@@ -619,7 +619,7 @@ async function detectTrackingSetup(page, beacons) {
 
     if (gtmIds.size > 0 || gtmInNetwork || globalGtmObj || gtmStartFired || gtmIframe) break;
 
-    await safeWait([500, 1000, 2000, 3000][attempt] || 1000);
+    await safeWait([500, 1000, 2000, 6000][attempt] || 1000);
   }
 
   // Last-resort fallback: if safeEvaluate failed entirely (WAF blocking CDP injection),
@@ -745,7 +745,7 @@ async function scanCTAsOnPage(page) {
       .filter((x) => x.href),
   }));
 
-  /* NON-CLICKABLE CONTACT DETECTION — disabled, too many false positives, re-enable when accurate
+  /* NON-CLICKABLE CONTACT DETECTION — removed, too many false positives
   const plainText = await safeEvaluate(page, () => {
     function normPhone(d) {
       if (d.startsWith('+44')) return '0' + d.slice(3);
@@ -820,8 +820,6 @@ async function scanCTAsOnPage(page) {
   return {
     phones: clickable?.phones || [],
     emails: clickable?.emails || [],
-    nonClickablePhones: [], // disabled — see comment above
-    nonClickableEmails: [], // disabled — see comment above
   };
 }
 
@@ -1068,10 +1066,6 @@ async function testCTAsOnPage(
     if (norm) uniqueEmails.add(norm);
   }
 
-  return {
-    nonClickablePhones: ctas.nonClickablePhones || [],
-    nonClickableEmails: ctas.nonClickableEmails || [],
-  };
 }
 
 // ─────────────────────────────────────────────
@@ -1492,8 +1486,6 @@ async function trackingHealthCheckSiteInternal(url) {
   const interceptedForms = [];
   const uniquePhones = new Set();
   const uniqueEmails = new Set();
-  // const uniqueNonClickPhones = new Set(); // disabled with non-clickable detection
-  // const uniqueNonClickEmails = new Set(); // disabled with non-clickable detection
   const visitedUrls = new Set();
   const phoneItems = [];
   const emailItems = [];
@@ -1525,10 +1517,9 @@ async function trackingHealthCheckSiteInternal(url) {
     forms_passed: 0,
     forms_failed: 0,
 
-    // cta_details: phones.items + phones.not_clickable_items, emails.items + emails.not_clickable_items
     cta_details: {
-      phones: { items: [], not_clickable_items: [] },
-      emails: { items: [], not_clickable_items: [] },
+      phones: { items: [] },
+      emails: { items: [] },
     },
 
     // form_details: forms.pages array
@@ -1617,7 +1608,7 @@ async function trackingHealthCheckSiteInternal(url) {
       logInfo(`⚠️ Homepage failed to load: ${gotoResult.error}`);
       const pageHasContent = await safeEvaluate(page, () => (document.body?.innerText || "").length > 100);
       if (!pageHasContent) {
-        results.grade = "T3";
+        results.grade = "Fail";
         results.health_status = "SITE_UNAVAILABLE";
         results.health_reasons = `Site could not be reached: ${gotoResult.error}`;
         return results;
@@ -1635,7 +1626,7 @@ async function trackingHealthCheckSiteInternal(url) {
     results.detected_ga4_ids = [...tracking.ga4, ...tracking.unlinked_ga4];
 
     if (!tracking.has_gtm) {
-      results.grade = "FAIL";
+      results.grade = "Fail";
       results.health_status = "NO_TRACKING";
       results.health_reasons =
         "No GTM container detected after cookie consent was accepted. No GTM tag IDs in source, no GTM network requests, no google_tag_manager global object.";
@@ -1679,7 +1670,7 @@ async function trackingHealthCheckSiteInternal(url) {
         await waitForGtmInit(page, beacons, POST_CONSENT_MAX_WAIT_MS / 2);
       }
 
-      const { nonClickablePhones, nonClickableEmails } = await testCTAsOnPage(
+      await testCTAsOnPage(
         page,
         beacons,
         page.url(),
@@ -1690,28 +1681,6 @@ async function trackingHealthCheckSiteInternal(url) {
         phoneDone,
         emailDone,
       );
-
-      /* NON-CLICKABLE PROCESSING — disabled, see scanCTAsOnPage comment
-      for (const ph of nonClickablePhones) {
-        if (uniqueNonClickPhones.has(ph.digits)) continue;
-        uniqueNonClickPhones.add(ph.digits);
-        results.cta_details.phones.not_clickable_items.push({
-          raw: ph.raw, digits: ph.digits, status: "NOT_CLICKABLE", page_url: page.url(),
-          reason: "Phone number found as plain text — no <a href=\"tel:\"> wrapping it. Cannot be tracked.",
-          fix: `Wrap in a tel: link: <a href="tel:${ph.digits}">${ph.raw}</a>. Then add a GTM Click – Just Links trigger for href contains tel: with a GA4 Event tag.`
-        });
-      }
-
-      for (const em of nonClickableEmails) {
-        if (uniqueNonClickEmails.has(em.norm)) continue;
-        uniqueNonClickEmails.add(em.norm);
-        results.cta_details.emails.not_clickable_items.push({
-          raw: em.raw, norm: em.norm, status: "NOT_CLICKABLE", page_url: page.url(),
-          reason: "Email address found as plain text — no <a href=\"mailto:\"> wrapping it. Cannot be tracked.",
-          fix: `Wrap in a mailto: link: <a href="mailto:${em.norm}">${em.raw}</a>. Then add a GTM Click – Just Links trigger for href contains mailto: with a GA4 Event tag.`
-        });
-      }
-      */
 
       const formRes = await testAllFormsOnPage(page, beacons, page.url());
       results.form_details.push(formRes);
@@ -1738,10 +1707,6 @@ async function trackingHealthCheckSiteInternal(url) {
 
     const phoneDuplicateItems = phoneItems.filter((i) => i.duplicate_fire_test?.result === "DUPLICATE_FIRED");
     const emailDuplicateItems = emailItems.filter((i) => i.duplicate_fire_test?.result === "DUPLICATE_FIRED");
-
-    const hasNonClickable =
-      results.cta_details.phones.not_clickable_items.length > 0 ||
-      results.cta_details.emails.not_clickable_items.length > 0;
 
     // ── Failure detail ──
     const failureDetail = [];
@@ -1920,17 +1885,6 @@ async function trackingHealthCheckSiteInternal(url) {
       });
     }
 
-    if (hasNonClickable) {
-      failureDetail.push({
-        category: "Non-Clickable Contacts",
-        grade_impact: "T2",
-        summary: `${results.cta_details.phones.not_clickable_items.length} phone(s) and ${results.cta_details.emails.not_clickable_items.length} email(s) found as plain text — not wrapped in a link, cannot be tracked.`,
-        items: [
-          ...results.cta_details.phones.not_clickable_items,
-          ...results.cta_details.emails.not_clickable_items,
-        ].map((i) => ({ raw: i.raw, page_url: i.page_url, status: "NOT_CLICKABLE", reason: i.reason, fix: i.fix })),
-      });
-    }
 
     if (results.forms_found > 0 && results.forms_passed === 0) {
       const botBlocked = allFormResults.some((f) => f.reason?.includes("Bot Protection"));
@@ -1979,32 +1933,27 @@ async function trackingHealthCheckSiteInternal(url) {
 
     let grade, health_status, health_reasons;
 
-    if (totalFound === 0 && !hasNonClickable) {
-      grade = "T3";
+    if (totalFound === 0) {
+      grade = "Partial";
       health_status = "NOT_TESTED";
       health_reasons =
         "No trackable CTAs were found on any page visited. Check that the site has clickable phone numbers (tel: links), email addresses (mailto: links), or contact forms visible on the pages the runner visited.";
     } else if (hasFail && !anyPassed) {
-      grade = "FAIL";
+      grade = "Fail";
       health_status = "NO_CONVERSIONS_TRACKED";
       health_reasons =
         "GTM is installed but no GA4 conversion event fired for any tested CTA or form. Check: (1) the GA4 tag is published in GTM — not just saved, (2) trigger conditions match the actual click events, (3) the GA4 Measurement ID is correct and the property is receiving data.";
-    } else if (hasT3 && !hasFail && !hasT2 && !hasNonClickable && !hasDuplicateFiring) {
-      grade = "T3";
+    } else if (hasT3 && !hasFail && !hasT2 && !hasDuplicateFiring) {
+      grade = "Partial";
       health_status = "NOT_TESTED";
       const t3FormDetail = failureDetail.find((f) => f.grade_impact === "T3" && f.category === "Contact Forms");
       health_reasons = t3FormDetail
         ? `${t3FormDetail.summary} Open GTM Preview, submit each form manually, and verify a GA4 event fires in the network tab.`
         : "CTAs were found but could not be tested automatically. Open GTM Preview, test manually, and verify GA4 events fire.";
-    } else if (hasT2 || hasNonClickable || hasDuplicateFiring || (hasFail && anyPassed)) {
-      grade = "T2";
+    } else if (hasT2 || hasDuplicateFiring || (hasFail && anyPassed)) {
+      grade = "Partial";
       health_status = "TRACKING_ISSUES_FOUND";
       const t2lines = [];
-      if (hasNonClickable)
-        t2lines.push(
-          `${results.cta_details.phones.not_clickable_items.length} phone(s) and ` +
-            `${results.cta_details.emails.not_clickable_items.length} email(s) found as plain text — wrap in tel:/mailto: links and add GTM Click triggers.`,
-        );
       if (hasDuplicateFiring)
         t2lines.push(
           `${phoneDuplicateItems.length + emailDuplicateItems.length} CTA(s) firing GA4 more than once per click — change the GTM tag firing option from "Once per event" to "Once per page".`,
@@ -2015,10 +1964,10 @@ async function trackingHealthCheckSiteInternal(url) {
         "Tracking is working but has issues. " +
         (t2lines.length > 0 ? t2lines.join(" | ") : failureDetail.map((f) => f.category).join(", "));
     } else {
-      grade = "T1";
+      grade = "Perfect";
       health_status = "PASS";
       health_reasons =
-        "All tracked CTAs are firing correctly. Every phone link, email link, and form tested fired a GA4 conversion event with no double-firing and no plain-text contacts found.";
+        "All tracked CTAs are firing correctly. Every phone link, email link, and form tested fired a GA4 conversion event with no double-firing.";
     }
 
     results.grade = grade;
@@ -2031,10 +1980,6 @@ async function trackingHealthCheckSiteInternal(url) {
     if (!tracking.has_gtm) {
       fixLines.push("Install GTM: add the <head> and <body> snippets to every page then republish.");
     } else {
-      if (hasNonClickable)
-        fixLines.push(
-          "Wrap plain-text phone/email in tel:/mailto: links, then add GTM Click – Just Links triggers with GA4 Event tags.",
-        );
       if (hasDuplicateFiring)
         fixLines.push("Change duplicate-firing tag(s) in GTM from 'Once per event' to 'Once per page'.");
       const formFails = failureDetail.find((f) => f.category === "Contact Forms" && f.grade_impact !== "T3");
@@ -2057,10 +2002,9 @@ async function trackingHealthCheckSiteInternal(url) {
 
     // ── Console output ──
     const GRADE_LABEL = {
-      T1: "✅ T1 — PASS",
-      T2: "⚠️  T2 — ISSUES FOUND",
-      T3: "🔍 T3 — NOT TESTED",
-      FAIL: "❌ FAIL — NO CONVERSIONS TRACKED",
+      Perfect: "✅ Perfect — PASS",
+      Partial: "⚠️  Partial — ISSUES / NOT TESTED",
+      Fail: "❌ Fail — NO TRACKING / NO CONVERSIONS",
     };
     logInfo(`\n╔══════════════════════════════════════════════╗`);
     logInfo(`  TRACKING HEALTH CHECK RESULT`);
@@ -2069,9 +2013,6 @@ async function trackingHealthCheckSiteInternal(url) {
     logInfo(`  WHY        : ${health_reasons}`);
     logInfo(
       `  SCORES     : Forms ${results.forms_passed}/${results.forms_found} | Calls ${results.phone_passed}/${results.phone_found} | Emails ${results.email_passed}/${results.email_found}`,
-    );
-    logInfo(
-      `  NON-CLICK  : Phones ${results.cta_details.phones.not_clickable_items.length} | Emails ${results.cta_details.emails.not_clickable_items.length}`,
     );
     logInfo(`  DUPE FIRES : Phones ${phoneDuplicateItems.length} | Emails ${emailDuplicateItems.length}`);
     logInfo(`  GTM IDs    : ${results.detected_gtm_ids.join(", ") || "none"}`);
@@ -2112,7 +2053,7 @@ async function trackingHealthCheckSiteInternal(url) {
     return results;
   } catch (error) {
     logInfo(`❌ Fatal error`, { url: targetUrl, error: error.message });
-    return { ...results, grade: "T2", health_status: "ERROR", health_reasons: `Fatal error: ${error.message}` };
+    return { ...results, grade: "Partial", health_status: "ERROR", health_reasons: `Fatal error: ${error.message}` };
   } finally {
     if (page) {
       try {
@@ -2139,7 +2080,7 @@ async function trackingHealthCheckSite(url) {
     );
   } catch (e) {
     logInfo(`⏱ Check aborted: ${e.message}`, { url });
-    return { url: normaliseUrl(url), grade: "T2", health_status: "ERROR", health_reasons: e.message };
+    return { url: normaliseUrl(url), grade: "Partial", health_status: "ERROR", health_reasons: e.message };
   } finally {
     releaseCheckSlot();
   }
@@ -2182,7 +2123,7 @@ async function runBatchHealthCheck(jobId, clients, callbackUrl = null) {
           ...metadata,
           url,
           index: _index,
-          grade: "T2",
+          grade: "Partial",
           health_status: "ERROR",
           health_reasons: error.message,
         });
