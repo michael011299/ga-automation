@@ -2126,37 +2126,44 @@ async function runBatchHealthCheck(jobId, clients, callbackUrl = null) {
 
   logInfo(`🚀 Starting batch job ${jobId} with ${clientList.length} clients`);
 
-  const promises = clientList.map(async (client) => {
-    const { url, _index, ...metadata } = client;
-    try {
-      const result = await trackingHealthCheckSite(url);
-      const job = batchJobs.get(jobId);
-      if (job) {
-        job.results.push({ ...metadata, url, index: _index, ...result });
-        job.completed++;
-        logDebug(`✓ Batch job ${jobId}: completed ${job.completed}/${job.total}`);
+  let nextIndex = 0;
+  async function runWorker() {
+    while (true) {
+      const i = nextIndex++;
+      if (i >= clientList.length) break;
+      const client = clientList[i];
+      const { url, _index, ...metadata } = client;
+      try {
+        const result = await trackingHealthCheckSite(url);
+        const job = batchJobs.get(jobId);
+        if (job) {
+          job.results.push({ ...metadata, url, index: _index, ...result });
+          job.completed++;
+          logDebug(`✓ Batch job ${jobId}: completed ${job.completed}/${job.total}`);
+        }
+      } catch (error) {
+        const job = batchJobs.get(jobId);
+        if (job) {
+          job.results.push({
+            ...metadata,
+            url,
+            index: _index,
+            grade: "Partial",
+            health_status: "ERROR",
+            health_reasons: error.message,
+          });
+          job.completed++;
+          logDebug(`✗ Batch job ${jobId}: error for ${url} - ${error.message}`);
+        }
       }
-      return result;
-    } catch (error) {
-      const job = batchJobs.get(jobId);
-      if (job) {
-        job.results.push({
-          ...metadata,
-          url,
-          index: _index,
-          grade: "Partial",
-          health_status: "ERROR",
-          health_reasons: error.message,
-        });
-        job.completed++;
-        logDebug(`✗ Batch job ${jobId}: error for ${url} - ${error.message}`);
-      }
-      return { url, health_status: "ERROR", health_reasons: error.message };
     }
-  });
+  }
+
+  const workerCount = Math.min(MAX_CONCURRENT_CHECKS, clientList.length);
+  logInfo(`🔄 Batch job ${jobId}: spawning ${workerCount} workers for ${clientList.length} clients`);
 
   try {
-    await Promise.all(promises);
+    await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
     const job = batchJobs.get(jobId);
     if (job) {
       job.status = "complete";
