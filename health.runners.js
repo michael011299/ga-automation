@@ -15,9 +15,12 @@
 //                    comment out non-clickable contact detection (too many false positives)
 //   V31  2026-03-30  GTM final retry delay increased 3s → 6s; non-clickable detection
 //                    removed entirely; grade output simplified to Perfect / Partial / Fail
+//   V32  2026-03-30  Fix t.co substring matching social domain blocker (false-positives on .com sites);
+//                    fix G-RECAPTCHA false GA4 ID (require digit in ID); add <link> tag GTM scan;
+//                    direct GA4 (no GTM) allowed through to CTA testing; more cookie consent CMPs
 //
 
-const SCRIPT_VERSION = "2026-03-30T00:00:00Z-V31";
+const SCRIPT_VERSION = "2026-03-30T12:00:00Z-V32";
 
 const { chromium } = require("playwright");
 
@@ -144,6 +147,18 @@ const SOCIAL_DOMAINS = [
   "fb.com",
   "x.com",
 ];
+
+// Proper social-domain check — use hostname boundary matching, not substring.
+// Substring matching ("t.co".includes) false-fires on any .com domain ending in "t"
+// e.g. paullonghurst.com, handsonfeet.com, carillionprint.co.uk
+function isSocialDomain(urlStr) {
+  try {
+    const hostname = new URL(urlStr).hostname.toLowerCase();
+    return SOCIAL_DOMAINS.some((d) => hostname === d || hostname.endsWith("." + d));
+  } catch {
+    return false;
+  }
+}
 
 // ─────────────────────────────────────────────
 // FIX 1: Concurrency — async mutex for browser pool
@@ -337,7 +352,7 @@ async function withTimeout(promise, ms, msg) {
 
 // FIX 3: single-attempt safeGoto — fail fast on dead sites, no double-timeout
 async function safeGoto(page, url) {
-  if (SOCIAL_DOMAINS.some((d) => url.toLowerCase().includes(d))) {
+  if (isSocialDomain(url)) {
     return { ok: false, error: "Blocked social domain" };
   }
   try {
@@ -440,6 +455,21 @@ async function handleCookieConsent(page) {
     // TrustArc
     "#truste-consent-button",
     ".truste_popframe",
+    // OneTrust
+    "#onetrust-accept-btn-handler",
+    ".onetrust-accept-btn-handler",
+    // Borlabs Cookie
+    "#CybotCookiebotDialogBodyButtonAccept",
+    // Complianz
+    ".cmplz-accept",
+    ".cmplz-btn.cmplz-accept",
+    // WP Cookie Notice
+    "#cookie-notice-agree",
+    // GDPR Cookie Consent (WP plugin)
+    "#gdpr-cookie-accept",
+    ".gdpr-cookie-accept",
+    // Cookiebot
+    "#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll",
     // Generic patterns
     "[aria-label='Accept cookies']",
     "[aria-label='Accept all cookies']",
@@ -559,7 +589,7 @@ async function detectTrackingSetup(page, beacons) {
       function extract(str) {
         if (typeof str !== "string" || !str) return;
         for (const m of str.toUpperCase().matchAll(/GTM-[A-Z0-9]{4,}/g)) found.gtm.push(m[0]);
-        for (const m of str.toUpperCase().matchAll(/\b(?:G|GT)-[A-Z0-9]{6,}\b/g)) found.ga4.push(m[0]);
+        for (const m of str.toUpperCase().matchAll(/\b(?:G|GT)-(?=[A-Z0-9]*[0-9])[A-Z0-9]{6,}\b/g)) found.ga4.push(m[0]);
       }
       for (const s of document.querySelectorAll("script")) {
         extract(s.src);
@@ -577,6 +607,12 @@ async function detectTrackingSetup(page, beacons) {
       for (const m of document.querySelectorAll("meta")) {
         extract(m.getAttribute("content") || "");
         extract(m.getAttribute("name") || "");
+      }
+      // <link rel="preconnect/dns-prefetch"> to googletagmanager.com is a reliable GTM signal
+      for (const l of document.querySelectorAll("link[href]")) {
+        const href = l.getAttribute("href") || "";
+        if (/googletagmanager\.com/i.test(href)) found.gtmIframe = true; // reuse as GTM-present flag
+        extract(href);
       }
       if (Array.isArray(window.dataLayer)) {
         for (const push of window.dataLayer) {
@@ -624,7 +660,7 @@ async function detectTrackingSetup(page, beacons) {
       try {
         const params = new URL(b.url).searchParams;
         const id = params.get("id") || params.get("tid");
-        if (id && /^(?:G|GT)-[A-Z0-9]{6,}$/i.test(id)) ga4Ids.add(id.toUpperCase());
+        if (id && /^(?:G|GT)-(?=[A-Z0-9]*[0-9])[A-Z0-9]{6,}$/i.test(id)) ga4Ids.add(id.toUpperCase());
       } catch {}
     }
 
@@ -645,7 +681,7 @@ async function detectTrackingSetup(page, beacons) {
         const headEnd = html.search(/<\/head>/i);
         const region = headEnd > 0 ? html.slice(0, headEnd + 200) : html.slice(0, 10000);
         for (const m of region.toUpperCase().matchAll(/GTM-[A-Z0-9]{4,}/g)) gtmIds.add(m[0]);
-        for (const m of region.toUpperCase().matchAll(/\b(?:G|GT)-[A-Z0-9]{6,}\b/g)) ga4Ids.add(m[0]);
+        for (const m of region.toUpperCase().matchAll(/\b(?:G|GT)-(?=[A-Z0-9]*[0-9])[A-Z0-9]{6,}\b/g)) ga4Ids.add(m[0]);
         if (/googletagmanager\.com\/ns\.html/i.test(region)) gtmIframe = true;
         logDebug(`page.content() GTM fallback: found ${gtmIds.size} GTM IDs`);
       }
@@ -706,7 +742,7 @@ async function discoverCandidatePages(page, baseUrl) {
         const u = new URL(l.href, currentUrl);
         u.hash = "";
         const str = u.toString();
-        if (SOCIAL_DOMAINS.some((d) => u.hostname.includes(d))) return null;
+        if (isSocialDomain(str)) return null;
         if (origin && !str.startsWith(origin)) return null;
         return { url: str, text: l.text };
       } catch {
@@ -1587,7 +1623,7 @@ async function trackingHealthCheckSiteInternal(url) {
       const method = req.method();
       if (["image", "media", "font"].includes(type)) return route.abort();
       try {
-        if (SOCIAL_DOMAINS.some((d) => new URL(reqUrl).hostname.includes(d))) return route.abort();
+        if (isSocialDomain(reqUrl)) return route.abort();
       } catch {}
       const lower = reqUrl.toLowerCase();
       const isAnalytics =
@@ -1643,7 +1679,7 @@ async function trackingHealthCheckSiteInternal(url) {
     results.detected_gtm_ids = tracking.gtm;
     results.detected_ga4_ids = [...tracking.ga4, ...tracking.unlinked_ga4];
 
-    if (!tracking.has_gtm) {
+    if (!tracking.has_gtm && !tracking.has_any_ga4) {
       results.grade = "Fail";
       results.health_status = "NO_TRACKING";
       results.health_reasons =
@@ -1662,6 +1698,12 @@ async function trackingHealthCheckSiteInternal(url) {
       logInfo(`  GRADE : ❌ FAIL — NO GTM/GA4 DETECTED`);
       logInfo(`╚══════════════════════════════════════════════╝`);
       return results;
+    }
+
+    // Direct GA4 (gtag.js without GTM container): note the setup difference but continue testing
+    const directGa4Only = !tracking.has_gtm && tracking.has_any_ga4;
+    if (directGa4Only) {
+      logInfo(`⚠️  Direct GA4 detected (no GTM container) — continuing CTA tests`);
     }
 
     // ── Discover and visit pages ──
@@ -1959,8 +2001,9 @@ async function trackingHealthCheckSiteInternal(url) {
     } else if (hasFail && !anyPassed) {
       grade = "Fail";
       health_status = "NO_CONVERSIONS_TRACKED";
-      health_reasons =
-        "GTM is installed but no GA4 conversion event fired for any tested CTA or form. Check: (1) the GA4 tag is published in GTM — not just saved, (2) trigger conditions match the actual click events, (3) the GA4 Measurement ID is correct and the property is receiving data.";
+      health_reasons = directGa4Only
+        ? "Direct GA4 (gtag.js) detected — no GTM container. No GA4 conversion event fired for any tested CTA or form. Check: (1) the GA4 event tags are configured correctly in your tag setup, (2) triggers fire on the correct interactions, (3) the GA4 Measurement ID matches the property."
+        : "GTM is installed but no GA4 conversion event fired for any tested CTA or form. Check: (1) the GA4 tag is published in GTM — not just saved, (2) trigger conditions match the actual click events, (3) the GA4 Measurement ID is correct and the property is receiving data.";
     } else if (hasT3 && !hasFail && !hasT2 && !hasDuplicateFiring) {
       grade = "Partial";
       health_status = "NOT_TESTED";
