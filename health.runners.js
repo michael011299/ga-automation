@@ -18,9 +18,13 @@
 //   V32  2026-03-30  Fix t.co substring matching social domain blocker (false-positives on .com sites);
 //                    fix G-RECAPTCHA false GA4 ID (require digit in ID); add <link> tag GTM scan;
 //                    direct GA4 (no GTM) allowed through to CTA testing; more cookie consent CMPs
+//   V33  2026-03-30  Fix "mainForms is not iterable" crash (safeEvaluate null guard);
+//                    filter placeholder/fake GTM IDs (GTM-XXXXXXX, GTM-INIT, GTM-SCRIPT etc.);
+//                    filter too-short GA4 IDs (G-1234 etc., require ≥7 chars after dash);
+//                    expand CAPTCHA/bot-protection detection selectors
 //
 
-const SCRIPT_VERSION = "2026-03-30T12:00:00Z-V32";
+const SCRIPT_VERSION = "2026-03-30T14:00:00Z-V33";
 
 const { chromium } = require("playwright");
 
@@ -147,6 +151,36 @@ const SOCIAL_DOMAINS = [
   "fb.com",
   "x.com",
 ];
+
+// Placeholder / fake GTM IDs that appear in themes, starter templates, or error pages.
+// These are never real container IDs — exclude them from detected_gtm_ids.
+const FAKE_GTM_ID_PATTERNS = [
+  /^GTM-[X]+$/i,          // GTM-XXXXXXX (template placeholders)
+  /^GTM-INIT$/i,          // GTM-INIT
+  /^GTM-SCRIPT$/i,        // GTM-SCRIPT
+  /^GTM-TAG$/i,           // GTM-TAG
+  /^GTM-CODE$/i,          // GTM-CODE
+  /^GTM-ID$/i,            // GTM-ID
+  /^GTM-[0-9]{1,3}$/i,   // GTM-1, GTM-12 (too short to be real)
+];
+
+// Real GTM IDs are GTM- followed by exactly 7–8 alphanumeric chars.
+// Filter out obvious fakes before storing.
+function isValidGtmId(id) {
+  if (!id) return false;
+  const upper = id.toUpperCase();
+  if (FAKE_GTM_ID_PATTERNS.some((re) => re.test(upper))) return false;
+  // Must be GTM- + 4–10 real alphanumeric chars (real IDs are 7–8 but allow a little slack)
+  return /^GTM-[A-Z0-9]{4,10}$/.test(upper);
+}
+
+// Real GA4 measurement IDs are G- or GT- followed by ≥7 alphanumeric chars (containing ≥1 digit).
+// Short ones like G-1234 are template placeholders.
+function isValidGa4Id(id) {
+  if (!id) return false;
+  const upper = id.toUpperCase();
+  return /^(?:G|GT)-(?=[A-Z0-9]*[0-9])[A-Z0-9]{7,}$/.test(upper);
+}
 
 // Proper social-domain check — use hostname boundary matching, not substring.
 // Substring matching ("t.co".includes) false-fires on any .com domain ending in "t"
@@ -589,7 +623,8 @@ async function detectTrackingSetup(page, beacons) {
       function extract(str) {
         if (typeof str !== "string" || !str) return;
         for (const m of str.toUpperCase().matchAll(/GTM-[A-Z0-9]{4,}/g)) found.gtm.push(m[0]);
-        for (const m of str.toUpperCase().matchAll(/\b(?:G|GT)-(?=[A-Z0-9]*[0-9])[A-Z0-9]{6,}\b/g)) found.ga4.push(m[0]);
+        // Require ≥7 chars after dash (rules out G-1234, G-RECAPTCHA etc.)
+        for (const m of str.toUpperCase().matchAll(/\b(?:G|GT)-(?=[A-Z0-9]*[0-9])[A-Z0-9]{7,}\b/g)) found.ga4.push(m[0]);
       }
       for (const s of document.querySelectorAll("script")) {
         extract(s.src);
@@ -647,20 +682,20 @@ async function detectTrackingSetup(page, beacons) {
     });
 
     if (scan) {
-      scan.gtm.forEach((id) => gtmIds.add(id));
-      scan.ga4.forEach((id) => ga4Ids.add(id));
+      scan.gtm.forEach((id) => { if (isValidGtmId(id)) gtmIds.add(id); });
+      scan.ga4.forEach((id) => { if (isValidGa4Id(id)) ga4Ids.add(id); });
       if (scan.gtmStartFired) gtmStartFired = true;
       if (scan.gtmIframe) gtmIframe = true;
     }
 
     for (const b of beacons) {
       const u = b.url.toUpperCase();
-      for (const m of u.matchAll(/GTM-[A-Z0-9]{4,}/g)) gtmIds.add(m[0]);
-      if (b.type === "GA4" && b.tid) ga4Ids.add(b.tid.toUpperCase());
+      for (const m of u.matchAll(/GTM-[A-Z0-9]{4,}/g)) { if (isValidGtmId(m[0])) gtmIds.add(m[0]); }
+      if (b.type === "GA4" && b.tid && isValidGa4Id(b.tid)) ga4Ids.add(b.tid.toUpperCase());
       try {
         const params = new URL(b.url).searchParams;
         const id = params.get("id") || params.get("tid");
-        if (id && /^(?:G|GT)-(?=[A-Z0-9]*[0-9])[A-Z0-9]{6,}$/i.test(id)) ga4Ids.add(id.toUpperCase());
+        if (id && isValidGa4Id(id)) ga4Ids.add(id.toUpperCase());
       } catch {}
     }
 
@@ -680,8 +715,8 @@ async function detectTrackingSetup(page, beacons) {
       if (html) {
         const headEnd = html.search(/<\/head>/i);
         const region = headEnd > 0 ? html.slice(0, headEnd + 200) : html.slice(0, 10000);
-        for (const m of region.toUpperCase().matchAll(/GTM-[A-Z0-9]{4,}/g)) gtmIds.add(m[0]);
-        for (const m of region.toUpperCase().matchAll(/\b(?:G|GT)-(?=[A-Z0-9]*[0-9])[A-Z0-9]{6,}\b/g)) ga4Ids.add(m[0]);
+        for (const m of region.toUpperCase().matchAll(/GTM-[A-Z0-9]{4,}/g)) { if (isValidGtmId(m[0])) gtmIds.add(m[0]); }
+        for (const m of region.toUpperCase().matchAll(/\b(?:G|GT)-(?=[A-Z0-9]*[0-9])[A-Z0-9]{7,}\b/g)) { if (isValidGa4Id(m[0])) ga4Ids.add(m[0]); }
         if (/googletagmanager\.com\/ns\.html/i.test(region)) gtmIframe = true;
         logDebug(`page.content() GTM fallback: found ${gtmIds.size} GTM IDs`);
       }
@@ -693,7 +728,7 @@ async function detectTrackingSetup(page, beacons) {
   const linkedGa4 = new Set();
   const unlinkedGa4 = new Set();
   for (const b of beacons) {
-    if (b.type === "GA4" && b.tid) {
+    if (b.type === "GA4" && b.tid && isValidGa4Id(b.tid)) {
       const tid = b.tid.toUpperCase();
       if (b.gtmHash) linkedGa4.add(tid);
       else unlinkedGa4.add(tid);
@@ -704,11 +739,11 @@ async function detectTrackingSetup(page, beacons) {
   }
 
   const gtmInNetwork = beacons.some((b) => /googletagmanager\.com\/(gtm\.js|ns\.html)/.test(b.url));
-  const ga4FiredViaGtm = beacons.some((b) => b.type === "GA4" && !!b.gtmHash);
+  const ga4FiredViaGtm = beacons.some((b) => b.type === "GA4" && !!b.gtmHash && isValidGa4Id(b.tid));
   const globalGtmObj = await safeEvaluate(page, () => !!window.google_tag_manager);
 
   const has_gtm = gtmIds.size > 0 || globalGtmObj || gtmInNetwork || ga4FiredViaGtm || gtmStartFired || gtmIframe;
-  const has_any_ga4 = ga4Ids.size > 0 || beacons.some((b) => b.type === "GA4");
+  const has_any_ga4 = ga4Ids.size > 0 || linkedGa4.size > 0 || unlinkedGa4.size > 0;
 
   return {
     gtm: Array.from(gtmIds),
@@ -1122,13 +1157,15 @@ async function testCTAsOnPage(
 // Form detection & testing
 // ─────────────────────────────────────────────
 async function discoverAllFormsOnPage(page, pageUrl) {
-  const mainForms = await scanFrameForForms(page);
+  // safeEvaluate returns null when the page blocks CDP injection (WAF/bot-protection).
+  // Guard with ?? [] so spreading never throws "mainForms is not iterable".
+  const mainForms = (await scanFrameForForms(page)) ?? [];
   let frameForms = [];
   try {
     for (const frame of page.frames()) {
       if (frame === page.mainFrame()) continue;
-      const ff = await scanFrameForForms(frame);
-      if (ff?.length) {
+      const ff = (await scanFrameForForms(frame)) ?? [];
+      if (ff.length) {
         ff.forEach((f) => {
           f.isFrame = true;
         });
@@ -1347,12 +1384,29 @@ async function testFirstPartyForm(page, beacons, pageUrl, formMeta) {
     if (!(await formLocator.count())) return { status: "NOT_TESTED", reason: "Form not found in DOM" };
     const botDetected = await safeEvaluate(
       page,
-      () =>
-        !!document.querySelector(
-          "iframe[src*='recaptcha'],iframe[src*='turnstile'],.g-recaptcha,.h-captcha,[data-sitekey]",
-        ),
+      () => {
+        // CAPTCHA widgets
+        if (document.querySelector(
+          "iframe[src*='recaptcha'],iframe[src*='turnstile'],iframe[src*='hcaptcha']," +
+          ".g-recaptcha,.h-captcha,[data-sitekey],[data-captcha]," +
+          "div[class*='recaptcha'],div[class*='captcha'],div[id*='captcha']," +
+          "script[src*='recaptcha'],script[src*='hcaptcha'],script[src*='turnstile']",
+        )) return "CAPTCHA";
+        // Cloudflare challenge / interstitial page
+        if (
+          document.querySelector("#challenge-form,#cf-challenge-running,#cf-error-details") ||
+          /checking your browser|enable javascript and cookies|cloudflare ray id/i.test(document.body?.innerText || "")
+        ) return "Cloudflare";
+        // Generic "bot detected" / access denied pages
+        if (
+          /access denied|403 forbidden|you have been blocked|bot detected|automated access/i.test(
+            document.title + " " + (document.body?.innerText || "").slice(0, 500)
+          )
+        ) return "AccessDenied";
+        return null;
+      },
     );
-    if (botDetected) return { status: "FAIL", reason: "Bot Protection (CAPTCHA/Turnstile)" };
+    if (botDetected) return { status: "FAIL", reason: `Bot Protection (${botDetected})` };
 
     // Check for multi-step form (Next/Continue button or step-progress widgets)
     const multiStepBtn = await safeEvaluate(
