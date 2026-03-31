@@ -3049,7 +3049,7 @@ app.post("/run", async (req, res) => {
               await page.locator('#user_login, input[name="log"]').first().fill(cms_username);
               await page.locator('#user_pass, input[name="pwd"]').first().fill(cms_password);
               await page.locator('#wp-submit, input[type="submit"]').first().click();
-              await page.waitForURL("**/wp-admin/**", { timeout: 30000 });
+              await page.waitForURL(/\/wp-admin/i, { timeout: 30000 });
               await page.waitForTimeout(1000);
               await page.goto(url, { waitUntil: "domcontentloaded" });
               await page.waitForTimeout(2000);
@@ -3059,14 +3059,18 @@ app.post("/run", async (req, res) => {
 
           // ── Login ──────────────────────────────────────────────────────────────
           console.log(`🔐 Logging into WordPress: ${wp_admin_url}`);
-          await page.goto(wp_admin_url, { waitUntil: "domcontentloaded" });
+          await page.goto(`${baseUrl}/wp-login.php`, { waitUntil: "domcontentloaded" });
           await page.waitForTimeout(2000);
+          console.log("📍 Login page URL:", page.url());
+
           await page.locator('#user_login, input[name="log"]').first().fill(cms_username);
           await page.locator('#user_pass, input[name="pwd"]').first().fill(cms_password);
           await page.locator('#wp-submit, input[type="submit"]').first().click();
-          await page.waitForURL("**/wp-admin/**", { timeout: 30000 });
+
+          // Wait for any wp-admin URL (regex handles trailing slash, no-path, subpaths)
+          await page.waitForURL(/\/wp-admin/i, { timeout: 30000 });
           await page.waitForTimeout(1000);
-          console.log("✅ Logged into WordPress");
+          console.log("✅ Logged into WordPress, URL:", page.url());
 
           // ── WPCode check ───────────────────────────────────────────────────────
           console.log("🔌 Checking for WPCode plugin...");
