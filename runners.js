@@ -3102,7 +3102,10 @@ app.post("/run", async (req, res) => {
               await page.locator('#user_login, input[name="log"]').first().fill(cms_username);
               await page.locator('#user_pass, input[name="pwd"]').first().fill(cms_password);
               await page.locator('#wp-submit, input[type="submit"]').first().click();
-              await page.waitForURL(/\/wp-admin/i, { timeout: 30000 });
+              await page.waitForURL(
+                (url) => /\/wp-admin/i.test(url) || /action=confirm_admin_email/i.test(url),
+                { timeout: 30000 }
+              );
               await page.waitForTimeout(1000);
               await dismissConfirmEmailIfPresent();
               await page.goto(url, { waitUntil: "domcontentloaded" });
@@ -3135,11 +3138,14 @@ app.post("/run", async (req, res) => {
           await page.locator('#user_pass, input[name="pwd"]').first().fill(cms_password);
           await page.locator('#wp-submit, input[type="submit"]').first().click();
 
-          // Wait for any wp-admin URL (regex handles trailing slash, no-path, subpaths)
-          await page.waitForURL(/\/wp-admin/i, { timeout: 30000 });
-          await page.waitForTimeout(1000);
-          console.log("✅ Logged into WordPress, URL:", page.url());
+          // Wait for either wp-admin OR the confirm_admin_email interstitial
+          await page.waitForURL(
+            (url) => /\/wp-admin/i.test(url) || /action=confirm_admin_email/i.test(url),
+            { timeout: 30000 }
+          );
+          await page.waitForTimeout(500);
           await dismissConfirmEmailIfPresent();
+          console.log("✅ Logged into WordPress, URL:", page.url());
 
           // ── WPCode check ───────────────────────────────────────────────────────
           console.log("🔌 Checking for WPCode plugin...");
