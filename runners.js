@@ -153,9 +153,26 @@ async function fillWebStreamForm(page, { websiteUrl, websiteName }) {
   const withProto = /^https?:\/\//i.test(cleaned) ? cleaned : `https://${cleaned}`;
   const urlObj = new URL(withProto);
 
+  // Angular inputs need focus + keystroke events to trigger change detection.
+  // Plain fill() sets the value but doesn't dispatch the events Angular listens for,
+  // causing the value to appear then get cleared on validation.
   await domainInput.click({ timeout: 10000 }).catch(() => {});
-  await domainInput.fill(urlObj.hostname);
+  await domainInput.fill("");
+  await domainInput.pressSequentially(urlObj.hostname, { delay: 30 });
   await page.waitForTimeout(300);
+
+  // Verify the value stuck — Angular sometimes resets on blur
+  const urlFilled = await domainInput.inputValue().catch(() => "");
+  if (!urlFilled || urlFilled !== urlObj.hostname) {
+    console.log(`⚠️ URL value didn't stick (got "${urlFilled}"), retrying via evaluate...`);
+    await domainInput.evaluate((el, val) => {
+      const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+      nativeInputValueSetter.call(el, val);
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    }, urlObj.hostname);
+    await page.waitForTimeout(300);
+  }
 
   // 3) Fill Stream name
   let streamNameInput = scope.locator('[debug-id="stream-name-input"]').first();
