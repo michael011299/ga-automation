@@ -1806,13 +1806,13 @@ app.post("/run", async (req, res) => {
       // ── SSO (OneLogin) ────────────────────────────────────────────────────────
       if (url.includes("onelogin.com")) {
         if ((await page.locator('input[name="username"]:visible').count()) > 0) {
-          await page.fill('input[name="username"]:visible', sso_username);
+          await page.fill('input[name="username"]:visible', sso_username || google_email);
           await page.keyboard.press("Enter");
           await page.waitForTimeout(3000);
           continue;
         }
         if ((await page.locator('input[name="password"]:visible').count()) > 0) {
-          await page.fill('input[name="password"]:visible', sso_password);
+          await page.fill('input[name="password"]:visible', sso_password || google_password);
           await page.keyboard.press("Enter");
           await page.waitForTimeout(5000);
           continue;
