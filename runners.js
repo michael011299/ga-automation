@@ -3069,9 +3069,24 @@ app.post("/run", async (req, res) => {
             }
           }
 
+          async function waitForCfChallenge() {
+            const deadline = Date.now() + 15000;
+            while (Date.now() < deadline) {
+              const title = await page.title().catch(() => "");
+              const bodyText = await page.locator("body").innerText().catch(() => "");
+              const isChallenge =
+                /one moment|please wait|verif|checking your browser|just a moment/i.test(title) ||
+                /please wait while your request is being verified/i.test(bodyText);
+              if (!isChallenge) break;
+              console.log("⏳ Bot-verification page — waiting...");
+              await page.waitForTimeout(2000);
+            }
+          }
+
           async function wpAdminGoto(url) {
             await page.goto(url, { waitUntil: "domcontentloaded" });
-            await page.waitForTimeout(2000);
+            await waitForCfChallenge();
+            await page.waitForTimeout(1000);
             console.log("📍 Landed on:", page.url());
 
             await dismissConfirmEmailIfPresent();
@@ -3080,6 +3095,7 @@ app.post("/run", async (req, res) => {
             if (currentUrl.includes("wp-login") || currentUrl.includes("reauth=1") || currentUrl.includes("onelogin")) {
               console.log("🔄 Session expired, re-logging in...");
               await page.goto(`${baseUrl}/wp-login.php`, { waitUntil: "domcontentloaded" });
+              await waitForCfChallenge();
               await page.waitForTimeout(1000);
               await page.locator('#user_login, input[name="log"]').first().fill(cms_username);
               await page.locator('#user_pass, input[name="pwd"]').first().fill(cms_password);
@@ -3096,7 +3112,21 @@ app.post("/run", async (req, res) => {
           // ── Login ──────────────────────────────────────────────────────────────
           console.log(`🔐 Logging into WordPress: ${wp_admin_url}`);
           await page.goto(`${baseUrl}/wp-login.php`, { waitUntil: "domcontentloaded" });
-          await page.waitForTimeout(2000);
+
+          // Some sites sit behind Cloudflare or similar bot-verification pages
+          // ("One moment, please..." / "Please wait while your request is being verified...")
+          // that auto-resolve via JS challenge. Wait up to 15s for them to pass.
+          const cfDeadline = Date.now() + 15000;
+          while (Date.now() < cfDeadline) {
+            const title = await page.title().catch(() => "");
+            const bodyText = await page.locator("body").innerText().catch(() => "");
+            const isCfChallenge =
+              /one moment|please wait|verif|checking your browser|just a moment/i.test(title) ||
+              /please wait while your request is being verified/i.test(bodyText);
+            if (!isCfChallenge) break;
+            console.log("⏳ Bot-verification page detected — waiting for it to clear...");
+            await page.waitForTimeout(2000);
+          }
           console.log("📍 Login page URL:", page.url());
 
           await page.locator('#user_login, input[name="log"]').first().fill(cms_username);
