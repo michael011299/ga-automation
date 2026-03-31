@@ -3053,10 +3053,28 @@ app.post("/run", async (req, res) => {
 
           const baseUrl = wp_admin_url.replace(/\/(wp-admin|wp-login\.php).*$/, "").replace(/\/$/, "");
 
+          // Dismiss WordPress "Confirm admin email" interstitial.
+          // This appears randomly after login across any WP site — click "Remind me later".
+          async function dismissConfirmEmailIfPresent() {
+            if (/action=confirm_admin_email/i.test(page.url())) {
+              console.log("📧 Confirm admin email prompt detected — clicking Remind me later...");
+              const remindBtn = page.locator(
+                'a:has-text("Remind me later"), button:has-text("Remind me later"), input[value*="Remind"]'
+              ).first();
+              if (await remindBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
+                await remindBtn.click();
+                await page.waitForTimeout(1500);
+                console.log("✅ Dismissed admin email prompt, URL:", page.url());
+              }
+            }
+          }
+
           async function wpAdminGoto(url) {
             await page.goto(url, { waitUntil: "domcontentloaded" });
             await page.waitForTimeout(2000);
             console.log("📍 Landed on:", page.url());
+
+            await dismissConfirmEmailIfPresent();
 
             const currentUrl = page.url();
             if (currentUrl.includes("wp-login") || currentUrl.includes("reauth=1") || currentUrl.includes("onelogin")) {
@@ -3068,6 +3086,7 @@ app.post("/run", async (req, res) => {
               await page.locator('#wp-submit, input[type="submit"]').first().click();
               await page.waitForURL(/\/wp-admin/i, { timeout: 30000 });
               await page.waitForTimeout(1000);
+              await dismissConfirmEmailIfPresent();
               await page.goto(url, { waitUntil: "domcontentloaded" });
               await page.waitForTimeout(2000);
               console.log("✅ Re-logged in, now at:", page.url());
@@ -3088,6 +3107,7 @@ app.post("/run", async (req, res) => {
           await page.waitForURL(/\/wp-admin/i, { timeout: 30000 });
           await page.waitForTimeout(1000);
           console.log("✅ Logged into WordPress, URL:", page.url());
+          await dismissConfirmEmailIfPresent();
 
           // ── WPCode check ───────────────────────────────────────────────────────
           console.log("🔌 Checking for WPCode plugin...");
