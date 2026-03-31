@@ -98,16 +98,18 @@ async function fillWebStreamForm(page, { websiteUrl, websiteName }) {
   let domainInput = null;
 
   const urlSelectors = [
-    // Placeholder variants GA4 has used historically
+    // debug-id is the most stable — GA uses this internally for testing
+    () => scope.locator('[debug-id="website-url-input"]').first(),
+    () => page.locator('[debug-id="website-url-input"]').first(),
+    // Placeholder / aria-label fallbacks
     () => scope.getByPlaceholder("www.mywebsite.com"),
+    () => scope.locator('input[aria-label="Website URL"]').first(),
     () => scope.getByPlaceholder(/example\.com/i),
     () => scope.getByPlaceholder(/https?:\/\//i),
     () => scope.getByPlaceholder(/your.*site|site.*url|website/i),
-    // Attribute-based
     () => scope.locator('input[type="url"]').first(),
     () => scope.locator('input[aria-label*="URL" i]').first(),
     () => scope.locator('input[aria-label*="Website" i]').first(),
-    () => scope.locator('input[aria-label*="Stream URL" i]').first(),
     () => scope.locator('input[aria-label*="domain" i]').first(),
     () => scope.locator('input[name*="url" i], input[name*="website" i], input[name*="domain" i]').first(),
   ];
@@ -156,11 +158,13 @@ async function fillWebStreamForm(page, { websiteUrl, websiteName }) {
   await page.waitForTimeout(300);
 
   // 3) Fill Stream name
-  let streamNameInput = scope.getByLabel(/Stream name/i);
+  let streamNameInput = scope.locator('[debug-id="stream-name-input"]').first();
+  if ((await streamNameInput.count()) === 0) streamNameInput = page.locator('[debug-id="stream-name-input"]').first();
+  if ((await streamNameInput.count()) === 0) streamNameInput = scope.getByPlaceholder("My Website");
+  if ((await streamNameInput.count()) === 0) streamNameInput = scope.getByLabel(/Stream name/i);
   if ((await streamNameInput.count()) === 0)
     streamNameInput = scope.locator('input[aria-label*="Stream" i], input[name*="stream" i]').first();
   if ((await streamNameInput.count()) === 0) {
-    // Second visible text input on the form
     const allInputs2 = scope.locator('input[type="text"]:visible, input:not([type]):visible');
     if ((await allInputs2.count()) > 1) streamNameInput = allInputs2.nth(1);
   }
@@ -271,18 +275,15 @@ async function openAccountViaAccountsSearch(page, accountName) {
   await page.waitForTimeout(800);
   console.log("📍 Current URL:", page.url());
 
-  // Click the breadcrumb span directly — bubbles up to parent button
-  const breadcrumb = page.locator('[debug-id="selected-entity-text"]').first();
-  await breadcrumb.waitFor({ timeout: 10000 });
-  await breadcrumb.click();
-  await page.waitForTimeout(1500);
+  // Click the arrow_drop_down icon in the breadcrumb — this opens the picker
+  // AND auto-focuses the search input, so we can type immediately after.
+  const dropdownArrow = page.locator('mat-icon.gmp-breadcrumb-arrow').first();
+  await dropdownArrow.waitFor({ timeout: 10000 });
+  await dropdownArrow.click();
+  await page.waitForTimeout(800);
 
-  // Type in the search box
-  const searchInput = page.locator("xap-open-search input").first();
-  await searchInput.waitFor({ timeout: 15000 });
-  await searchInput.click();
-  await searchInput.fill("");
-  await searchInput.type(String(accountName), { delay: 25 });
+  // Cursor is now in the search input — just type the account name
+  await page.keyboard.type(String(accountName), { delay: 25 });
   await page.waitForTimeout(1000);
 
   // Click the matching result
@@ -1756,7 +1757,7 @@ app.post("/run", async (req, res) => {
   let browser;
 
   try {
-    browser = await chromium.launch({ headless: true });
+    browser = await chromium.launch({ headless: process.env.HEADLESS !== "false" });
     const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
     let page = await context.newPage(); // NOTE: changed from const -> let so Step 2 recovery can replace the tab
 
@@ -2087,6 +2088,22 @@ app.post("/run", async (req, res) => {
         await accountInput.fill(account_name);
         await page.waitForTimeout(300);
       }
+
+      // Uncheck "Add this account to your current organisation" if it is checked.
+      // Click the mat-checkbox label/wrapper — the native input is covered by the MDC overlay.
+      try {
+        const orgCheckbox = page.locator(
+          'mat-checkbox:has-text("organisation"), mat-checkbox:has-text("organization")',
+        ).first();
+        if (await orgCheckbox.isVisible({ timeout: 3000 }).catch(() => false)) {
+          const isChecked = await orgCheckbox.locator('input[type="checkbox"]').isChecked().catch(() => false);
+          if (isChecked) {
+            await orgCheckbox.click();
+            console.log("✅ Unchecked organisation link checkbox");
+          }
+        }
+      } catch {}
+
       await page.click('button:has-text("Next")');
 
       /* ======================================================
@@ -2590,75 +2607,64 @@ app.post("/run", async (req, res) => {
       await page.waitForTimeout(1500);
       console.log("📍 URL after terms:", page.url());
 
-      // ── Strategy: poll for property ID in URL, then navigate directly ─────────
-      // GA4's post-terms UI changes frequently; the stream creation URL is stable.
-      // We poll up to 15s for the property ID to appear after terms acceptance.
-      let s6AccountId = null,
-        s6PropertyId = null;
-      const s6Deadline = Date.now() + 15000;
-      while (Date.now() < s6Deadline) {
-        const u = page.url();
-        // Format 1: #/a123p456/...   Format 2: #/p456/...
-        const m1 = u.match(/#\/a(\d+)p(\d+)/);
-        const m2 = !m1 && u.match(/#\/p(\d+)/);
-        if (m1) {
-          s6AccountId = m1[1];
-          s6PropertyId = m1[2];
-          break;
-        }
-        if (m2) {
-          s6PropertyId = m2[1];
-          break;
-        }
-        await page.waitForTimeout(500);
-      }
-      console.log(`📍 Extracted — accountId: ${s6AccountId}, propertyId: ${s6PropertyId}`);
-
-      // ── Platform picker button (shared across both paths) ─────────────────────
-      const webPickerBtn = page
-        .locator('button, [role="button"], [role="option"]')
-        .filter({ hasText: /\bweb(site|stream)?\b/i })
-        .first();
-
-      if (s6PropertyId) {
-        // Primary path: navigate directly — bypasses whatever picker/interstitial GA is showing
-        const streamUrl = s6AccountId
-          ? `https://analytics.google.com/analytics/web/#/a${s6AccountId}p${s6PropertyId}/admin/streams/new/web`
-          : `https://analytics.google.com/analytics/web/#/p${s6PropertyId}/admin/streams/new/web`;
-        console.log(`🔗 Navigating directly to stream creation: ${streamUrl}`);
-        await page.goto(streamUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
-        // Allow the Angular SPA to finish routing — networkidle is the most reliable signal
-        await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
-        await page.waitForTimeout(1500);
-        console.log(`📍 URL after direct nav: ${page.url()}`);
-
-        // If the platform picker is still showing, click Web
-        const pickerVisible = await webPickerBtn.isVisible().catch(() => false);
-        if (pickerVisible) {
-          console.log("🧭 Picker still showing after direct nav — clicking Web...");
-          await webPickerBtn.click({ timeout: 10000 });
-          await page.waitForTimeout(1000);
-        }
-        console.log("✅ Web stream form ready (direct URL path)");
-      } else {
-        // Fallback: property ID never appeared — try the picker the traditional way
-        console.log("⚠️ No property ID found in URL after 15s — falling back to picker");
-        await page.screenshot({ path: "step6_fallback.png", fullPage: true }).catch(() => {});
-
-        const pickerVisible = await webPickerBtn
+      // ── Click the Web platform button ─────────────────────────────────────────
+      // After terms, GA4 shows "Start collecting data" with Web / Android / iOS.
+      // Find the Web button and click its mat-mdc-button-touch-target span — the
+      // same pattern confirmed to work in the account picker.
+      const clickWebBtn = async () => {
+        // Wait for the Web button to appear (up to 20s)
+        const webBtn = page.locator("button").filter({ hasText: /^web$/i }).first();
+        const visible = await webBtn
           .waitFor({ state: "visible", timeout: 20000 })
           .then(() => true)
           .catch(() => false);
 
-        if (pickerVisible) {
-          console.log("🧭 Picker found — clicking Web...");
-          await webPickerBtn.click({ timeout: 15000 });
-          await page.waitForTimeout(1000);
+        if (!visible) return false;
+
+        // Prefer the touch-target span; fall back to clicking the button itself
+        const touchTarget = webBtn.locator("span.mat-mdc-button-touch-target").first();
+        if (await touchTarget.count()) {
+          await touchTarget.click({ timeout: 10000 });
         } else {
-          // Last resort — try the legacy clickWebPlatform helper
-          await clickWebPlatform(page);
+          await webBtn.click({ timeout: 10000 });
         }
-        console.log("✅ Web stream form ready (picker fallback path)");
+        console.log("✅ Clicked Web platform button");
+        await page.waitForTimeout(1000);
+        return true;
+      };
+
+      const webClicked = await clickWebBtn();
+
+      if (!webClicked) {
+        // Web button not found — GA4 may have changed. Poll for property ID and
+        // navigate directly to the stream creation URL as a fallback.
+        console.log("⚠️ Web button not visible — falling back to direct URL navigation");
+        await page.screenshot({ path: "step6_fallback.png", fullPage: true }).catch(() => {});
+
+        let s6AccountId = null, s6PropertyId = null;
+        const s6Deadline = Date.now() + 15000;
+        while (Date.now() < s6Deadline) {
+          const u = page.url();
+          const m1 = u.match(/#\/a(\d+)p(\d+)/);
+          const m2 = !m1 && u.match(/#\/p(\d+)/);
+          if (m1) { s6AccountId = m1[1]; s6PropertyId = m1[2]; break; }
+          if (m2) { s6PropertyId = m2[1]; break; }
+          await page.waitForTimeout(500);
+        }
+
+        if (s6PropertyId) {
+          const streamUrl = s6AccountId
+            ? `https://analytics.google.com/analytics/web/#/a${s6AccountId}p${s6PropertyId}/admin/streams/new/web`
+            : `https://analytics.google.com/analytics/web/#/p${s6PropertyId}/admin/streams/new/web`;
+          console.log(`🔗 Direct nav to stream creation: ${streamUrl}`);
+          await page.goto(streamUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+          await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
+          await page.waitForTimeout(1500);
+          // If the picker is still showing after direct nav, click Web again
+          await clickWebBtn();
+        } else {
+          throw new Error("Could not find Web platform button and no property ID in URL");
+        }
       }
 
       console.log("📝 Filling web stream form...");
