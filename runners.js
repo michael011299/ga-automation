@@ -212,10 +212,15 @@ async function fillWebStreamForm(page, { websiteUrl, websiteName }) {
   await streamNameInput.waitFor({ state: "visible", timeout: 10000 });
   await streamNameInput.fill(String(websiteName || "").trim());
 
-  // 4) Click "Create and continue" (with fallbacks)
+  // 4) Click the submit button — GA4 uses several different labels for this
   let createBtn = scope.getByRole("button", { name: /Create and continue/i });
   if ((await createBtn.count()) === 0) createBtn = scope.getByRole("button", { name: /^Create$/i });
+  if ((await createBtn.count()) === 0) createBtn = scope.getByRole("button", { name: /Create stream/i });
   if ((await createBtn.count()) === 0) createBtn = scope.getByRole("button", { name: /Continue/i });
+  if ((await createBtn.count()) === 0) createBtn = scope.getByRole("button", { name: /Next/i });
+  if ((await createBtn.count()) === 0) createBtn = scope.getByRole("button", { name: /Done/i });
+  // Last resort: any visible primary/submit button in the form area
+  if ((await createBtn.count()) === 0) createBtn = page.locator('button[type="submit"], button.mat-primary, button.cdk-focused').last();
 
   await createBtn.waitFor({ timeout: 20000 });
 
