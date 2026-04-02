@@ -176,18 +176,40 @@ async function fillWebStreamForm(page, { websiteUrl, websiteName }) {
     await page.waitForTimeout(300);
   }
 
-  // 3) Fill Stream name
-  let streamNameInput = scope.locator('[debug-id="stream-name-input"]').first();
-  if ((await streamNameInput.count()) === 0) streamNameInput = page.locator('[debug-id="stream-name-input"]').first();
-  if ((await streamNameInput.count()) === 0) streamNameInput = scope.getByPlaceholder("My Website");
-  if ((await streamNameInput.count()) === 0) streamNameInput = scope.getByLabel(/Stream name/i);
-  if ((await streamNameInput.count()) === 0)
-    streamNameInput = scope.locator('input[aria-label*="Stream" i], input[name*="stream" i]').first();
-  if ((await streamNameInput.count()) === 0) {
-    const allInputs2 = scope.locator('input[type="text"]:visible, input:not([type]):visible');
-    if ((await allInputs2.count()) > 1) streamNameInput = allInputs2.nth(1);
+  // 3) Fill Stream name — try every known selector, scope then full page,
+  //    finally fall back to the second visible text input on the whole page.
+  await page.waitForTimeout(500);
+  let streamNameInput = null;
+  const streamSelectors = [
+    () => scope.locator('[debug-id="stream-name-input"]').first(),
+    () => page.locator('[debug-id="stream-name-input"]').first(),
+    () => scope.getByPlaceholder("My Website"),
+    () => page.getByPlaceholder("My Website"),
+    () => scope.getByPlaceholder(/stream name/i),
+    () => page.getByPlaceholder(/stream name/i),
+    () => scope.getByLabel(/Stream name/i),
+    () => page.getByLabel(/Stream name/i),
+    () => scope.locator('input[aria-label*="Stream" i], input[name*="stream" i]').first(),
+    () => page.locator('input[aria-label*="Stream" i], input[name*="stream" i]').first(),
+  ];
+  for (const sel of streamSelectors) {
+    try {
+      const loc = sel();
+      if ((await loc.count()) > 0 && (await loc.first().isVisible().catch(() => false))) {
+        streamNameInput = loc.first();
+        break;
+      }
+    } catch {}
   }
-  await streamNameInput.waitFor({ timeout: 20000 });
+  // Last resort: second visible text input on the full page
+  if (!streamNameInput) {
+    const allPageInputs = page.locator('input[type="text"]:visible, input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):visible');
+    const pageInputCount = await allPageInputs.count();
+    if (pageInputCount > 1) streamNameInput = allPageInputs.nth(1);
+    else if (pageInputCount === 1) streamNameInput = allPageInputs.first();
+  }
+  if (!streamNameInput) throw new Error("fillWebStreamForm: cannot find stream name input");
+  await streamNameInput.waitFor({ state: "visible", timeout: 10000 });
   await streamNameInput.fill(String(websiteName || "").trim());
 
   // 4) Click "Create and continue" (with fallbacks)
