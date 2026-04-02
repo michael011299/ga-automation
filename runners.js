@@ -230,7 +230,8 @@ async function fillWebStreamForm(page, { websiteUrl, websiteName }) {
     await page.waitForTimeout(250);
   }
 
-  await createBtn.click({ timeout: 15000 });
+  // Use force:true to bypass any cdk-overlay-backdrop that intercepts pointer events
+  await createBtn.click({ timeout: 15000, force: true });
 }
 
 function getWebsiteInputs(req) {
