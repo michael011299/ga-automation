@@ -4413,37 +4413,24 @@ app.post("/run", async (req, res) => {
       await urlInput.press("Enter");
       await page.waitForTimeout(5000);
 
-      // ── STEP 2: Wait for verification result / handle auto-verify / fallback to HTML tag ─────
+      // ── STEP 2: Wait for verification result / handle auto-verify / fallback to GA method ──
       console.log("🔍 Waiting for Search Console verification state...");
       await page.waitForTimeout(5000);
 
-      const verificationStateText = await page.evaluate(() => document.body.innerText || "");
-      console.log("📄 Verification screen text:", verificationStateText.substring(0, 2000));
+      const isVerified = async () => {
+        const text = await page.evaluate(() => document.body.innerText || "");
+        return (
+          text.includes("Ownership auto verified") ||
+          text.includes("Ownership verified") ||
+          text.includes("Property verified") ||
+          text.includes("You are a verified owner")
+        );
+      };
 
-      // Case 1: auto-verified or already verified
-      if (
-        verificationStateText.includes("Ownership auto verified") ||
-        verificationStateText.includes("Ownership verified") ||
-        verificationStateText.includes("Property verified") ||
-        verificationStateText.includes("You are a verified owner") ||
-        verificationStateText.includes("Google Analytics, Google Tag Manager")
-      ) {
-        console.log("✅ Search Console property verified automatically");
-
-        const goToPropertyBtn = page
-          .locator('button:has-text("GO TO PROPERTY"), button:has-text("Go to property")')
-          .first();
-        if (await goToPropertyBtn.isVisible().catch(() => false)) {
-          await goToPropertyBtn.click().catch(() => {});
-        } else {
-          const doneBtn = page.locator('button:has-text("DONE"), button:has-text("Done")').first();
-          if (await doneBtn.isVisible().catch(() => false)) {
-            await doneBtn.click().catch(() => {});
-          }
-        }
-
+      // Case 1: auto-verified
+      if (await isVerified()) {
+        console.log("✅ Search Console property auto-verified");
         await browser.close();
-
         return res.json({
           status: "success",
           message: "Search Console property added and auto-verified",
@@ -4453,22 +4440,20 @@ app.post("/run", async (req, res) => {
         });
       }
 
-      // Case 2: not auto-verified — try Google Analytics verification method
-      console.log("🔍 Property not auto-verified — attempting Google Analytics verification...");
+      // Case 2: not auto-verified — try Google Analytics / GTM verification method
+      console.log("🔍 Not auto-verified — attempting Google Analytics/GTM verification...");
       await page.waitForTimeout(3000);
 
-      // Open "Other verification methods" if present
+      // Expand "Other verification methods" if present
       const otherMethods = page.locator("text=Other verification methods").first();
       if (await otherMethods.isVisible().catch(() => false)) {
         await otherMethods.click({ force: true }).catch(() => {});
         await page.waitForTimeout(2000);
       }
 
-      // Try to select Google Analytics or Google Tag Manager verification method
-      const gaMethod = page
-        .locator("text=Google Analytics, text=Google Tag Manager")
-        .first();
-      if (await gaMethod.isVisible().catch(() => false)) {
+      // Select Google Analytics or Google Tag Manager method (fixed selector — comma is invalid in text=)
+      const gaMethod = page.locator("text=Google Analytics").or(page.locator("text=Google Tag Manager")).first();
+      if (await gaMethod.isVisible({ timeout: 5000 }).catch(() => false)) {
         await gaMethod.click({ force: true }).catch(() => {});
         await page.waitForTimeout(2000);
       }
@@ -4477,37 +4462,31 @@ app.post("/run", async (req, res) => {
       const verifyBtn = page.locator('button:has-text("VERIFY"), button:has-text("Verify")').first();
       if (await verifyBtn.isVisible({ timeout: 10000 }).catch(() => false)) {
         await verifyBtn.click();
-        await page.waitForTimeout(6000);
       }
 
-      const verified = await page.evaluate(() => {
-        const body = document.body.innerText;
-        return (
-          body.includes("Ownership verified") ||
-          body.includes("Ownership auto verified") ||
-          body.includes("verified")
-        );
-      });
+      // Poll for up to 30 seconds — verification can take time to process
+      let verified = false;
+      for (let i = 0; i < 6; i++) {
+        await page.waitForTimeout(5000);
+        if (await isVerified()) {
+          verified = true;
+          break;
+        }
+        console.log(`⏳ Verification check ${i + 1}/6 — not yet confirmed, retrying...`);
+      }
 
       await browser.close();
 
       if (verified) {
         return res.json({
           status: "success",
-          message: "Search Console property added and verified via Google Analytics",
+          message: "Search Console property added and verified via Google Analytics/GTM",
           website_url,
           verified: true,
           method: "google_analytics",
         });
       } else {
-        const pageSnippet = await page.evaluate(() => document.body.innerText.substring(0, 500)).catch(() => "");
-        return res.json({
-          status: "partial",
-          message: "Search Console property added but could not auto-verify — check that the GA4 property is linked to this Google account",
-          website_url,
-          verified: false,
-          page_state: pageSnippet,
-        });
+        throw new Error("Search Console property added but verification failed — check that GTM/GA4 is installed and linked to this Google account");
       }
     }
 
