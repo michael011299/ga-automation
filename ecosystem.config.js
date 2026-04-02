@@ -8,8 +8,8 @@ module.exports = {
         PORT: 3000,
 
         // Supabase
-        SUPABASE_URL: process.env.SUPABASE_URL || 'https://wsrmuqwnodlrnikvcgoe.supabase.co',
-        SUPABASE_SERVICE_KEY: process.env.SUPABASE_SERVICE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Indzcm11cXdub2Rscm5pa3ZjZ29lIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NTA1MDg0NSwiZXhwIjoyMDkwNjI2ODQ1fQ.iT2Ac9jk9Yrd5eWUSRHjIZTSt8zf4Pys__mEOtxxL3g',
+        SUPABASE_URL: process.env.SUPABASE_URL || '',
+        SUPABASE_SERVICE_KEY: process.env.SUPABASE_SERVICE_KEY || '',
 
         // Monday.com
         MONDAY_API_KEY: process.env.MONDAY_API_KEY || '',
