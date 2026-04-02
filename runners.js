@@ -2456,28 +2456,66 @@ app.post("/run", async (req, res) => {
       console.log("✅ Web stream created");
       await page.waitForTimeout(3000);
 
-      // ── Fetch IDs via direct URL navigation using captured IDs ─────────
-      // capturedAccountId/capturedPropertyId came from the URL during creation
-      // and are the only guaranteed-correct identifiers. Navigate directly to
-      // that property's data streams — no account search or dropdown needed.
-      if (!capturedAccountId || !capturedPropertyId) {
-        throw new Error("create_ga4_full: account/property IDs not captured from URL during creation");
+      // ── Fetch IDs using the same approach as fetch_gtag_and_property_id ──
+      // Navigate to GA4 home first so the breadcrumb arrow is visible before
+      // openAccountViaAccountsSearch tries to click it.
+      console.log("🔍 Navigating to GA4 home before account search...");
+      await page.goto("https://analytics.google.com/analytics/web", { waitUntil: "domcontentloaded" });
+      await page.waitForTimeout(2000);
+
+      // Step A: Search for and open the account
+      await openAccountViaAccountsSearch(page, account_name);
+
+      // Step B: Open Admin panel
+      await openAdmin(page);
+
+      // Step C: Close sidebar and scroll to top
+      await closeAdminSidebarIfOpen(page);
+      await page.evaluate(() => window.scrollTo(0, 0));
+      await page.waitForTimeout(500);
+
+      // Step D: Select the correct property from the dropdown
+      const ga4Dropdowns = page.locator('button[aria-haspopup="listbox"], button[role="combobox"]');
+      const ga4DropdownCount = await ga4Dropdowns.count();
+      console.log(`Found ${ga4DropdownCount} dropdowns in Admin`);
+
+      if (ga4DropdownCount > 0) {
+        const propertyDropdown = ga4DropdownCount >= 2 ? ga4Dropdowns.nth(1) : ga4Dropdowns.first();
+        const currentSelection = await propertyDropdown.textContent();
+        console.log(`Current property: "${currentSelection}"`);
+
+        if (!currentSelection.includes(property_name)) {
+          console.log("⚠️ Switching to correct property...");
+          try {
+            await propertyDropdown.click({ timeout: 10000 });
+          } catch {
+            await closeAdminSidebarIfOpen(page);
+            await propertyDropdown.click({ force: true, timeout: 10000 });
+          }
+          await page.waitForTimeout(1000);
+          const propertyOption = page.locator('[role="option"], mat-option').filter({ hasText: property_name }).first();
+          await propertyOption.waitFor({ timeout: 20000 });
+          await propertyOption.click({ timeout: 15000 });
+          await page.waitForTimeout(1500);
+          console.log(`✅ Switched to property: ${property_name}`);
+        } else {
+          console.log("✅ Already on correct property");
+        }
       }
 
-      const streamsUrl = `https://analytics.google.com/analytics/web/#/a${capturedAccountId}p${capturedPropertyId}/admin/streams/table/web`;
-      console.log(`🔍 Navigating directly to streams for property ${capturedPropertyId}:`, streamsUrl);
-      await page.goto(streamsUrl, { waitUntil: "domcontentloaded" });
-      await page.waitForTimeout(3000);
-
-      // Open the correct web stream row
+      // Step E: Go to Data Streams and open the web stream
+      await goToDataStreams(page);
       await openWebStreamFromList(page, { websiteName, websiteUrl });
 
-      // Extract measurement ID from the "View tag instructions" modal
+      // Step F: Extract gtag snippet and measurement ID
       const { snippet: gtagSnippet, measurementId } = await openTagInstructionsAndExtract(page);
       console.log("✅ measurementId:", measurementId);
 
-      // Property ID is the one we captured from the URL — no further navigation
-      const ga4FullPropertyId = capturedPropertyId;
+      // Step G: Go to Property Details and extract property ID
+      await openAdmin(page);
+      await goToPropertyDetails(page);
+      const ga4FullPropertyId = await extractPropertyIdBestEffort(page);
+      if (!ga4FullPropertyId) throw new Error("create_ga4_full: could not extract property_id from Property Details");
       console.log("✅ property_id:", ga4FullPropertyId);
 
       if (browser) await browser.close();
