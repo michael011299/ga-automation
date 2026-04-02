@@ -2456,66 +2456,58 @@ app.post("/run", async (req, res) => {
       console.log("✅ Web stream created");
       await page.waitForTimeout(3000);
 
-      // ── Fetch IDs using the same approach as fetch_gtag_and_property_id ──
-      // Navigate to GA4 home first so the breadcrumb arrow is visible before
-      // openAccountViaAccountsSearch tries to click it.
-      console.log("🔍 Navigating to GA4 home before account search...");
+      // ── Fetch IDs via breadcrumb property search ───────────────────────────
+      // Navigate to GA4 home and wait for the breadcrumb arrow to appear —
+      // this confirms the page is in reporting mode and ready for search.
+      console.log("🔍 Navigating to GA4 home for property search...");
       await page.goto("https://analytics.google.com/analytics/web", { waitUntil: "domcontentloaded" });
-      await page.waitForTimeout(2000);
-
-      // Step A: Search for and open the account
-      await openAccountViaAccountsSearch(page, account_name);
-
-      // Step B: Open Admin panel
-      await openAdmin(page);
-
-      // Step C: Close sidebar and scroll to top
-      await closeAdminSidebarIfOpen(page);
-      await page.evaluate(() => window.scrollTo(0, 0));
+      const breadcrumbArrow = page.locator('mat-icon.gmp-breadcrumb-arrow').first();
+      await breadcrumbArrow.waitFor({ state: "visible", timeout: 15000 });
       await page.waitForTimeout(500);
 
-      // Step D: Select the correct property from the dropdown
-      const ga4Dropdowns = page.locator('button[aria-haspopup="listbox"], button[role="combobox"]');
-      const ga4DropdownCount = await ga4Dropdowns.count();
-      console.log(`Found ${ga4DropdownCount} dropdowns in Admin`);
+      // Click the breadcrumb arrow to open the account/property picker
+      await breadcrumbArrow.click();
+      await page.waitForTimeout(800);
 
-      if (ga4DropdownCount > 0) {
-        const propertyDropdown = ga4DropdownCount >= 2 ? ga4Dropdowns.nth(1) : ga4Dropdowns.first();
-        const currentSelection = await propertyDropdown.textContent();
-        console.log(`Current property: "${currentSelection}"`);
+      // Search by property_name — more precise than account name since it lands
+      // directly on the correct property rather than the account's last-used one.
+      console.log(`🔍 Searching for property: "${property_name}"`);
+      await page.keyboard.type(String(property_name), { delay: 25 });
+      await page.waitForTimeout(1500);
 
-        if (!currentSelection.includes(property_name)) {
-          console.log("⚠️ Switching to correct property...");
-          try {
-            await propertyDropdown.click({ timeout: 10000 });
-          } catch {
-            await closeAdminSidebarIfOpen(page);
-            await propertyDropdown.click({ force: true, timeout: 10000 });
-          }
-          await page.waitForTimeout(1000);
-          const propertyOption = page.locator('[role="option"], mat-option').filter({ hasText: property_name }).first();
-          await propertyOption.waitFor({ timeout: 20000 });
-          await propertyOption.click({ timeout: 15000 });
-          await page.waitForTimeout(1500);
-          console.log(`✅ Switched to property: ${property_name}`);
-        } else {
-          console.log("✅ Already on correct property");
-        }
+      const propertyResult = page
+        .locator('gmp-entity-item, [class*="gmp-entity"], [class*="entity-item"]')
+        .filter({ hasText: String(property_name) })
+        .first();
+      await propertyResult.waitFor({ timeout: 15000 });
+      await propertyResult.click();
+      await page.waitForTimeout(2000);
+      console.log("✅ Property selected from breadcrumb search");
+
+      // Extract property ID and account ID from the URL hash.
+      // After selecting a property, GA4 routes to #/a{accountId}p{propertyId}/...
+      // Poll until both IDs appear in the URL (Angular routing may take a moment).
+      let ga4FullPropertyId = null;
+      let accountIdFromUrl = null;
+      const urlPollEnd = Date.now() + 8000;
+      while (Date.now() < urlPollEnd) {
+        const m = page.url().match(/#\/a(\d+)p(\d+)/i);
+        if (m) { accountIdFromUrl = m[1]; ga4FullPropertyId = m[2]; break; }
+        await page.waitForTimeout(400);
       }
+      if (!ga4FullPropertyId) throw new Error("create_ga4_full: property ID not found in URL after property search");
+      console.log(`🔑 From URL — account: ${accountIdFromUrl}, property: ${ga4FullPropertyId}`);
 
-      // Step E: Go to Data Streams and open the web stream
-      await goToDataStreams(page);
+      // Navigate directly to the data streams list for this exact property.
+      // No openAdmin() call — avoids any context reset from navigating to root URL.
+      const streamsUrl = `https://analytics.google.com/analytics/web/#/a${accountIdFromUrl}p${ga4FullPropertyId}/admin/streams/table/web`;
+      console.log("🔍 Navigating to streams:", streamsUrl);
+      await page.goto(streamsUrl, { waitUntil: "domcontentloaded" });
+      await page.waitForTimeout(2000);
+
       await openWebStreamFromList(page, { websiteName, websiteUrl });
-
-      // Step F: Extract gtag snippet and measurement ID
       const { snippet: gtagSnippet, measurementId } = await openTagInstructionsAndExtract(page);
       console.log("✅ measurementId:", measurementId);
-
-      // Step G: Go to Property Details and extract property ID
-      await openAdmin(page);
-      await goToPropertyDetails(page);
-      const ga4FullPropertyId = await extractPropertyIdBestEffort(page);
-      if (!ga4FullPropertyId) throw new Error("create_ga4_full: could not extract property_id from Property Details");
       console.log("✅ property_id:", ga4FullPropertyId);
 
       if (browser) await browser.close();
