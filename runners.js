@@ -2396,10 +2396,19 @@ app.post("/run", async (req, res) => {
       await page.waitForTimeout(2000);
       await openWebStreamFromList(page, { websiteName, websiteUrl });
 
-      // Extract measurement ID and gtag snippet
-      console.log("📡 Extracting tag instructions...");
-      const { snippet: gtagSnippet, measurementId } = await openTagInstructionsAndExtract(page);
+      // The stream details panel is now open — the measurement ID (G-XXXXXXX)
+      // is displayed directly on the page. Extract it without opening the
+      // "View tag instructions" modal, which has been unreliable.
+      await page.waitForTimeout(1500);
+      const measurementId = await extractMeasurementIdFromRoot(page);
+      if (!measurementId) throw new Error("create_ga4_full: could not extract measurement_id from stream details");
       console.log("✅ measurementId:", measurementId);
+
+      // Build the gtag snippet from the measurement ID
+      const gtagSnippet = [
+        `<script async src="https://www.googletagmanager.com/gtag/js?id=${measurementId}"></script>`,
+        `<script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag('js',new Date());gtag('config','${measurementId}');</script>`,
+      ].join("\n");
 
       // Property ID was captured directly from the URL during creation — no
       // further navigation needed, so no risk of context switching.
