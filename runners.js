@@ -1791,10 +1791,63 @@ app.post("/run", async (req, res) => {
       "fetch_gtm_codes",
       "test_tracking_ctas",
       "submit_google_otp",
-      "handle_new_case",   // orchestrator entry point — manages its own browsers
+      "handle_new_case",        // orchestrator entry point — manages its own browsers
+      "search_ga4_accounts",    // API-only search across all 12 Google accounts
     ].includes(action)
   ) {
     return res.status(400).json({ error: "Unknown action" });
+  }
+
+  // ── search_ga4_accounts: API-only, no browser ──────────────────────────────
+  // Searches all 12 Google accounts for GA4 accounts whose displayName contains
+  // the given query string. Uses the GA4 Admin API with each account's stored
+  // refresh token — no browser session needed.
+  if (action === "search_ga4_accounts") {
+    const query = String(req.body.query || req.body.account_name || "").trim();
+    if (!query) return res.status(400).json({ error: "Missing query or account_name" });
+
+    try {
+      const { getAllGoogleAccounts } = require("./src/lib/credentials");
+      const { getAccessToken } = require("./src/lib/google-oauth");
+      const axios = require("axios");
+
+      const googleAccounts = await getAllGoogleAccounts();
+      const matches = [];
+
+      for (const googleAccount of googleAccounts) {
+        if (!googleAccount.gtm_ga4_refresh_token) continue;
+        try {
+          const token = await getAccessToken(googleAccount.gtm_ga4_refresh_token);
+          const response = await axios.get(
+            "https://analyticsadmin.googleapis.com/v1beta/accounts",
+            { headers: { Authorization: `Bearer ${token}` } }
+          );
+          const ga4Accounts = response.data.accounts || [];
+          for (const ga4Account of ga4Accounts) {
+            if (ga4Account.displayName.toLowerCase().includes(query.toLowerCase())) {
+              matches.push({
+                ga4_account_name:    ga4Account.displayName,
+                ga4_account_id:      ga4Account.name.replace("accounts/", ""),
+                google_account_name: googleAccount.account_name,
+                google_email:        googleAccount.google_email,
+              });
+            }
+          }
+        } catch (err) {
+          console.warn(`⚠️ search_ga4_accounts: skipping ${googleAccount.account_name} — ${err.message}`);
+        }
+      }
+
+      return res.json({
+        status:  matches.length > 0 ? "found" : "not_found",
+        query,
+        count:   matches.length,
+        matches,
+      });
+    } catch (err) {
+      console.error("❌ search_ga4_accounts error:", err.message);
+      return res.json({ status: "error", error: err.message });
+    }
   }
 
   // ── handle_new_case: orchestrator manages its own browser sessions ─────────
