@@ -285,7 +285,7 @@ async function addItemNote(itemId, message) {
  * @param {string}        updateBody  — text to post as a Monday Update on the subitem
  */
 async function updateSubitem(subitemId, statusLabel, updateBody) {
-  // Step 1: Discover board ID and status column ID from the subitem itself
+  // Step 1: Discover the subitem's board ID
   const meta = await mondayRequest(`
     query {
       items(ids: [${subitemId}]) {
@@ -300,12 +300,21 @@ async function updateSubitem(subitemId, statusLabel, updateBody) {
   const board = meta?.items?.[0]?.board;
   if (!board) throw new Error(`updateSubitem: could not fetch board for subitem ${subitemId}`);
 
-  const boardId   = board.id;
-  const statusCol = board.columns.find(c => c.type === "color" || c.title === "Status");
+  const boardId = board.id;
+
+  // Subitems board status column is typically id "status".
+  // Fall back to finding by type "color" or title "Status" if not present.
+  const statusCol =
+    board.columns.find(c => c.id === "status") ||
+    board.columns.find(c => c.type === "color") ||
+    board.columns.find(c => c.title === "Status");
   if (!statusCol) throw new Error(`updateSubitem: no Status column found on subitem board ${boardId}`);
 
-  // Step 2: Set the status label
+  // Step 2: Set the status label and post the Monday Update in one mutation
   const value = JSON.stringify(JSON.stringify({ label: statusLabel }));
+  // Escape backslashes and double-quotes in the body; use triple-quotes in GraphQL
+  // to safely handle newlines and special characters (e.g. inside gtag snippets).
+  const safeBody = String(updateBody).replace(/\\/g, "\\\\").replace(/"""/g, '\\"\\"\\"');
   await mondayRequest(`
     mutation {
       change_column_value(
@@ -314,11 +323,13 @@ async function updateSubitem(subitemId, statusLabel, updateBody) {
         column_id: "${statusCol.id}",
         value: ${value}
       ) { id }
+
+      create_update(
+        item_id: ${subitemId},
+        body: """${safeBody}"""
+      ) { id }
     }
   `);
-
-  // Step 3: Post a Monday Update (create_update) with the step details
-  await addItemNote(subitemId, updateBody);
 }
 
 module.exports = {
