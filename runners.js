@@ -2520,13 +2520,19 @@ app.post("/run", async (req, res) => {
 
       if (browser) await browser.close();
 
-      // ── Supabase + Monday subitem update (if case_id provided) ────────────
-      if (req.body.case_id) {
+      // ── Supabase + Monday subitem update ──────────────────────────────────
+      // Match by id (UUID) or order_number — whichever is provided.
+      const recordId     = req.body.id || req.body.case_id;
+      const orderNumber  = req.body.order_number;
+      const dbMatchCol   = recordId ? "id" : orderNumber ? "order_number" : null;
+      const dbMatchVal   = recordId || orderNumber;
+
+      if (dbMatchCol) {
         try {
           const supabase = require("./src/lib/supabase");
           const { updateSubitem } = require("./src/lib/monday");
 
-          // 1. Update Supabase case row with GA4 results
+          // 1. Update Supabase row with GA4 results
           await supabase
             .from("automated_onboarding_builds")
             .update({
@@ -2538,13 +2544,13 @@ app.post("/run", async (req, res) => {
               gtag_code:          gtagSnippet,
               ga4_setup_complete: true,
             })
-            .eq("id", req.body.case_id);
+            .eq(dbMatchCol, dbMatchVal);
 
           // 2. Read subitem IDs from the updated row
           const { data: caseRow } = await supabase
             .from("automated_onboarding_builds")
             .select("monday_subitem_ids")
-            .eq("id", req.body.case_id)
+            .eq(dbMatchCol, dbMatchVal)
             .single();
 
           const subitemId = caseRow?.monday_subitem_ids?.ga4_creation?.id;
