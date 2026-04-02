@@ -2379,6 +2379,25 @@ app.post("/run", async (req, res) => {
       console.log("✅ Web stream created");
       await page.waitForTimeout(1500);
 
+      // ── Ensure we are on the stream details page ───────────────────────
+      // GA4 sometimes lands on a confirmation/summary screen instead of the
+      // stream details panel. If "View tag instructions" isn't visible within
+      // 5 s, navigate to Admin → Data Streams and open the row explicitly.
+      const viewBtnEarly = page.getByRole("button", { name: /view tag instructions/i }).first();
+      const viewBtnAlreadyVisible = await viewBtnEarly.isVisible({ timeout: 5000 }).catch(() => false);
+      if (!viewBtnAlreadyVisible) {
+        console.log("⚠️ Stream details not visible — navigating via Data Streams list");
+        await openAdmin(page);
+        await page.waitForTimeout(800);
+        const dsLink = page
+          .locator('a:has-text("Data Streams"), [aria-label*="Data Streams"]')
+          .first();
+        await dsLink.waitFor({ timeout: 20000 });
+        await dsLink.click({ timeout: 15000 });
+        await page.waitForTimeout(2000);
+        await openWebStreamFromList(page, { websiteName, websiteUrl });
+      }
+
       // ── Extract gtag + measurement ID (still on stream details page) ───
       console.log("📡 Extracting tag instructions...");
       const { snippet: gtagSnippet, measurementId } = await openTagInstructionsAndExtract(page);
