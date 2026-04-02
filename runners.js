@@ -2381,10 +2381,12 @@ app.post("/run", async (req, res) => {
 
       // ── Fetch IDs using the same proven approach as fetch_gtag_and_property_id ─
       // After creation GA4 can land on a confirmation screen, a summary page, or
-      // the stream details — none of which reliably expose the correct property
-      // context. Instead, navigate to the account by name, select the property
-      // explicitly from the dropdown, then open Data Streams to find the stream.
-      console.log("🔍 Navigating to account to fetch IDs...");
+      // the stream details — none of which have the breadcrumb arrow needed by
+      // openAccountViaAccountsSearch. Navigate to the GA4 homepage first so the
+      // breadcrumb is present, then search for the account by name.
+      console.log("🔍 Navigating to GA4 home before account search...");
+      await page.goto("https://analytics.google.com/analytics/web", { waitUntil: "domcontentloaded" });
+      await page.waitForTimeout(2000);
       await openAccountViaAccountsSearch(page, account_name);
       await openAdmin(page);
       await closeAdminSidebarIfOpen(page);
