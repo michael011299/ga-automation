@@ -2403,11 +2403,20 @@ app.post("/run", async (req, res) => {
       const { snippet: gtagSnippet, measurementId } = await openTagInstructionsAndExtract(page);
       console.log("✅ measurementId:", measurementId);
 
-      // ── Get property ID from Property Details ──────────────────────────
-      console.log("🔑 Fetching property ID...");
-      await openAdmin(page);
-      await goToPropertyDetails(page);
-      const ga4FullPropertyId = await extractPropertyIdBestEffort(page);
+      // ── Get property ID from URL (while still on stream details page) ───
+      // Extract it NOW before any further navigation — calling openAdmin can
+      // reset GA4's breadcrumb to a different property context.
+      let ga4FullPropertyId = extractPropertyIdFromUrl(page);
+      console.log("🔑 Property ID from URL:", ga4FullPropertyId);
+
+      if (!ga4FullPropertyId) {
+        // Fallback only — navigate to Property Details if URL didn't have it
+        console.log("🔑 URL had no property ID — falling back to Property Details");
+        await openAdmin(page);
+        await goToPropertyDetails(page);
+        ga4FullPropertyId = await extractPropertyIdBestEffort(page);
+      }
+
       if (!ga4FullPropertyId) throw new Error("create_ga4_full: could not extract property_id");
       console.log("✅ property_id:", ga4FullPropertyId);
 
