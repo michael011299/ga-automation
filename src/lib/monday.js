@@ -274,11 +274,59 @@ async function addItemNote(itemId, message) {
   });
 }
 
+/**
+ * Update a subitem's Status column and post a Monday Update (activity note).
+ *
+ * Discovers the subitem's board ID and status column ID automatically via a
+ * single query — no env vars or prior knowledge of the subitem board required.
+ *
+ * @param {string|number} subitemId   — Monday subitem ID
+ * @param {string}        statusLabel — exact label string (e.g. "Done", "Failed", "Partial")
+ * @param {string}        updateBody  — text to post as a Monday Update on the subitem
+ */
+async function updateSubitem(subitemId, statusLabel, updateBody) {
+  // Step 1: Discover board ID and status column ID from the subitem itself
+  const meta = await mondayRequest(`
+    query {
+      items(ids: [${subitemId}]) {
+        board {
+          id
+          columns { id title type }
+        }
+      }
+    }
+  `);
+
+  const board = meta?.items?.[0]?.board;
+  if (!board) throw new Error(`updateSubitem: could not fetch board for subitem ${subitemId}`);
+
+  const boardId   = board.id;
+  const statusCol = board.columns.find(c => c.type === "color" || c.title === "Status");
+  if (!statusCol) throw new Error(`updateSubitem: no Status column found on subitem board ${boardId}`);
+
+  // Step 2: Set the status label
+  const value = JSON.stringify(JSON.stringify({ label: statusLabel }));
+  await mondayRequest(`
+    mutation {
+      change_column_value(
+        board_id: ${boardId},
+        item_id: ${subitemId},
+        column_id: "${statusCol.id}",
+        value: ${value}
+      ) { id }
+    }
+  `);
+
+  // Step 3: Post a Monday Update (create_update) with the step details
+  await addItemNote(subitemId, updateBody);
+}
+
 module.exports = {
   createItem,
   setItemStatus,
   setInfoNeeded,
   addItemNote,
+  updateSubitem,
   getBoardId,
   VALID_INFO_REASONS,
 };

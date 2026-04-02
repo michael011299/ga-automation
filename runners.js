@@ -2519,6 +2519,55 @@ app.post("/run", async (req, res) => {
       console.log("✅ property_id:", ga4FullPropertyId);
 
       if (browser) await browser.close();
+
+      // ── Supabase + Monday subitem update (if case_id provided) ────────────
+      if (req.body.case_id) {
+        try {
+          const supabase = require("./src/lib/supabase");
+          const { updateSubitem } = require("./src/lib/monday");
+
+          // 1. Update Supabase case row with GA4 results
+          await supabase
+            .from("automated_onboarding_builds")
+            .update({
+              ga4_account_name:   account_name,
+              ga4_property_name:  property_name,
+              ga4_property_id:    ga4FullPropertyId,
+              ga4_measurement_id: measurementId,
+              ga4_email_account:  google_email,
+              gtag_code:          gtagSnippet,
+              ga4_setup_complete: true,
+            })
+            .eq("id", req.body.case_id);
+
+          // 2. Read subitem IDs from the updated row
+          const { data: caseRow } = await supabase
+            .from("automated_onboarding_builds")
+            .select("monday_subitem_ids")
+            .eq("id", req.body.case_id)
+            .single();
+
+          const subitemId = caseRow?.monday_subitem_ids?.ga4_creation?.id;
+          if (subitemId) {
+            const updateText = [
+              `GA4 Account Name: ${account_name}`,
+              `GA4 Property Name: ${property_name}`,
+              `GA4 Property ID: ${ga4FullPropertyId}`,
+              `GA4 Measurement ID: ${measurementId}`,
+              `GA4 Email Account: ${google_email}`,
+              `GTAG:\n${gtagSnippet}`,
+            ].join("\n");
+
+            await updateSubitem(subitemId, "Done", updateText);
+            console.log("✅ Monday GA4 subitem updated");
+          } else {
+            console.warn("⚠️ No ga4_creation subitem ID found in monday_subitem_ids");
+          }
+        } catch (err) {
+          console.error("⚠️ Post-GA4 Supabase/Monday update failed (non-fatal):", err.message);
+        }
+      }
+
       return res.json({
         status: "success",
         account_name,
