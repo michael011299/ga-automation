@@ -1882,9 +1882,13 @@ app.post("/run", async (req, res) => {
     let page = await context.newPage(); // NOTE: changed from const -> let so Step 2 recovery can replace the tab
 
     /* ================= LOGIN ================= */
+    // Some actions operate on third-party sites and don't need a Google session
+    const skipGoogleLogin = ["install_gtm_codes", "fetch_gtm_codes"].includes(action);
+
+    if (!skipGoogleLogin)
     await page.goto("https://analytics.google.com", { waitUntil: "domcontentloaded" });
 
-    for (let i = 0; i < 15; i++) {
+    for (let i = 0; i < (skipGoogleLogin ? 0 : 15); i++) {
       const url = page.url();
 
       // ── Reached Analytics — done ──────────────────────────────────────────────
