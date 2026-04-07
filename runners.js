@@ -2385,17 +2385,15 @@ app.patch("/accounts/:id/capacity", async (req, res) => {
 
 // POST /accounts/scan-capacity
 // Receives an array of google_accounts rows, navigates each one to the GA4
-// account-creation page, reads the "X more accounts can be created" text, and
-// returns remaining/used/max for every account in a single response.
+// account-creation page concurrently, reads the "X more accounts can be
+// created" text, and returns remaining/used/max for all accounts at once.
 app.post("/accounts/scan-capacity", async (req, res) => {
   const { accounts } = req.body;
   if (!Array.isArray(accounts) || accounts.length === 0) {
     return res.status(400).json({ status: "error", error: "accounts array required" });
   }
 
-  const results = [];
-
-  for (const account of accounts) {
+  const scanOne = async (account) => {
     const { id, google_email, google_password, account_name } = account;
     let browser;
 
@@ -2404,7 +2402,7 @@ app.post("/accounts/scan-capacity", async (req, res) => {
       const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
       const page = await context.newPage();
 
-      // ── Google login ──────────────────────────────────────────────────────
+      // ── Google login ────────────────────────────────────────────────────
       await page.goto("https://analytics.google.com", { waitUntil: "domcontentloaded" });
       for (let i = 0; i < 15; i++) {
         const url = page.url();
@@ -2455,7 +2453,7 @@ app.post("/accounts/scan-capacity", async (req, res) => {
         await page.waitForTimeout(3000);
       }
 
-      // ── Navigate to GA4 Admin → Create → Account ──────────────────────────
+      // ── Navigate to GA4 Admin → Create → Account ────────────────────────
       await page.goto("https://analytics.google.com/analytics/web", { waitUntil: "domcontentloaded" });
       await page.waitForTimeout(2000);
 
@@ -2490,7 +2488,7 @@ app.post("/accounts/scan-capacity", async (req, res) => {
       await page.waitForURL(/\/admin\/account\/create/i, { timeout: 30000 });
       await page.waitForTimeout(1500);
 
-      // ── Read capacity text ─────────────────────────────────────────────────
+      // ── Read capacity text ───────────────────────────────────────────────
       // "68 more accounts can be created. The maximum is 100."
       const limitTexts = [
         "text=/reached\\s+the\\s+limit/i", "text=/limit\\s+reached/i",
@@ -2519,9 +2517,8 @@ app.post("/accounts/scan-capacity", async (req, res) => {
       }
 
       await browser.close();
-      browser = null;
 
-      results.push({
+      return {
         id,
         account_name: account_name || google_email,
         google_email,
@@ -2529,13 +2526,12 @@ app.post("/accounts/scan-capacity", async (req, res) => {
         used:  remaining !== null ? max - remaining : null,
         max,
         error: null,
-      });
+      };
 
     } catch (err) {
       if (browser) await browser.close().catch(() => {});
-      browser = null;
       console.error(`❌ scan-capacity ${google_email}: ${err.message}`);
-      results.push({
+      return {
         id,
         account_name: account_name || google_email,
         google_email,
@@ -2543,10 +2539,11 @@ app.post("/accounts/scan-capacity", async (req, res) => {
         used:      null,
         max:       null,
         error:     err.message,
-      });
+      };
     }
-  }
+  };
 
+  const results = await Promise.all(accounts.map(scanOne));
   return res.json({ status: "ok", results });
 });
 
