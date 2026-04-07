@@ -3669,7 +3669,7 @@ app.post("/run", async (req, res) => {
               await page.locator('#wp-submit, input[type="submit"]').first().click();
               await page.waitForURL(
                 (url) => /\/wp-admin/i.test(url) || /action=confirm_admin_email/i.test(url),
-                { timeout: 30000 }
+                { timeout: 60000, waitUntil: "domcontentloaded" }
               );
               await page.waitForTimeout(1000);
               await dismissConfirmEmailIfPresent();
@@ -3706,7 +3706,7 @@ app.post("/run", async (req, res) => {
           // Wait for either wp-admin OR the confirm_admin_email interstitial
           await page.waitForURL(
             (url) => /\/wp-admin/i.test(url) || /action=confirm_admin_email/i.test(url),
-            { timeout: 30000 }
+            { timeout: 60000, waitUntil: "domcontentloaded" }
           );
           await page.waitForTimeout(500);
           await dismissConfirmEmailIfPresent();
