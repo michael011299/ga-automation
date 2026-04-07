@@ -1787,6 +1787,769 @@ async function detectSuccessSelector(page) {
   });
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// performGA4Creation — extracted GA4 wizard logic (no browser lifecycle)
+// Called by both single-account (create_ga4_full) and multi-account handlers.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Run the full GA4 account creation wizard on an already-logged-in page.
+ * Does NOT close the browser — the caller owns the browser lifecycle.
+ *
+ * @param {import('playwright').Page} initialPage  — open page at analytics.google.com
+ * @param {import('playwright').BrowserContext} context — used by hard-reset recovery
+ * @param {Object} params
+ * @param {string} params.account_name
+ * @param {string} params.property_name
+ * @param {string} params.websiteUrl
+ * @param {string} params.websiteName
+ * @param {string} [params.google_email]
+ * @returns {Promise<{status:"failed",reason:"account_no_space"}|{status:"success",...}>}
+ * @throws on real automation errors (caller should capture screenshot + diagnostics)
+ */
+async function performGA4Creation(initialPage, context, { account_name, property_name, websiteUrl, websiteName, google_email }) {
+  let page = initialPage;
+
+  // ── Navigate to GA4 Admin ──────────────────────────────────────────────────
+  await page.goto("https://analytics.google.com/analytics/web", { waitUntil: "domcontentloaded" });
+  await page.waitForTimeout(2000);
+
+  const ga4AdminBtn = page
+    .getByRole("button", { name: /^Admin$/ })
+    .or(page.getByRole("link", { name: /^Admin$/ }))
+    .or(page.locator('[aria-label="Admin"]'));
+  for (let i = 1; i <= 3; i++) {
+    if (await ga4AdminBtn.first().isVisible().catch(() => false)) break;
+    console.log(`⏳ Admin button not visible (attempt ${i}/3), waiting...`);
+    await page.waitForTimeout(4000);
+  }
+  await ga4AdminBtn.first().waitFor({ state: "visible", timeout: 60000 });
+  await ga4AdminBtn.first().click({ timeout: 60000 });
+  await page.waitForURL(/\/admin\b/i, { timeout: 30000 }).catch(() => {});
+  await page.waitForTimeout(1200);
+  await page.mouse.click(650, 320).catch(() => {});
+  await page.keyboard.press("Escape").catch(() => {});
+  await page.waitForTimeout(800);
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.waitForTimeout(400);
+
+  // ── Click Create → Account ─────────────────────────────────────────────────
+  const ga4CreateBtn = page.getByRole("button", { name: /^Create$/ }).first();
+  await ga4CreateBtn.waitFor({ state: "visible", timeout: 20000 });
+  await ga4CreateBtn.click({ timeout: 20000 });
+
+  const ga4MenuPanel = page
+    .locator('.cdk-overlay-container .mat-mdc-menu-panel, .cdk-overlay-container [role="menu"], [role="menu"]')
+    .filter({ hasText: "Account" })
+    .last();
+  await ga4MenuPanel.waitFor({ state: "visible", timeout: 15000 });
+  const ga4AccountMenuBtn = ga4MenuPanel.locator('button[role="menuitem"]:has-text("Account")').first();
+  await ga4AccountMenuBtn.waitFor({ state: "visible", timeout: 15000 });
+  await ga4AccountMenuBtn.click({ timeout: 15000 });
+  await page.waitForURL(/\/admin\/account\/create/i, { timeout: 30000 });
+  await page.waitForTimeout(800);
+
+  // ── Capacity check ─────────────────────────────────────────────────────────
+  const ga4LimitTexts = [
+    "text=/reached\\s+the\\s+limit/i", "text=/limit\\s+reached/i",
+    "text=/you\\s+have\\s+reached/i", "text=/too\\s+many/i",
+    "text=/account\\s+limit/i", "text=/can\\s+only\\s+create/i",
+  ];
+  for (const t of ga4LimitTexts) {
+    if (await page.locator(t).first().isVisible().catch(() => false)) {
+      return { status: "failed", reason: "account_no_space" };
+    }
+  }
+
+  const ga4ReportsTexts = ["text=Reports snapshot", "text=Realtime", "text=Engagement", "text=Monetization"];
+  let ga4InAdmin = false;
+  for (let i = 0; i < 15; i++) {
+    let rv = false;
+    for (const t of ga4ReportsTexts) { if ((await page.locator(t).count()) > 0) { rv = true; break; } }
+    if (!rv) { ga4InAdmin = true; break; }
+    await page.waitForTimeout(300);
+  }
+  if (!ga4InAdmin) {
+    return { status: "failed", reason: "account_no_space" };
+  }
+
+  const ga4AccountInput = page.locator('input[aria-label*="Account"], input[placeholder*="Account"]').first();
+  try {
+    await ga4AccountInput.waitFor({ timeout: 5000 });
+  } catch {
+    return { status: "failed", reason: "account_no_space" };
+  }
+
+  // ── Build create URL for retry navigation ──────────────────────────────────
+  const ga4UrlNow = page.url();
+  const ga4CtxMatch = ga4UrlNow.match(/#\/(a\d+p\d+)\b/i);
+  const ga4Ctx = ga4CtxMatch ? ga4CtxMatch[1] : null;
+  const ga4CreateUrl = ga4Ctx
+    ? `https://analytics.google.com/analytics/web/#/${ga4Ctx}/admin/account/create`
+    : "https://analytics.google.com/analytics/web/#/admin/account/create";
+
+  let ga4OnCreatePage = await ga4AccountInput.isVisible().catch(() => false);
+  for (let attempt = 1; attempt <= 4 && !ga4OnCreatePage; attempt++) {
+    await page.goto(ga4CreateUrl, { waitUntil: "domcontentloaded" });
+    await page.waitForTimeout(1500);
+    await page.mouse.click(650, 320).catch(() => {});
+    await page.keyboard.press("Escape").catch(() => {});
+    await page.waitForTimeout(600);
+    ga4OnCreatePage = await ga4AccountInput.isVisible().catch(() => false);
+  }
+  if (!ga4OnCreatePage) throw new Error("create_ga4_full: could not reach Account Create page");
+
+  // ── Fill account name ──────────────────────────────────────────────────────
+  await ga4AccountInput.fill(account_name);
+  await page.waitForTimeout(300);
+  const ga4FilledVal = await ga4AccountInput.inputValue().catch(() => "");
+  if (ga4FilledVal !== account_name) {
+    await ga4AccountInput.click({ force: true });
+    await ga4AccountInput.fill(account_name);
+    await page.waitForTimeout(300);
+  }
+  try {
+    const orgCb = page.locator('mat-checkbox:has-text("organisation"), mat-checkbox:has-text("organization")').first();
+    if (await orgCb.isVisible({ timeout: 3000 }).catch(() => false)) {
+      const isChecked = await orgCb.locator('input[type="checkbox"]').isChecked().catch(() => false);
+      if (isChecked) await orgCb.click();
+    }
+  } catch {}
+  await page.click('button:has-text("Next")');
+
+  // ── Step 2: Property name (with retry + hard-reset recovery) ──────────────
+  const ga4IsOnReports = async () => {
+    for (const t of ga4ReportsTexts) { if ((await page.locator(t).count()) > 0) return true; }
+    return false;
+  };
+  const ga4OpenAdminViaUI = async () => {
+    await page.goto("https://analytics.google.com/analytics/web", { waitUntil: "domcontentloaded" });
+    await page.waitForTimeout(3500);
+    const ab = page.locator('[aria-label="Admin"], a[href*="admin"], button[aria-label*="Admin"]').first();
+    await ab.waitFor({ timeout: 60000 });
+    await ab.click();
+    await page.waitForTimeout(3000);
+  };
+  const ga4OpenCreateWizard = async () => {
+    try {
+      const cb = page.locator('[aria-label="Create"], button:has-text("Create"), button[aria-label*="Create"]').first();
+      if ((await cb.count()) > 0) {
+        await cb.waitFor({ timeout: 8000 });
+        await cb.click();
+        await page.waitForTimeout(800);
+        const ai = page.locator('[role="menuitem"]:has-text("Account"), button:has-text("Account"), a:has-text("Account")').first();
+        if ((await ai.count()) > 0) { await ai.waitFor({ timeout: 8000 }); await ai.click(); await page.waitForTimeout(1200); return; }
+      }
+    } catch {}
+    await page.goto(ga4CreateUrl, { waitUntil: "domcontentloaded" });
+    await page.waitForTimeout(1200);
+  };
+  const ga4HardResetAndRedoStep1 = async (reason) => {
+    console.log(`🧯 Hard reset tab (${reason})…`);
+    try { await page.close({ runBeforeUnload: true }); } catch {}
+    page = await context.newPage();
+    await ga4OpenAdminViaUI();
+    await ga4OpenCreateWizard();
+    const acc = page.locator('input[aria-label*="Account"], input[placeholder*="Account"]').first();
+    await acc.waitFor({ timeout: 6000 });
+    await acc.fill(account_name);
+    await page.click('button:has-text("Next")');
+    await page.waitForTimeout(800);
+  };
+  const ga4FillProperty = async () => {
+    const sel = "#name, input#name";
+    for (const method of [
+      async () => { const i = page.locator(sel).first(); await i.waitFor({ timeout: 10000 }); await i.fill(property_name, { force: true }); await page.keyboard.press("Tab"); await page.waitForTimeout(200); return (await i.inputValue().catch(() => null)) === property_name; },
+      async () => { const i = page.locator(sel).first(); await i.waitFor({ timeout: 10000 }); await i.evaluate(el => el.focus()); await i.fill(property_name, { force: true }); await page.keyboard.press("Tab"); await page.waitForTimeout(200); return (await i.inputValue().catch(() => null)) === property_name; },
+      async () => { const ok = await page.evaluate(val => { const el = document.querySelector("#name") || document.querySelector("input#name"); if (!el) return false; el.focus(); el.value = val; el.dispatchEvent(new Event("input", { bubbles: true })); el.dispatchEvent(new Event("change", { bubbles: true })); el.blur(); return true; }, property_name); if (!ok) return false; await page.waitForTimeout(250); return (await page.locator(sel).first().inputValue().catch(() => null)) === property_name; },
+    ]) {
+      try { if (await method()) return true; } catch {}
+    }
+    return false;
+  };
+  const ga4ClickNext = async () => {
+    const stepperNext = page.locator("button[matsteppernext], button[matStepperNext], button[cdksteppernext], button[cdkStepperNext]");
+    if ((await stepperNext.count()) > 0) {
+      for (let i = 0; i < (await stepperNext.count()); i++) {
+        const b = stepperNext.nth(i);
+        if (!(await b.isVisible().catch(() => false)) || !(await b.isEnabled().catch(() => false))) continue;
+        await b.scrollIntoViewIfNeeded().catch(() => {});
+        await b.click({ timeout: 8000 });
+        return true;
+      }
+    }
+    return !!(await page.evaluate(() => {
+      const isVis = el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+      const cands = Array.from(document.querySelectorAll('button,[role="button"]'))
+        .filter(el => (el.textContent || "").trim().includes("Next"))
+        .filter(el => el.getAttribute("aria-disabled") !== "true" && !el.disabled)
+        .filter(isVis);
+      if (!cands.length) return false;
+      cands.sort((a, b) => b.getBoundingClientRect().top - a.getBoundingClientRect().top);
+      cands[0].click(); return true;
+    }));
+  };
+
+  let step2Success = false;
+  for (let attempt = 1; attempt <= 8; attempt++) {
+    console.log(`🔧 Step 2 attempt ${attempt}/8`);
+    if (await ga4IsOnReports()) await ga4HardResetAndRedoStep1("on Reports at Step 2 start");
+    try { await page.locator("#cdk-stepper-0-content-1").waitFor({ timeout: 12000 }); }
+    catch { if (await ga4IsOnReports()) { await ga4HardResetAndRedoStep1("redirected while waiting for Step 2"); continue; } continue; }
+    await ga4FillProperty();
+    if (await ga4IsOnReports()) { await ga4HardResetAndRedoStep1("redirected after fill"); continue; }
+    if (!(await ga4ClickNext())) { if (await ga4IsOnReports()) await ga4HardResetAndRedoStep1("redirected clicking Next"); continue; }
+    try { await page.locator("#cdk-stepper-0-content-2").waitFor({ timeout: 15000 }); step2Success = true; break; }
+    catch { if (await ga4IsOnReports()) { await ga4HardResetAndRedoStep1("redirected after Next"); continue; } continue; }
+  }
+  if (!step2Success) throw new Error("create_ga4_full: Step 2 failed after 8 attempts");
+
+  // ── Step 3: Business info ──────────────────────────────────────────────────
+  const step3 = page.locator("#cdk-stepper-0-content-2");
+  await step3.waitFor({ timeout: 30000 });
+  const selOneBtn = step3.locator('button:has-text("Select one"), [role="button"]:has-text("Select one")').first();
+  await selOneBtn.waitFor({ timeout: 30000 });
+  await selOneBtn.click({ timeout: 30000 });
+  await page.waitForTimeout(300);
+  let overPanel = page.locator(".cdk-overlay-pane:visible").last();
+  if ((await overPanel.count().catch(() => 0)) === 0) { await selOneBtn.click({ force: true, timeout: 30000 }); await page.waitForTimeout(300); overPanel = page.locator(".cdk-overlay-pane:visible").last(); }
+  await overPanel.waitFor({ timeout: 30000 });
+  const indSearch = overPanel.locator('input[type="text"], input[placeholder*="Search"], input[aria-label*="Search"]').first();
+  if ((await indSearch.count().catch(() => 0)) > 0) {
+    await indSearch.waitFor({ timeout: 10000 });
+    await indSearch.fill("Other business activity");
+    await page.waitForTimeout(300);
+    await overPanel.locator('[role="option"], mat-option, .mat-mdc-option, .mdc-list-item').filter({ hasText: "Other business activity" }).first().waitFor({ timeout: 30000 });
+    await overPanel.locator('[role="option"], mat-option, .mat-mdc-option, .mdc-list-item').filter({ hasText: "Other business activity" }).first().click({ timeout: 30000 });
+  } else {
+    await overPanel.locator('[role="option"], mat-option, .mat-mdc-option, .mdc-list-item').filter({ hasText: "Other business activity" }).first().waitFor({ timeout: 30000 });
+    await overPanel.locator('[role="option"], mat-option, .mat-mdc-option, .mdc-list-item').filter({ hasText: "Other business activity" }).first().click({ timeout: 30000 });
+  }
+  await page.waitForTimeout(300);
+  const smallInput = step3.locator("#mat-radio-0-input, input#mat-radio-0-input").first();
+  await smallInput.waitFor({ timeout: 30000 });
+  const smallTxt = "Small – 1 to 10 employees";
+  let clickedSmallFull = false;
+  for (const locFn of [
+    () => step3.locator(`text=${smallTxt}`).first(),
+    () => step3.locator('label[for="mat-radio-0-input"]').first(),
+    () => step3.locator('mat-radio-button, [role="radio"]').filter({ hasText: smallTxt }).first(),
+  ]) {
+    if (clickedSmallFull) break;
+    try { const loc = locFn(); if ((await loc.count().catch(() => 0)) > 0) { await loc.click({ force: true, timeout: 8000 }); clickedSmallFull = true; } } catch {}
+  }
+  if (!clickedSmallFull) { try { await smallInput.check({ force: true, timeout: 8000 }); } catch { await smallInput.click({ force: true, timeout: 8000 }); } }
+  const startSmallFull = Date.now();
+  while (!(await smallInput.isChecked().catch(() => false))) {
+    if (Date.now() - startSmallFull > 15000) throw new Error("create_ga4_full: Step 3 Small not confirmed");
+    await page.waitForTimeout(250);
+  }
+  const nextBtn3 = step3.locator('button[matsteppernext], button[matStepperNext], button:has-text("Next")').first();
+  await nextBtn3.waitFor({ timeout: 30000 });
+  const startNext3 = Date.now();
+  while (!(await nextBtn3.isEnabled().catch(() => false))) {
+    if (Date.now() - startNext3 > 30000) throw new Error("create_ga4_full: Step 3 Next never enabled");
+    await page.waitForTimeout(300);
+  }
+  await nextBtn3.click();
+
+  // ── Step 4: Objectives ─────────────────────────────────────────────────────
+  const step4 = page.locator("#cdk-stepper-0-content-3");
+  await step4.waitFor({ timeout: 30000 });
+  for (const label of ["Generate leads", "Drive sales", "Understand web and/or app traffic", "View user engagement and retention"]) {
+    const cb = step4.getByRole("checkbox", { name: label }).first();
+    await cb.waitFor({ timeout: 30000 });
+    if (!(await cb.isChecked().catch(() => false))) await cb.click({ timeout: 15000 });
+    const start = Date.now();
+    while (!(await cb.isChecked().catch(() => false))) {
+      if (Date.now() - start > 10000) throw new Error(`create_ga4_full: Step 4 "${label}" would not stay checked`);
+      await page.waitForTimeout(250);
+    }
+  }
+  const createBtn4 = page.locator('button:has-text("Create")').last();
+  await createBtn4.waitFor({ state: "attached", timeout: 30000 });
+  await createBtn4.scrollIntoViewIfNeeded().catch(() => {});
+  const startCreate4 = Date.now();
+  while (!(await createBtn4.isEnabled().catch(() => false))) {
+    if (Date.now() - startCreate4 > 30000) throw new Error("create_ga4_full: Step 4 Create stayed disabled");
+    await page.waitForTimeout(300);
+  }
+  await createBtn4.click({ timeout: 15000 });
+
+  // ── Step 5: Terms ──────────────────────────────────────────────────────────
+  const ga4AcceptBtn = page.locator('button:has-text("I Accept"), button:has-text("Accept")').first();
+  if ((await ga4AcceptBtn.count()) > 0) {
+    await ga4AcceptBtn.waitFor({ timeout: 30000 });
+    if (!(await ga4AcceptBtn.isEnabled().catch(() => false))) {
+      const termsPanel = page.locator('div[role="dialog"]:visible, .cdk-overlay-pane:visible, .mat-dialog-container:visible').first();
+      await termsPanel.evaluate(el => { const s = el.querySelector('[class*="content"],[class*="body"],[class*="scroll"]') || el; s.scrollTop = s.scrollHeight; }).catch(() => {});
+      await page.waitForTimeout(500);
+      const termsCbs = termsPanel.locator('input[type="checkbox"]');
+      const n = await termsCbs.count();
+      for (let i = 0; i < n; i++) {
+        if (await ga4AcceptBtn.isEnabled().catch(() => false)) break;
+        const cb = termsCbs.nth(i);
+        if (!(await cb.isChecked().catch(() => false))) { try { await cb.check({ force: true, timeout: 5000 }); } catch { await cb.click({ force: true, timeout: 5000 }); } await page.waitForTimeout(250); }
+      }
+    }
+    await ga4AcceptBtn.click({ timeout: 15000 });
+    await page.waitForTimeout(800);
+  }
+
+  // ── Step 6: Web stream ─────────────────────────────────────────────────────
+  console.log("📍 create_ga4_full Step 6: Web stream");
+  await page.waitForLoadState("domcontentloaded", { timeout: 30000 });
+  await page.waitForTimeout(1500);
+
+  let capturedAccountId = null, capturedPropertyId = null;
+  const pollDeadline = Date.now() + 10000;
+  while (Date.now() < pollDeadline) {
+    const m = page.url().match(/#\/a(\d+)p(\d+)/i);
+    if (m) { capturedAccountId = m[1]; capturedPropertyId = m[2]; break; }
+    await page.waitForTimeout(400);
+  }
+  console.log(`🔑 Captured IDs from URL — account: ${capturedAccountId}, property: ${capturedPropertyId}`);
+
+  const ga4ClickWeb = async () => {
+    const webBtn = page.locator("button").filter({ hasText: /^web$/i }).first();
+    const vis = await webBtn.waitFor({ state: "visible", timeout: 20000 }).then(() => true).catch(() => false);
+    if (!vis) return false;
+    const tt = webBtn.locator("span.mat-mdc-button-touch-target").first();
+    if (await tt.count()) await tt.click({ timeout: 10000 });
+    else await webBtn.click({ timeout: 10000 });
+    await page.waitForTimeout(1000);
+    return true;
+  };
+  if (!(await ga4ClickWeb())) {
+    if (!capturedPropertyId) throw new Error("create_ga4_full: Web button not found and no property ID in URL");
+    const su = capturedAccountId
+      ? `https://analytics.google.com/analytics/web/#/a${capturedAccountId}p${capturedPropertyId}/admin/streams/new/web`
+      : `https://analytics.google.com/analytics/web/#/p${capturedPropertyId}/admin/streams/new/web`;
+    await page.goto(su, { waitUntil: "domcontentloaded", timeout: 30000 });
+    await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
+    await page.waitForTimeout(1500);
+    await ga4ClickWeb();
+  }
+  await fillWebStreamForm(page, { websiteUrl, websiteName });
+  console.log("✅ Web stream created");
+  await page.waitForTimeout(3000);
+
+  // ── Fetch IDs via breadcrumb property search ───────────────────────────────
+  console.log("🔍 Navigating to GA4 home for property search...");
+  await page.goto("https://analytics.google.com/analytics/web", { waitUntil: "domcontentloaded" });
+  const breadcrumbArrow = page.locator('mat-icon.gmp-breadcrumb-arrow').first();
+  await breadcrumbArrow.waitFor({ state: "visible", timeout: 15000 });
+  await page.waitForTimeout(500);
+  await breadcrumbArrow.click();
+  await page.waitForTimeout(800);
+
+  console.log(`🔍 Searching for property: "${property_name}"`);
+  await page.keyboard.type(String(property_name), { delay: 25 });
+  await page.waitForTimeout(1500);
+
+  const propertyResult = page
+    .locator('gmp-entity-item, [class*="gmp-entity"], [class*="entity-item"]')
+    .filter({ hasText: String(property_name) })
+    .first();
+  await propertyResult.waitFor({ timeout: 15000 });
+  await propertyResult.click();
+  await page.waitForTimeout(2000);
+  console.log("✅ Property selected from breadcrumb search");
+
+  let ga4FullPropertyId = null;
+  let accountIdFromUrl = null;
+  const urlPollEnd = Date.now() + 8000;
+  while (Date.now() < urlPollEnd) {
+    const m = page.url().match(/#\/a(\d+)p(\d+)/i);
+    if (m) { accountIdFromUrl = m[1]; ga4FullPropertyId = m[2]; break; }
+    await page.waitForTimeout(400);
+  }
+  if (!ga4FullPropertyId) throw new Error("create_ga4_full: property ID not found in URL after property search");
+  console.log(`🔑 From URL — account: ${accountIdFromUrl}, property: ${ga4FullPropertyId}`);
+
+  const streamsUrl = `https://analytics.google.com/analytics/web/#/a${accountIdFromUrl}p${ga4FullPropertyId}/admin/streams/table/web`;
+  console.log("🔍 Navigating to streams:", streamsUrl);
+  await page.goto(streamsUrl, { waitUntil: "domcontentloaded" });
+  await page.waitForTimeout(2000);
+
+  await openWebStreamFromList(page, { websiteName, websiteUrl });
+  const { snippet: gtagSnippet, measurementId } = await openTagInstructionsAndExtract(page);
+  console.log("✅ measurementId:", measurementId);
+  console.log("✅ property_id:", ga4FullPropertyId);
+
+  return {
+    status: "success",
+    account_name,
+    property_name,
+    property_id: ga4FullPropertyId,
+    measurement_id: measurementId,
+    gtag: gtagSnippet,
+    google_email,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// handleMultiAccountGA4 — try all supplied accounts until one succeeds
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Handle create_ga4_full when req.body.accounts is an array.
+ * Sorts accounts by ga4_property_count (least-used first), launches a fresh
+ * browser per account, attempts GA4 creation, and returns structured diagnostics.
+ *
+ * Account-full failures are skipped silently.
+ * Real automation errors capture a screenshot + page diagnostics.
+ * On success, increments ga4_property_count in google_accounts via Supabase.
+ */
+async function handleMultiAccountGA4(req, res) {
+  const { accounts, account_name, property_name } = req.body;
+  const { websiteUrl, websiteName } = getWebsiteInputs(req);
+  const { incrementAccountCount } = require("./src/lib/credentials");
+
+  if (!account_name || !property_name)
+    return res.status(400).json({ error: "create_ga4_full: missing account_name or property_name" });
+  if (!websiteUrl || !websiteName)
+    return res.status(400).json({ error: "create_ga4_full: missing websiteUrl or websiteName" });
+
+  // Sort by least-used first so full accounts are tried last
+  const sorted = [...accounts].sort((a, b) => (a.ga4_property_count || 0) - (b.ga4_property_count || 0));
+
+  const skipped = [];
+  const errors  = [];
+  let accountsTried = 0;
+
+  for (const account of sorted) {
+    const { google_email, google_password } = account;
+    accountsTried++;
+    let browser;
+
+    try {
+      browser = await chromium.launch({ headless: process.env.HEADLESS !== "false" });
+      const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+      const page = await context.newPage();
+
+      // ── Google login ──────────────────────────────────────────────────────
+      await page.goto("https://analytics.google.com", { waitUntil: "domcontentloaded" });
+      for (let i = 0; i < 15; i++) {
+        const url = page.url();
+        if (url.startsWith("https://analytics.google.com")) break;
+        if ((await page.locator('input[type="email"]:visible').count()) > 0) {
+          await page.fill('input[type="email"]:visible', google_email);
+          await page.keyboard.press("Enter");
+          await page.waitForTimeout(4000);
+          continue;
+        }
+        if ((await page.locator('input[name="Passwd"]:visible').count()) > 0) {
+          await page.fill('input[name="Passwd"]:visible', google_password);
+          await page.keyboard.press("Enter");
+          await page.waitForTimeout(5000);
+          continue;
+        }
+        if ((await page.locator('input[type="tel"]:visible').count()) > 0) {
+          throw new Error(`Google 2FA prompt detected for ${google_email} — cannot automate`);
+        }
+        const accountPickerEmail = page
+          .locator(`[data-identifier*="${google_email}"], li:has-text("${google_email}"), [data-email*="${google_email}"]`)
+          .first();
+        if (await accountPickerEmail.isVisible().catch(() => false)) {
+          await accountPickerEmail.click();
+          await page.waitForTimeout(3000);
+          continue;
+        }
+        const anyPickerAccount = page.locator('[data-identifier], .OVnw0d').first();
+        if (await anyPickerAccount.isVisible().catch(() => false)) {
+          await anyPickerAccount.click();
+          await page.waitForTimeout(3000);
+          continue;
+        }
+        const staySignedIn = page
+          .locator('button:has-text("Yes"), button:has-text("Stay signed in"), [jsname="LgbsSe"]:has-text("Yes")')
+          .first();
+        if (await staySignedIn.isVisible().catch(() => false)) {
+          await staySignedIn.click();
+          await page.waitForTimeout(3000);
+          continue;
+        }
+        const continueBtn = page.locator('button:has-text("Continue"), a:has-text("Continue")').first();
+        if (await continueBtn.isVisible().catch(() => false)) {
+          await continueBtn.click();
+          await page.waitForTimeout(3000);
+          continue;
+        }
+        await page.waitForTimeout(3000);
+      }
+
+      // ── Run GA4 creation wizard ────────────────────────────────────────────
+      const result = await performGA4Creation(page, context, {
+        account_name, property_name, websiteUrl, websiteName, google_email,
+      });
+
+      await browser.close();
+      browser = null;
+
+      if (result.status === "failed" && result.reason === "account_no_space") {
+        console.log(`⏭️ ${google_email}: account full, skipping`);
+        skipped.push({ account: google_email, reason: "account_no_space" });
+        continue;
+      }
+
+      // ── Success ────────────────────────────────────────────────────────────
+      await incrementAccountCount(account.id, "ga4_property_count").catch((err) =>
+        console.error("⚠️ incrementAccountCount failed:", err.message)
+      );
+
+      return res.json({
+        status:           "success",
+        account_used:     google_email,
+        account_name:     result.account_name,
+        property_name:    result.property_name,
+        property_id:      result.property_id,
+        measurement_id:   result.measurement_id,
+        gtag:             result.gtag,
+        accounts_skipped: skipped.length,
+        accounts_tried:   accountsTried,
+      });
+
+    } catch (err) {
+      let screenshotB64 = null;
+      let pageUrl       = null;
+      let pageSnippet   = null;
+      if (browser) {
+        try {
+          const catchPage = browser.contexts()?.[0]?.pages()?.[0];
+          if (catchPage) {
+            pageUrl     = catchPage.url();
+            pageSnippet = await catchPage.evaluate(() => document.body.innerText.substring(0, 300)).catch(() => null);
+            const screenshotPath = `/tmp/fail_ga4_${Date.now()}.png`;
+            await catchPage.screenshot({ path: screenshotPath, fullPage: false });
+            screenshotB64 = require("fs").readFileSync(screenshotPath).toString("base64");
+          }
+        } catch (_) {}
+        await browser.close().catch(() => {});
+        browser = null;
+      }
+      console.error(`❌ ${google_email}: automation error — ${err.message}`);
+      errors.push({ account: google_email, error: err.message, page_url: pageUrl, page_snippet: pageSnippet, screenshot_b64: screenshotB64 });
+    }
+  }
+
+  // All accounts exhausted
+  if (errors.length === 0) {
+    return res.json({ status: "failed", reason: "all_accounts_full", accounts_full: skipped.length });
+  }
+  return res.json({
+    status:        "failed",
+    reason:        "all_accounts_failed",
+    accounts_full: skipped.length,
+    errors,
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Account capacity endpoints
+// ─────────────────────────────────────────────────────────────────────────────
+
+// GET /accounts — list all Google accounts with current ga4/gtm counts
+app.get("/accounts", async (req, res) => {
+  try {
+    const { getAllGoogleAccounts } = require("./src/lib/credentials");
+    const accounts = await getAllGoogleAccounts();
+    return res.json({ status: "ok", accounts });
+  } catch (err) {
+    return res.status(500).json({ status: "error", error: err.message });
+  }
+});
+
+// PATCH /accounts/:id/capacity — directly set ga4_property_count and/or gtm_container_count
+app.patch("/accounts/:id/capacity", async (req, res) => {
+  const { id } = req.params;
+  const { ga4_property_count, gtm_container_count } = req.body;
+
+  const updates = {};
+  if (ga4_property_count !== undefined) updates.ga4_property_count = ga4_property_count;
+  if (gtm_container_count !== undefined) updates.gtm_container_count = gtm_container_count;
+
+  if (Object.keys(updates).length === 0) {
+    return res.status(400).json({ status: "error", error: "No updatable fields provided (ga4_property_count, gtm_container_count)" });
+  }
+
+  try {
+    const supabase = require("./src/lib/supabase");
+    const { error } = await supabase.from("google_accounts").update(updates).eq("id", id);
+    if (error) return res.status(500).json({ status: "error", error: error.message });
+    return res.json({ status: "ok", id, updated: updates });
+  } catch (err) {
+    return res.status(500).json({ status: "error", error: err.message });
+  }
+});
+
+// POST /accounts/scan-capacity
+// Receives an array of google_accounts rows, navigates each one to the GA4
+// account-creation page, reads the "X more accounts can be created" text, and
+// returns remaining/used/max for every account in a single response.
+app.post("/accounts/scan-capacity", async (req, res) => {
+  const { accounts } = req.body;
+  if (!Array.isArray(accounts) || accounts.length === 0) {
+    return res.status(400).json({ status: "error", error: "accounts array required" });
+  }
+
+  const results = [];
+
+  for (const account of accounts) {
+    const { id, google_email, google_password, account_name } = account;
+    let browser;
+
+    try {
+      browser = await chromium.launch({ headless: process.env.HEADLESS !== "false" });
+      const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+      const page = await context.newPage();
+
+      // ── Google login ──────────────────────────────────────────────────────
+      await page.goto("https://analytics.google.com", { waitUntil: "domcontentloaded" });
+      for (let i = 0; i < 15; i++) {
+        const url = page.url();
+        if (url.startsWith("https://analytics.google.com")) break;
+        if ((await page.locator('input[type="email"]:visible').count()) > 0) {
+          await page.fill('input[type="email"]:visible', google_email);
+          await page.keyboard.press("Enter");
+          await page.waitForTimeout(4000);
+          continue;
+        }
+        if ((await page.locator('input[name="Passwd"]:visible').count()) > 0) {
+          await page.fill('input[name="Passwd"]:visible', google_password);
+          await page.keyboard.press("Enter");
+          await page.waitForTimeout(5000);
+          continue;
+        }
+        if ((await page.locator('input[type="tel"]:visible').count()) > 0) {
+          throw new Error("Google 2FA prompt detected — cannot automate this account");
+        }
+        const accountPickerEmail = page
+          .locator(`[data-identifier*="${google_email}"], li:has-text("${google_email}"), [data-email*="${google_email}"]`)
+          .first();
+        if (await accountPickerEmail.isVisible().catch(() => false)) {
+          await accountPickerEmail.click();
+          await page.waitForTimeout(3000);
+          continue;
+        }
+        const anyPickerAccount = page.locator('[data-identifier], .OVnw0d').first();
+        if (await anyPickerAccount.isVisible().catch(() => false)) {
+          await anyPickerAccount.click();
+          await page.waitForTimeout(3000);
+          continue;
+        }
+        const staySignedIn = page
+          .locator('button:has-text("Yes"), button:has-text("Stay signed in"), [jsname="LgbsSe"]:has-text("Yes")')
+          .first();
+        if (await staySignedIn.isVisible().catch(() => false)) {
+          await staySignedIn.click();
+          await page.waitForTimeout(3000);
+          continue;
+        }
+        const continueBtn = page.locator('button:has-text("Continue"), a:has-text("Continue")').first();
+        if (await continueBtn.isVisible().catch(() => false)) {
+          await continueBtn.click();
+          await page.waitForTimeout(3000);
+          continue;
+        }
+        await page.waitForTimeout(3000);
+      }
+
+      // ── Navigate to GA4 Admin → Create → Account ──────────────────────────
+      await page.goto("https://analytics.google.com/analytics/web", { waitUntil: "domcontentloaded" });
+      await page.waitForTimeout(2000);
+
+      const adminBtn = page
+        .getByRole("button", { name: /^Admin$/ })
+        .or(page.getByRole("link", { name: /^Admin$/ }))
+        .or(page.locator('[aria-label="Admin"]'));
+      for (let i = 1; i <= 3; i++) {
+        if (await adminBtn.first().isVisible().catch(() => false)) break;
+        await page.waitForTimeout(4000);
+      }
+      await adminBtn.first().waitFor({ state: "visible", timeout: 60000 });
+      await adminBtn.first().click({ timeout: 60000 });
+      await page.waitForURL(/\/admin\b/i, { timeout: 30000 }).catch(() => {});
+      await page.waitForTimeout(1200);
+      await page.mouse.click(650, 320).catch(() => {});
+      await page.keyboard.press("Escape").catch(() => {});
+      await page.waitForTimeout(800);
+
+      const createBtn = page.getByRole("button", { name: /^Create$/ }).first();
+      await createBtn.waitFor({ state: "visible", timeout: 20000 });
+      await createBtn.click({ timeout: 20000 });
+
+      const menuPanel = page
+        .locator('.cdk-overlay-container .mat-mdc-menu-panel, .cdk-overlay-container [role="menu"], [role="menu"]')
+        .filter({ hasText: "Account" })
+        .last();
+      await menuPanel.waitFor({ state: "visible", timeout: 15000 });
+      const accountMenuBtn = menuPanel.locator('button[role="menuitem"]:has-text("Account")').first();
+      await accountMenuBtn.waitFor({ state: "visible", timeout: 15000 });
+      await accountMenuBtn.click({ timeout: 15000 });
+      await page.waitForURL(/\/admin\/account\/create/i, { timeout: 30000 });
+      await page.waitForTimeout(1500);
+
+      // ── Read capacity text ─────────────────────────────────────────────────
+      // "68 more accounts can be created. The maximum is 100."
+      const limitTexts = [
+        "text=/reached\\s+the\\s+limit/i", "text=/limit\\s+reached/i",
+        "text=/you\\s+have\\s+reached/i", "text=/too\\s+many/i",
+        "text=/account\\s+limit/i", "text=/can\\s+only\\s+create/i",
+      ];
+      let atLimit = false;
+      for (const t of limitTexts) {
+        if (await page.locator(t).first().isVisible().catch(() => false)) { atLimit = true; break; }
+      }
+
+      let remaining = null;
+      let max = 100;
+
+      if (atLimit) {
+        remaining = 0;
+      } else {
+        const capacityText = await page.locator('text=/more accounts can be created/i').first()
+          .innerText({ timeout: 5000 }).catch(() => null);
+        if (capacityText) {
+          const remainingMatch = capacityText.match(/(\d+)\s+more accounts/i);
+          const maxMatch       = capacityText.match(/maximum is (\d+)/i);
+          if (remainingMatch) remaining = parseInt(remainingMatch[1], 10);
+          if (maxMatch)       max       = parseInt(maxMatch[1], 10);
+        }
+      }
+
+      await browser.close();
+      browser = null;
+
+      results.push({
+        id,
+        account_name: account_name || google_email,
+        google_email,
+        remaining,
+        used:  remaining !== null ? max - remaining : null,
+        max,
+        error: null,
+      });
+
+    } catch (err) {
+      if (browser) await browser.close().catch(() => {});
+      browser = null;
+      console.error(`❌ scan-capacity ${google_email}: ${err.message}`);
+      results.push({
+        id,
+        account_name: account_name || google_email,
+        google_email,
+        remaining: null,
+        used:      null,
+        max:       null,
+        error:     err.message,
+      });
+    }
+  }
+
+  return res.json({ status: "ok", results });
+});
+
 const sessions = {};
 
 app.post("/run", async (req, res) => {
@@ -1893,6 +2656,11 @@ app.post("/run", async (req, res) => {
       console.error("❌ handle_new_case error:", err.message);
       return res.json({ status: "error", case_id, error: err.message });
     }
+  }
+
+  // ── Multi-account GA4: bypass shared browser setup, handle internally ───────
+  if (action === "create_ga4_full" && Array.isArray(req.body.accounts)) {
+    return await handleMultiAccountGA4(req, res);
   }
 
   let browser;
@@ -2162,389 +2930,16 @@ app.post("/run", async (req, res) => {
       if (!websiteUrl || !websiteName)
         throw new Error("create_ga4_full: missing websiteUrl or websiteName");
 
-      // ── Navigate to GA4 Admin ──────────────────────────────────────────
-      await page.goto("https://analytics.google.com/analytics/web", { waitUntil: "domcontentloaded" });
-      await page.waitForTimeout(2000);
+      const ga4Result = await performGA4Creation(page, context, {
+        account_name, property_name, websiteUrl, websiteName, google_email,
+      });
 
-      const ga4AdminBtn = page
-        .getByRole("button", { name: /^Admin$/ })
-        .or(page.getByRole("link", { name: /^Admin$/ }))
-        .or(page.locator('[aria-label="Admin"]'));
-      for (let i = 1; i <= 3; i++) {
-        if (await ga4AdminBtn.first().isVisible().catch(() => false)) break;
-        console.log(`⏳ Admin button not visible (attempt ${i}/3), waiting...`);
-        await page.waitForTimeout(4000);
-      }
-      await ga4AdminBtn.first().waitFor({ state: "visible", timeout: 60000 });
-      await ga4AdminBtn.first().click({ timeout: 60000 });
-      await page.waitForURL(/\/admin\b/i, { timeout: 30000 }).catch(() => {});
-      await page.waitForTimeout(1200);
-      await page.mouse.click(650, 320).catch(() => {});
-      await page.keyboard.press("Escape").catch(() => {});
-      await page.waitForTimeout(800);
-      await page.evaluate(() => window.scrollTo(0, 0));
-      await page.waitForTimeout(400);
-
-      // ── Click Create → Account ─────────────────────────────────────────
-      const ga4CreateBtn = page.getByRole("button", { name: /^Create$/ }).first();
-      await ga4CreateBtn.waitFor({ state: "visible", timeout: 20000 });
-      await ga4CreateBtn.click({ timeout: 20000 });
-
-      const ga4MenuPanel = page
-        .locator('.cdk-overlay-container .mat-mdc-menu-panel, .cdk-overlay-container [role="menu"], [role="menu"]')
-        .filter({ hasText: "Account" })
-        .last();
-      await ga4MenuPanel.waitFor({ state: "visible", timeout: 15000 });
-      const ga4AccountMenuBtn = ga4MenuPanel.locator('button[role="menuitem"]:has-text("Account")').first();
-      await ga4AccountMenuBtn.waitFor({ state: "visible", timeout: 15000 });
-      await ga4AccountMenuBtn.click({ timeout: 15000 });
-      await page.waitForURL(/\/admin\/account\/create/i, { timeout: 30000 });
-      await page.waitForTimeout(800);
-
-      // ── Capacity check ─────────────────────────────────────────────────
-      const ga4LimitTexts = [
-        "text=/reached\\s+the\\s+limit/i", "text=/limit\\s+reached/i",
-        "text=/you\\s+have\\s+reached/i", "text=/too\\s+many/i",
-        "text=/account\\s+limit/i", "text=/can\\s+only\\s+create/i",
-      ];
-      for (const t of ga4LimitTexts) {
-        if (await page.locator(t).first().isVisible().catch(() => false)) {
-          if (browser) await browser.close();
-          return res.json({ status: "failed", reason: "account_no_space" });
-        }
-      }
-
-      const ga4ReportsTexts = ["text=Reports snapshot", "text=Realtime", "text=Engagement", "text=Monetization"];
-      let ga4InAdmin = false;
-      for (let i = 0; i < 15; i++) {
-        let rv = false;
-        for (const t of ga4ReportsTexts) { if ((await page.locator(t).count()) > 0) { rv = true; break; } }
-        if (!rv) { ga4InAdmin = true; break; }
-        await page.waitForTimeout(300);
-      }
-      if (!ga4InAdmin) {
+      if (ga4Result.status === "failed") {
         if (browser) await browser.close();
-        return res.json({ status: "failed", reason: "account_no_space" });
+        return res.json(ga4Result);
       }
 
-      const ga4AccountInput = page.locator('input[aria-label*="Account"], input[placeholder*="Account"]').first();
-      try {
-        await ga4AccountInput.waitFor({ timeout: 5000 });
-      } catch {
-        if (browser) await browser.close();
-        return res.json({ status: "failed", reason: "account_no_space" });
-      }
-
-      // ── Build create URL for retry navigation ──────────────────────────
-      const ga4UrlNow = page.url();
-      const ga4CtxMatch = ga4UrlNow.match(/#\/(a\d+p\d+)\b/i);
-      const ga4Ctx = ga4CtxMatch ? ga4CtxMatch[1] : null;
-      const ga4CreateUrl = ga4Ctx
-        ? `https://analytics.google.com/analytics/web/#/${ga4Ctx}/admin/account/create`
-        : "https://analytics.google.com/analytics/web/#/admin/account/create";
-
-      let ga4OnCreatePage = await ga4AccountInput.isVisible().catch(() => false);
-      for (let attempt = 1; attempt <= 4 && !ga4OnCreatePage; attempt++) {
-        await page.goto(ga4CreateUrl, { waitUntil: "domcontentloaded" });
-        await page.waitForTimeout(1500);
-        await page.mouse.click(650, 320).catch(() => {});
-        await page.keyboard.press("Escape").catch(() => {});
-        await page.waitForTimeout(600);
-        ga4OnCreatePage = await ga4AccountInput.isVisible().catch(() => false);
-      }
-      if (!ga4OnCreatePage) throw new Error("create_ga4_full: could not reach Account Create page");
-
-      // ── Fill account name ──────────────────────────────────────────────
-      await ga4AccountInput.fill(account_name);
-      await page.waitForTimeout(300);
-      const ga4FilledVal = await ga4AccountInput.inputValue().catch(() => "");
-      if (ga4FilledVal !== account_name) {
-        await ga4AccountInput.click({ force: true });
-        await ga4AccountInput.fill(account_name);
-        await page.waitForTimeout(300);
-      }
-      try {
-        const orgCb = page.locator('mat-checkbox:has-text("organisation"), mat-checkbox:has-text("organization")').first();
-        if (await orgCb.isVisible({ timeout: 3000 }).catch(() => false)) {
-          const isChecked = await orgCb.locator('input[type="checkbox"]').isChecked().catch(() => false);
-          if (isChecked) await orgCb.click();
-        }
-      } catch {}
-      await page.click('button:has-text("Next")');
-
-      // ── Step 2: Property name (with retry + hard-reset recovery) ───────
-      const ga4IsOnReports = async () => {
-        for (const t of ga4ReportsTexts) { if ((await page.locator(t).count()) > 0) return true; }
-        return false;
-      };
-      const ga4OpenAdminViaUI = async () => {
-        await page.goto("https://analytics.google.com/analytics/web", { waitUntil: "domcontentloaded" });
-        await page.waitForTimeout(3500);
-        const ab = page.locator('[aria-label="Admin"], a[href*="admin"], button[aria-label*="Admin"]').first();
-        await ab.waitFor({ timeout: 60000 });
-        await ab.click();
-        await page.waitForTimeout(3000);
-      };
-      const ga4OpenCreateWizard = async () => {
-        try {
-          const cb = page.locator('[aria-label="Create"], button:has-text("Create"), button[aria-label*="Create"]').first();
-          if ((await cb.count()) > 0) {
-            await cb.waitFor({ timeout: 8000 });
-            await cb.click();
-            await page.waitForTimeout(800);
-            const ai = page.locator('[role="menuitem"]:has-text("Account"), button:has-text("Account"), a:has-text("Account")').first();
-            if ((await ai.count()) > 0) { await ai.waitFor({ timeout: 8000 }); await ai.click(); await page.waitForTimeout(1200); return; }
-          }
-        } catch {}
-        await page.goto(ga4CreateUrl, { waitUntil: "domcontentloaded" });
-        await page.waitForTimeout(1200);
-      };
-      const ga4HardResetAndRedoStep1 = async (reason) => {
-        console.log(`🧯 Hard reset tab (${reason})…`);
-        try { await page.close({ runBeforeUnload: true }); } catch {}
-        page = await context.newPage();
-        await ga4OpenAdminViaUI();
-        await ga4OpenCreateWizard();
-        const acc = page.locator('input[aria-label*="Account"], input[placeholder*="Account"]').first();
-        await acc.waitFor({ timeout: 6000 });
-        await acc.fill(account_name);
-        await page.click('button:has-text("Next")');
-        await page.waitForTimeout(800);
-      };
-      const ga4FillProperty = async () => {
-        const sel = "#name, input#name";
-        for (const method of [
-          async () => { const i = page.locator(sel).first(); await i.waitFor({ timeout: 10000 }); await i.fill(property_name, { force: true }); await page.keyboard.press("Tab"); await page.waitForTimeout(200); return (await i.inputValue().catch(() => null)) === property_name; },
-          async () => { const i = page.locator(sel).first(); await i.waitFor({ timeout: 10000 }); await i.evaluate(el => el.focus()); await i.fill(property_name, { force: true }); await page.keyboard.press("Tab"); await page.waitForTimeout(200); return (await i.inputValue().catch(() => null)) === property_name; },
-          async () => { const ok = await page.evaluate(val => { const el = document.querySelector("#name") || document.querySelector("input#name"); if (!el) return false; el.focus(); el.value = val; el.dispatchEvent(new Event("input", { bubbles: true })); el.dispatchEvent(new Event("change", { bubbles: true })); el.blur(); return true; }, property_name); if (!ok) return false; await page.waitForTimeout(250); return (await page.locator(sel).first().inputValue().catch(() => null)) === property_name; },
-        ]) {
-          try { if (await method()) return true; } catch {}
-        }
-        return false;
-      };
-      const ga4ClickNext = async () => {
-        const stepperNext = page.locator("button[matsteppernext], button[matStepperNext], button[cdksteppernext], button[cdkStepperNext]");
-        if ((await stepperNext.count()) > 0) {
-          for (let i = 0; i < (await stepperNext.count()); i++) {
-            const b = stepperNext.nth(i);
-            if (!(await b.isVisible().catch(() => false)) || !(await b.isEnabled().catch(() => false))) continue;
-            await b.scrollIntoViewIfNeeded().catch(() => {});
-            await b.click({ timeout: 8000 });
-            return true;
-          }
-        }
-        return !!(await page.evaluate(() => {
-          const isVis = el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
-          const cands = Array.from(document.querySelectorAll('button,[role="button"]'))
-            .filter(el => (el.textContent || "").trim().includes("Next"))
-            .filter(el => el.getAttribute("aria-disabled") !== "true" && !el.disabled)
-            .filter(isVis);
-          if (!cands.length) return false;
-          cands.sort((a, b) => b.getBoundingClientRect().top - a.getBoundingClientRect().top);
-          cands[0].click(); return true;
-        }));
-      };
-
-      let step2Success = false;
-      for (let attempt = 1; attempt <= 8; attempt++) {
-        console.log(`🔧 Step 2 attempt ${attempt}/8`);
-        if (await ga4IsOnReports()) await ga4HardResetAndRedoStep1("on Reports at Step 2 start");
-        try { await page.locator("#cdk-stepper-0-content-1").waitFor({ timeout: 12000 }); }
-        catch { if (await ga4IsOnReports()) { await ga4HardResetAndRedoStep1("redirected while waiting for Step 2"); continue; } continue; }
-        await ga4FillProperty();
-        if (await ga4IsOnReports()) { await ga4HardResetAndRedoStep1("redirected after fill"); continue; }
-        if (!(await ga4ClickNext())) { if (await ga4IsOnReports()) await ga4HardResetAndRedoStep1("redirected clicking Next"); continue; }
-        try { await page.locator("#cdk-stepper-0-content-2").waitFor({ timeout: 15000 }); step2Success = true; break; }
-        catch { if (await ga4IsOnReports()) { await ga4HardResetAndRedoStep1("redirected after Next"); continue; } continue; }
-      }
-      if (!step2Success) throw new Error("create_ga4_full: Step 2 failed after 8 attempts");
-
-      // ── Step 3: Business info ──────────────────────────────────────────
-      const step3 = page.locator("#cdk-stepper-0-content-2");
-      await step3.waitFor({ timeout: 30000 });
-      const selOneBtn = step3.locator('button:has-text("Select one"), [role="button"]:has-text("Select one")').first();
-      await selOneBtn.waitFor({ timeout: 30000 });
-      await selOneBtn.click({ timeout: 30000 });
-      await page.waitForTimeout(300);
-      let overPanel = page.locator(".cdk-overlay-pane:visible").last();
-      if ((await overPanel.count().catch(() => 0)) === 0) { await selOneBtn.click({ force: true, timeout: 30000 }); await page.waitForTimeout(300); overPanel = page.locator(".cdk-overlay-pane:visible").last(); }
-      await overPanel.waitFor({ timeout: 30000 });
-      const indSearch = overPanel.locator('input[type="text"], input[placeholder*="Search"], input[aria-label*="Search"]').first();
-      if ((await indSearch.count().catch(() => 0)) > 0) {
-        await indSearch.waitFor({ timeout: 10000 });
-        await indSearch.fill("Other business activity");
-        await page.waitForTimeout(300);
-        await overPanel.locator('[role="option"], mat-option, .mat-mdc-option, .mdc-list-item').filter({ hasText: "Other business activity" }).first().waitFor({ timeout: 30000 });
-        await overPanel.locator('[role="option"], mat-option, .mat-mdc-option, .mdc-list-item').filter({ hasText: "Other business activity" }).first().click({ timeout: 30000 });
-      } else {
-        await overPanel.locator('[role="option"], mat-option, .mat-mdc-option, .mdc-list-item').filter({ hasText: "Other business activity" }).first().waitFor({ timeout: 30000 });
-        await overPanel.locator('[role="option"], mat-option, .mat-mdc-option, .mdc-list-item').filter({ hasText: "Other business activity" }).first().click({ timeout: 30000 });
-      }
-      await page.waitForTimeout(300);
-      const smallInput = step3.locator("#mat-radio-0-input, input#mat-radio-0-input").first();
-      await smallInput.waitFor({ timeout: 30000 });
-      const smallTxt = "Small – 1 to 10 employees";
-      let clickedSmallFull = false;
-      for (const locFn of [
-        () => step3.locator(`text=${smallTxt}`).first(),
-        () => step3.locator('label[for="mat-radio-0-input"]').first(),
-        () => step3.locator('mat-radio-button, [role="radio"]').filter({ hasText: smallTxt }).first(),
-      ]) {
-        if (clickedSmallFull) break;
-        try { const loc = locFn(); if ((await loc.count().catch(() => 0)) > 0) { await loc.click({ force: true, timeout: 8000 }); clickedSmallFull = true; } } catch {}
-      }
-      if (!clickedSmallFull) { try { await smallInput.check({ force: true, timeout: 8000 }); } catch { await smallInput.click({ force: true, timeout: 8000 }); } }
-      const startSmallFull = Date.now();
-      while (!(await smallInput.isChecked().catch(() => false))) {
-        if (Date.now() - startSmallFull > 15000) throw new Error("create_ga4_full: Step 3 Small not confirmed");
-        await page.waitForTimeout(250);
-      }
-      const nextBtn3 = step3.locator('button[matsteppernext], button[matStepperNext], button:has-text("Next")').first();
-      await nextBtn3.waitFor({ timeout: 30000 });
-      const startNext3 = Date.now();
-      while (!(await nextBtn3.isEnabled().catch(() => false))) {
-        if (Date.now() - startNext3 > 30000) throw new Error("create_ga4_full: Step 3 Next never enabled");
-        await page.waitForTimeout(300);
-      }
-      await nextBtn3.click();
-
-      // ── Step 4: Objectives ─────────────────────────────────────────────
-      const step4 = page.locator("#cdk-stepper-0-content-3");
-      await step4.waitFor({ timeout: 30000 });
-      for (const label of ["Generate leads", "Drive sales", "Understand web and/or app traffic", "View user engagement and retention"]) {
-        const cb = step4.getByRole("checkbox", { name: label }).first();
-        await cb.waitFor({ timeout: 30000 });
-        if (!(await cb.isChecked().catch(() => false))) await cb.click({ timeout: 15000 });
-        const start = Date.now();
-        while (!(await cb.isChecked().catch(() => false))) {
-          if (Date.now() - start > 10000) throw new Error(`create_ga4_full: Step 4 "${label}" would not stay checked`);
-          await page.waitForTimeout(250);
-        }
-      }
-      const createBtn4 = page.locator('button:has-text("Create")').last();
-      await createBtn4.waitFor({ state: "attached", timeout: 30000 });
-      await createBtn4.scrollIntoViewIfNeeded().catch(() => {});
-      const startCreate4 = Date.now();
-      while (!(await createBtn4.isEnabled().catch(() => false))) {
-        if (Date.now() - startCreate4 > 30000) throw new Error("create_ga4_full: Step 4 Create stayed disabled");
-        await page.waitForTimeout(300);
-      }
-      await createBtn4.click({ timeout: 15000 });
-
-      // ── Step 5: Terms ──────────────────────────────────────────────────
-      const ga4AcceptBtn = page.locator('button:has-text("I Accept"), button:has-text("Accept")').first();
-      if ((await ga4AcceptBtn.count()) > 0) {
-        await ga4AcceptBtn.waitFor({ timeout: 30000 });
-        if (!(await ga4AcceptBtn.isEnabled().catch(() => false))) {
-          const termsPanel = page.locator('div[role="dialog"]:visible, .cdk-overlay-pane:visible, .mat-dialog-container:visible').first();
-          await termsPanel.evaluate(el => { const s = el.querySelector('[class*="content"],[class*="body"],[class*="scroll"]') || el; s.scrollTop = s.scrollHeight; }).catch(() => {});
-          await page.waitForTimeout(500);
-          const termsCbs = termsPanel.locator('input[type="checkbox"]');
-          const n = await termsCbs.count();
-          for (let i = 0; i < n; i++) {
-            if (await ga4AcceptBtn.isEnabled().catch(() => false)) break;
-            const cb = termsCbs.nth(i);
-            if (!(await cb.isChecked().catch(() => false))) { try { await cb.check({ force: true, timeout: 5000 }); } catch { await cb.click({ force: true, timeout: 5000 }); } await page.waitForTimeout(250); }
-          }
-        }
-        await ga4AcceptBtn.click({ timeout: 15000 });
-        await page.waitForTimeout(800);
-      }
-
-      // ── Step 6: Web stream ─────────────────────────────────────────────
-      console.log("📍 create_ga4_full Step 6: Web stream");
-      await page.waitForLoadState("domcontentloaded", { timeout: 30000 });
-      await page.waitForTimeout(1500);
-
-      // Capture the new account + property IDs from the URL now — this is the
-      // only reliable moment when the URL is guaranteed to contain the correct
-      // newly-created property context (#/a<accountId>p<propertyId>/...).
-      let capturedAccountId = null, capturedPropertyId = null;
-      const pollDeadline = Date.now() + 10000;
-      while (Date.now() < pollDeadline) {
-        const m = page.url().match(/#\/a(\d+)p(\d+)/i);
-        if (m) { capturedAccountId = m[1]; capturedPropertyId = m[2]; break; }
-        await page.waitForTimeout(400);
-      }
-      console.log(`🔑 Captured IDs from URL — account: ${capturedAccountId}, property: ${capturedPropertyId}`);
-
-      const ga4ClickWeb = async () => {
-        const webBtn = page.locator("button").filter({ hasText: /^web$/i }).first();
-        const vis = await webBtn.waitFor({ state: "visible", timeout: 20000 }).then(() => true).catch(() => false);
-        if (!vis) return false;
-        const tt = webBtn.locator("span.mat-mdc-button-touch-target").first();
-        if (await tt.count()) await tt.click({ timeout: 10000 });
-        else await webBtn.click({ timeout: 10000 });
-        await page.waitForTimeout(1000);
-        return true;
-      };
-      if (!(await ga4ClickWeb())) {
-        if (!capturedPropertyId) throw new Error("create_ga4_full: Web button not found and no property ID in URL");
-        const su = capturedAccountId
-          ? `https://analytics.google.com/analytics/web/#/a${capturedAccountId}p${capturedPropertyId}/admin/streams/new/web`
-          : `https://analytics.google.com/analytics/web/#/p${capturedPropertyId}/admin/streams/new/web`;
-        await page.goto(su, { waitUntil: "domcontentloaded", timeout: 30000 });
-        await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
-        await page.waitForTimeout(1500);
-        await ga4ClickWeb();
-      }
-      await fillWebStreamForm(page, { websiteUrl, websiteName });
-      console.log("✅ Web stream created");
-      await page.waitForTimeout(3000);
-
-      // ── Fetch IDs via breadcrumb property search ───────────────────────────
-      // Navigate to GA4 home and wait for the breadcrumb arrow to appear —
-      // this confirms the page is in reporting mode and ready for search.
-      console.log("🔍 Navigating to GA4 home for property search...");
-      await page.goto("https://analytics.google.com/analytics/web", { waitUntil: "domcontentloaded" });
-      const breadcrumbArrow = page.locator('mat-icon.gmp-breadcrumb-arrow').first();
-      await breadcrumbArrow.waitFor({ state: "visible", timeout: 15000 });
-      await page.waitForTimeout(500);
-
-      // Click the breadcrumb arrow to open the account/property picker
-      await breadcrumbArrow.click();
-      await page.waitForTimeout(800);
-
-      // Search by property_name — more precise than account name since it lands
-      // directly on the correct property rather than the account's last-used one.
-      console.log(`🔍 Searching for property: "${property_name}"`);
-      await page.keyboard.type(String(property_name), { delay: 25 });
-      await page.waitForTimeout(1500);
-
-      const propertyResult = page
-        .locator('gmp-entity-item, [class*="gmp-entity"], [class*="entity-item"]')
-        .filter({ hasText: String(property_name) })
-        .first();
-      await propertyResult.waitFor({ timeout: 15000 });
-      await propertyResult.click();
-      await page.waitForTimeout(2000);
-      console.log("✅ Property selected from breadcrumb search");
-
-      // Extract property ID and account ID from the URL hash.
-      // After selecting a property, GA4 routes to #/a{accountId}p{propertyId}/...
-      // Poll until both IDs appear in the URL (Angular routing may take a moment).
-      let ga4FullPropertyId = null;
-      let accountIdFromUrl = null;
-      const urlPollEnd = Date.now() + 8000;
-      while (Date.now() < urlPollEnd) {
-        const m = page.url().match(/#\/a(\d+)p(\d+)/i);
-        if (m) { accountIdFromUrl = m[1]; ga4FullPropertyId = m[2]; break; }
-        await page.waitForTimeout(400);
-      }
-      if (!ga4FullPropertyId) throw new Error("create_ga4_full: property ID not found in URL after property search");
-      console.log(`🔑 From URL — account: ${accountIdFromUrl}, property: ${ga4FullPropertyId}`);
-
-      // Navigate directly to the data streams list for this exact property.
-      // No openAdmin() call — avoids any context reset from navigating to root URL.
-      const streamsUrl = `https://analytics.google.com/analytics/web/#/a${accountIdFromUrl}p${ga4FullPropertyId}/admin/streams/table/web`;
-      console.log("🔍 Navigating to streams:", streamsUrl);
-      await page.goto(streamsUrl, { waitUntil: "domcontentloaded" });
-      await page.waitForTimeout(2000);
-
-      await openWebStreamFromList(page, { websiteName, websiteUrl });
-      const { snippet: gtagSnippet, measurementId } = await openTagInstructionsAndExtract(page);
-      console.log("✅ measurementId:", measurementId);
-      console.log("✅ property_id:", ga4FullPropertyId);
+      const { property_id: ga4FullPropertyId, measurement_id: measurementId, gtag: gtagSnippet } = ga4Result;
 
       if (browser) await browser.close();
 
@@ -4926,10 +5321,26 @@ app.post("/run", async (req, res) => {
     }
   } catch (err) {
     console.error("❌ ERROR:", err);
+    let screenshotB64 = null;
+    let pageUrl       = null;
+    let pageSnippet   = null;
+    try {
+      const catchPage = browser?.contexts()?.[0]?.pages()?.[0];
+      if (catchPage) {
+        pageUrl     = catchPage.url();
+        pageSnippet = await catchPage.evaluate(() => document.body.innerText.substring(0, 300)).catch(() => null);
+        const screenshotPath = `/tmp/fail_${action}_${Date.now()}.png`;
+        await catchPage.screenshot({ path: screenshotPath, fullPage: false });
+        screenshotB64 = require("fs").readFileSync(screenshotPath).toString("base64");
+      }
+    } catch (_) {}
     return res.json({
-      status: "failed",
-      reason: "automation_error",
-      error: err.message,
+      status:          "failed",
+      reason:          "automation_error",
+      error:           err.message,
+      page_url:        pageUrl,
+      page_snippet:    pageSnippet,
+      screenshot_b64:  screenshotB64,
     });
   } finally {
     // Always close the browser — prevents process leaks if res.json() itself throws
