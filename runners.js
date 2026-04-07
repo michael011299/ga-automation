@@ -263,8 +263,13 @@ async function ensureCorrectPropertyContext(page, accountName, propertyName) {
   await page.waitForTimeout(1500);
 
   const adminBtn = page.getByRole("button", { name: /^Admin$/ }).or(page.locator('[aria-label="Admin"]'));
-  await adminBtn.first().waitFor({ state: "visible", timeout: 30000 });
-  await adminBtn.first().click({ timeout: 30000 });
+  for (let i = 1; i <= 3; i++) {
+    if (await adminBtn.first().isVisible().catch(() => false)) break;
+    console.log(`⏳ Admin button not visible (attempt ${i}/3), waiting...`);
+    await page.waitForTimeout(4000);
+  }
+  await adminBtn.first().waitFor({ state: "visible", timeout: 60000 });
+  await adminBtn.first().click({ timeout: 60000 });
   await page.waitForTimeout(2000);
 
   // Close sidebar
@@ -467,8 +472,13 @@ async function goToDataStreams(page) {
     await page.waitForTimeout(1500);
 
     const adminBtn = page.getByRole("button", { name: /^Admin$/ }).or(page.locator('[aria-label="Admin"]'));
-    await adminBtn.first().waitFor({ state: "visible", timeout: 30000 });
-    await adminBtn.first().click({ timeout: 30000 });
+    for (let i = 1; i <= 3; i++) {
+      if (await adminBtn.first().isVisible().catch(() => false)) break;
+      console.log(`⏳ Admin button not visible (attempt ${i}/3), waiting...`);
+      await page.waitForTimeout(4000);
+    }
+    await adminBtn.first().waitFor({ state: "visible", timeout: 60000 });
+    await adminBtn.first().click({ timeout: 60000 });
     await page.waitForTimeout(2000);
   }
 
@@ -2160,8 +2170,13 @@ app.post("/run", async (req, res) => {
         .getByRole("button", { name: /^Admin$/ })
         .or(page.getByRole("link", { name: /^Admin$/ }))
         .or(page.locator('[aria-label="Admin"]'));
-      await ga4AdminBtn.first().waitFor({ state: "visible", timeout: 30000 });
-      await ga4AdminBtn.first().click({ timeout: 30000 });
+      for (let i = 1; i <= 3; i++) {
+        if (await ga4AdminBtn.first().isVisible().catch(() => false)) break;
+        console.log(`⏳ Admin button not visible (attempt ${i}/3), waiting...`);
+        await page.waitForTimeout(4000);
+      }
+      await ga4AdminBtn.first().waitFor({ state: "visible", timeout: 60000 });
+      await ga4AdminBtn.first().click({ timeout: 60000 });
       await page.waitForURL(/\/admin\b/i, { timeout: 30000 }).catch(() => {});
       await page.waitForTimeout(1200);
       await page.mouse.click(650, 320).catch(() => {});
