@@ -4479,6 +4479,32 @@ app.post("/run", async (req, res) => {
         console.log(`⏳ Verification check ${i + 1}/6 — not yet confirmed, retrying...`);
       }
 
+      // Always try to extract the HTML meta tag snippet — useful if verification fails
+      // and the user needs to manually add it to the site
+      let htmlMetaTag = null;
+      try {
+        // Expand "HTML tag" section if not already open
+        const htmlTagMethod = page.locator("text=HTML tag").first();
+        if (await htmlTagMethod.isVisible({ timeout: 3000 }).catch(() => false)) {
+          await htmlTagMethod.click({ force: true }).catch(() => {});
+          await page.waitForTimeout(1000);
+        }
+        // Find the meta tag — Search Console renders it inside a <code> or plain text element
+        const metaTagEl = page.locator('text=<meta name="google-site-verification"').first();
+        if (await metaTagEl.isVisible({ timeout: 3000 }).catch(() => false)) {
+          htmlMetaTag = await metaTagEl.innerText().catch(() => null);
+        }
+        // Fallback: scan page text for the meta tag pattern
+        if (!htmlMetaTag) {
+          const pageText = await page.evaluate(() => document.body.innerText);
+          const match = pageText.match(/<meta name="google-site-verification"[^>]+>/);
+          if (match) htmlMetaTag = match[0];
+        }
+        console.log("📋 HTML meta tag:", htmlMetaTag || "not found");
+      } catch (err) {
+        console.warn("⚠️ Could not extract HTML meta tag:", err.message);
+      }
+
       await browser.close();
 
       if (verified) {
@@ -4488,9 +4514,16 @@ app.post("/run", async (req, res) => {
           website_url,
           verified: true,
           method: "google_analytics",
+          html_meta_tag: htmlMetaTag,
         });
       } else {
-        throw new Error("Search Console property added but verification failed — check that GTM/GA4 is installed and linked to this Google account");
+        return res.json({
+          status: "partial",
+          message: "Search Console property added but could not auto-verify — manual verification required",
+          website_url,
+          verified: false,
+          html_meta_tag: htmlMetaTag,
+        });
       }
     }
 
