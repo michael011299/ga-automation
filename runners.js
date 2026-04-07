@@ -2453,42 +2453,56 @@ app.post("/accounts/scan-capacity", async (req, res) => {
         await page.waitForTimeout(3000);
       }
 
-      // ── Navigate to GA4 Admin → Create → Account ────────────────────────
+      // ── Navigate to account create page (direct URL, UI click as fallback) ──
       await page.goto("https://analytics.google.com/analytics/web", { waitUntil: "domcontentloaded" });
       await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
-      await page.waitForTimeout(3000);
+      await page.waitForTimeout(2000);
 
-      const adminBtn = page
-        .getByRole("button", { name: /^Admin$/ })
-        .or(page.getByRole("link", { name: /^Admin$/ }))
-        .or(page.locator('[aria-label="Admin"]'));
-      for (let i = 1; i <= 6; i++) {
-        if (await adminBtn.first().isVisible().catch(() => false)) break;
-        console.log(`⏳ [scan-capacity] ${google_email} Admin not visible (attempt ${i}/6), waiting...`);
-        await page.waitForTimeout(5000);
+      // Extract the current a...p... context from the URL so we can build a
+      // direct link to the create page without clicking through the UI.
+      const ctxMatch = page.url().match(/#\/(a\d+p\d+)\b/i);
+      const createUrl = ctxMatch
+        ? `https://analytics.google.com/analytics/web/#/${ctxMatch[1]}/admin/account/create`
+        : "https://analytics.google.com/analytics/web/#/admin/account/create";
+
+      await page.goto(createUrl, { waitUntil: "domcontentloaded" });
+      await page.waitForTimeout(2000);
+
+      // If the SPA redirected us away, fall back to clicking through the UI
+      if (!page.url().includes("account/create")) {
+        console.log(`⚠️ [scan-capacity] ${google_email} direct nav redirected, trying UI`);
+
+        const adminBtn = page
+          .getByRole("button", { name: /^Admin$/ })
+          .or(page.getByRole("link", { name: /^Admin$/ }))
+          .or(page.locator('[aria-label="Admin"]'));
+        for (let i = 1; i <= 6; i++) {
+          if (await adminBtn.first().isVisible().catch(() => false)) break;
+          await page.waitForTimeout(5000);
+        }
+        await adminBtn.first().waitFor({ state: "visible", timeout: 90000 });
+        await adminBtn.first().click({ timeout: 60000 });
+        await page.waitForURL(/\/admin\b/i, { timeout: 30000 }).catch(() => {});
+        await page.waitForTimeout(1200);
+        await page.mouse.click(650, 320).catch(() => {});
+        await page.keyboard.press("Escape").catch(() => {});
+        await page.waitForTimeout(800);
+
+        const createBtn = page.getByRole("button", { name: /^Create$/ }).first();
+        await createBtn.waitFor({ state: "visible", timeout: 20000 });
+        await createBtn.click({ timeout: 20000 });
+
+        const menuPanel = page
+          .locator('.cdk-overlay-container .mat-mdc-menu-panel, .cdk-overlay-container [role="menu"], [role="menu"]')
+          .filter({ hasText: "Account" })
+          .last();
+        await menuPanel.waitFor({ state: "visible", timeout: 15000 });
+        const accountMenuBtn = menuPanel.locator('button[role="menuitem"]:has-text("Account")').first();
+        await accountMenuBtn.waitFor({ state: "visible", timeout: 15000 });
+        await accountMenuBtn.click({ timeout: 15000 });
+        await page.waitForURL(/\/admin\/account\/create/i, { timeout: 30000 });
+        await page.waitForTimeout(1500);
       }
-      await adminBtn.first().waitFor({ state: "visible", timeout: 90000 });
-      await adminBtn.first().click({ timeout: 60000 });
-      await page.waitForURL(/\/admin\b/i, { timeout: 30000 }).catch(() => {});
-      await page.waitForTimeout(1200);
-      await page.mouse.click(650, 320).catch(() => {});
-      await page.keyboard.press("Escape").catch(() => {});
-      await page.waitForTimeout(800);
-
-      const createBtn = page.getByRole("button", { name: /^Create$/ }).first();
-      await createBtn.waitFor({ state: "visible", timeout: 20000 });
-      await createBtn.click({ timeout: 20000 });
-
-      const menuPanel = page
-        .locator('.cdk-overlay-container .mat-mdc-menu-panel, .cdk-overlay-container [role="menu"], [role="menu"]')
-        .filter({ hasText: "Account" })
-        .last();
-      await menuPanel.waitFor({ state: "visible", timeout: 15000 });
-      const accountMenuBtn = menuPanel.locator('button[role="menuitem"]:has-text("Account")').first();
-      await accountMenuBtn.waitFor({ state: "visible", timeout: 15000 });
-      await accountMenuBtn.click({ timeout: 15000 });
-      await page.waitForURL(/\/admin\/account\/create/i, { timeout: 30000 });
-      await page.waitForTimeout(1500);
 
       // ── Read capacity text ───────────────────────────────────────────────
       // "68 more accounts can be created. The maximum is 100."
