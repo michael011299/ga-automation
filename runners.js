@@ -2455,17 +2455,19 @@ app.post("/accounts/scan-capacity", async (req, res) => {
 
       // ── Navigate to GA4 Admin → Create → Account ────────────────────────
       await page.goto("https://analytics.google.com/analytics/web", { waitUntil: "domcontentloaded" });
-      await page.waitForTimeout(2000);
+      await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
+      await page.waitForTimeout(3000);
 
       const adminBtn = page
         .getByRole("button", { name: /^Admin$/ })
         .or(page.getByRole("link", { name: /^Admin$/ }))
         .or(page.locator('[aria-label="Admin"]'));
-      for (let i = 1; i <= 3; i++) {
+      for (let i = 1; i <= 6; i++) {
         if (await adminBtn.first().isVisible().catch(() => false)) break;
-        await page.waitForTimeout(4000);
+        console.log(`⏳ [scan-capacity] ${google_email} Admin not visible (attempt ${i}/6), waiting...`);
+        await page.waitForTimeout(5000);
       }
-      await adminBtn.first().waitFor({ state: "visible", timeout: 60000 });
+      await adminBtn.first().waitFor({ state: "visible", timeout: 90000 });
       await adminBtn.first().click({ timeout: 60000 });
       await page.waitForURL(/\/admin\b/i, { timeout: 30000 }).catch(() => {});
       await page.waitForTimeout(1200);
