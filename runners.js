@@ -2559,7 +2559,10 @@ app.post("/accounts/scan-capacity", async (req, res) => {
     }
   };
 
-  const results = await Promise.all(accounts.map(scanOne));
+  const results = [];
+  for (const account of accounts) {
+    results.push(await scanOne(account));
+  }
   return res.json({ status: "ok", results });
 });
 
