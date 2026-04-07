@@ -347,15 +347,26 @@ async function openAccountViaAccountsSearch(page, accountName) {
 
 async function openAdmin(page) {
   await page.goto("https://analytics.google.com/analytics/web", { waitUntil: "domcontentloaded" });
-  await page.waitForTimeout(1500);
+
+  // Wait for GA4 to finish its initial load — the nav bar appears after the app bootstraps
+  await page.waitForTimeout(4000);
 
   const adminBtn = page
     .getByRole("button", { name: /^Admin$/ })
     .or(page.getByRole("link", { name: /^Admin$/ }))
-    .or(page.locator('[aria-label="Admin"]'));
+    .or(page.locator('[aria-label="Admin"]'))
+    .or(page.locator('a[href*="/admin"], button:has-text("Admin")'));
 
-  await adminBtn.first().waitFor({ state: "visible", timeout: 30000 });
-  await adminBtn.first().click({ timeout: 30000 });
+  // Retry up to 3 times — GA4 SPA sometimes renders the nav late
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const visible = await adminBtn.first().isVisible().catch(() => false);
+    if (visible) break;
+    console.log(`⏳ Admin button not yet visible (attempt ${attempt}/3), waiting...`);
+    await page.waitForTimeout(4000);
+  }
+
+  await adminBtn.first().waitFor({ state: "visible", timeout: 60000 });
+  await adminBtn.first().click({ timeout: 60000 });
   await page.waitForTimeout(2000);
 }
 
