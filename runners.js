@@ -2204,7 +2204,6 @@ async function performGA4Creation(initialPage, context, { account_name, property
 async function handleMultiAccountGA4(req, res) {
   const { accounts, account_name, property_name } = req.body;
   const { websiteUrl, websiteName } = getWebsiteInputs(req);
-  const { incrementAccountCount } = require("./src/lib/credentials");
 
   if (!account_name || !property_name)
     return res.status(400).json({ error: "create_ga4_full: missing account_name or property_name" });
@@ -2297,10 +2296,6 @@ async function handleMultiAccountGA4(req, res) {
       }
 
       // ── Success ────────────────────────────────────────────────────────────
-      await incrementAccountCount(account.id, "ga4").catch((err) =>
-        console.error("⚠️ incrementAccountCount failed:", err.message)
-      );
-
       return res.json({
         status:           "success",
         account_used:     google_email,
