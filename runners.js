@@ -1810,44 +1810,16 @@ async function detectSuccessSelector(page) {
 async function performGA4Creation(initialPage, context, { account_name, property_name, websiteUrl, websiteName, google_email }) {
   let page = initialPage;
 
-  // ── Navigate to GA4 Admin ──────────────────────────────────────────────────
-  await page.goto("https://analytics.google.com/analytics/web", { waitUntil: "domcontentloaded" });
-  await page.waitForTimeout(2000);
-
-  const ga4AdminBtn = page
-    .getByRole("button", { name: /^Admin$/ })
-    .or(page.getByRole("link", { name: /^Admin$/ }))
-    .or(page.locator('[aria-label="Admin"]'));
-  for (let i = 1; i <= 3; i++) {
-    if (await ga4AdminBtn.first().isVisible().catch(() => false)) break;
-    console.log(`⏳ Admin button not visible (attempt ${i}/3), waiting...`);
-    await page.waitForTimeout(4000);
-  }
-  await ga4AdminBtn.first().waitFor({ state: "visible", timeout: 60000 });
-  await ga4AdminBtn.first().click({ timeout: 60000 });
-  await page.waitForURL(/\/admin\b/i, { timeout: 30000 }).catch(() => {});
-  await page.waitForTimeout(1200);
+  // ── Navigate directly to GA4 Account Create page ──────────────────────────
+  // Skip the Admin button flow — navigate straight to the creation URL.
+  // GA4's SPA router handles this correctly once the session is active.
+  await page.goto("https://analytics.google.com/analytics/web/#/admin/account/create", { waitUntil: "domcontentloaded" });
+  await page.waitForTimeout(1500);
   await page.mouse.click(650, 320).catch(() => {});
   await page.keyboard.press("Escape").catch(() => {});
-  await page.waitForTimeout(800);
-  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.waitForTimeout(600);
+  await page.evaluate(() => window.scrollTo(0, 0)).catch(() => {});
   await page.waitForTimeout(400);
-
-  // ── Click Create → Account ─────────────────────────────────────────────────
-  const ga4CreateBtn = page.getByRole("button", { name: /^Create$/ }).first();
-  await ga4CreateBtn.waitFor({ state: "visible", timeout: 20000 });
-  await ga4CreateBtn.click({ timeout: 20000 });
-
-  const ga4MenuPanel = page
-    .locator('.cdk-overlay-container .mat-mdc-menu-panel, .cdk-overlay-container [role="menu"], [role="menu"]')
-    .filter({ hasText: "Account" })
-    .last();
-  await ga4MenuPanel.waitFor({ state: "visible", timeout: 15000 });
-  const ga4AccountMenuBtn = ga4MenuPanel.locator('button[role="menuitem"]:has-text("Account")').first();
-  await ga4AccountMenuBtn.waitFor({ state: "visible", timeout: 15000 });
-  await ga4AccountMenuBtn.click({ timeout: 15000 });
-  await page.waitForURL(/\/admin\/account\/create/i, { timeout: 30000 });
-  await page.waitForTimeout(800);
 
   // ── Capacity check ─────────────────────────────────────────────────────────
   const ga4LimitTexts = [
@@ -1923,12 +1895,11 @@ async function performGA4Creation(initialPage, context, { account_name, property
     return false;
   };
   const ga4OpenAdminViaUI = async () => {
-    await page.goto("https://analytics.google.com/analytics/web", { waitUntil: "domcontentloaded" });
-    await page.waitForTimeout(3500);
-    const ab = page.locator('[aria-label="Admin"], a[href*="admin"], button[aria-label*="Admin"]').first();
-    await ab.waitFor({ timeout: 60000 });
-    await ab.click();
-    await page.waitForTimeout(3000);
+    await page.goto(ga4CreateUrl, { waitUntil: "domcontentloaded" });
+    await page.waitForTimeout(1500);
+    await page.mouse.click(650, 320).catch(() => {});
+    await page.keyboard.press("Escape").catch(() => {});
+    await page.waitForTimeout(600);
   };
   const ga4OpenCreateWizard = async () => {
     try {
@@ -5360,6 +5331,9 @@ app.post("/run", async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, "0.0.0.0", () => {
+const server = app.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 Runner listening on port ${PORT}`);
 });
+// Disable socket timeout — browser automation can take several minutes
+server.timeout = 0;
+server.keepAliveTimeout = 0;
