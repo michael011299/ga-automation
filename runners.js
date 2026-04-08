@@ -1810,16 +1810,39 @@ async function detectSuccessSelector(page) {
 async function performGA4Creation(initialPage, context, { account_name, property_name, websiteUrl, websiteName, google_email }) {
   let page = initialPage;
 
-  // ── Navigate directly to GA4 Account Create page ──────────────────────────
-  // Skip the Admin button flow — navigate straight to the creation URL.
-  // GA4's SPA router handles this correctly once the session is active.
-  await page.goto("https://analytics.google.com/analytics/web/#/admin/account/create", { waitUntil: "domcontentloaded" });
-  await page.waitForTimeout(1500);
+  // ── Navigate to GA4 Admin ──────────────────────────────────────────────────
+  await page.goto("https://analytics.google.com/analytics/web", { waitUntil: "domcontentloaded" });
+  await page.waitForTimeout(2000);
+
+  const ga4AdminBtn = page
+    .getByRole("button", { name: /^Admin$/ })
+    .or(page.getByRole("link", { name: /^Admin$/ }))
+    .or(page.locator('[aria-label="Admin"]'));
+  await ga4AdminBtn.first().waitFor({ state: "visible", timeout: 30000 });
+  await ga4AdminBtn.first().click({ timeout: 30000 });
+  await page.waitForURL(/\/admin\b/i, { timeout: 30000 }).catch(() => {});
+  await page.waitForTimeout(1200);
   await page.mouse.click(650, 320).catch(() => {});
   await page.keyboard.press("Escape").catch(() => {});
-  await page.waitForTimeout(600);
-  await page.evaluate(() => window.scrollTo(0, 0)).catch(() => {});
+  await page.waitForTimeout(800);
+  await page.evaluate(() => window.scrollTo(0, 0));
   await page.waitForTimeout(400);
+
+  // ── Click Create → Account ─────────────────────────────────────────────────
+  const ga4CreateBtn = page.getByRole("button", { name: /^Create$/ }).first();
+  await ga4CreateBtn.waitFor({ state: "visible", timeout: 20000 });
+  await ga4CreateBtn.click({ timeout: 20000 });
+
+  const ga4MenuPanel = page
+    .locator('.cdk-overlay-container .mat-mdc-menu-panel, .cdk-overlay-container [role="menu"], [role="menu"]')
+    .filter({ hasText: "Account" })
+    .last();
+  await ga4MenuPanel.waitFor({ state: "visible", timeout: 15000 });
+  const ga4AccountMenuBtn = ga4MenuPanel.locator('button[role="menuitem"]:has-text("Account")').first();
+  await ga4AccountMenuBtn.waitFor({ state: "visible", timeout: 15000 });
+  await ga4AccountMenuBtn.click({ timeout: 15000 });
+  await page.waitForURL(/\/admin\/account\/create/i, { timeout: 30000 });
+  await page.waitForTimeout(800);
 
   // ── Capacity check ─────────────────────────────────────────────────────────
   const ga4LimitTexts = [
@@ -1895,11 +1918,12 @@ async function performGA4Creation(initialPage, context, { account_name, property
     return false;
   };
   const ga4OpenAdminViaUI = async () => {
-    await page.goto(ga4CreateUrl, { waitUntil: "domcontentloaded" });
-    await page.waitForTimeout(1500);
-    await page.mouse.click(650, 320).catch(() => {});
-    await page.keyboard.press("Escape").catch(() => {});
-    await page.waitForTimeout(600);
+    await page.goto("https://analytics.google.com/analytics/web", { waitUntil: "domcontentloaded" });
+    await page.waitForTimeout(3500);
+    const ab = page.locator('[aria-label="Admin"], a[href*="admin"], button[aria-label*="Admin"]').first();
+    await ab.waitFor({ timeout: 60000 });
+    await ab.click();
+    await page.waitForTimeout(3000);
   };
   const ga4OpenCreateWizard = async () => {
     try {
@@ -2122,18 +2146,36 @@ async function performGA4Creation(initialPage, context, { account_name, property
   console.log("✅ Web stream created");
   await page.waitForTimeout(2000);
 
-  // ── Use IDs already captured from wizard URL — no breadcrumb search needed ─
-  let ga4FullPropertyId = capturedPropertyId;
-  let accountIdFromUrl = capturedAccountId;
-  // Re-poll URL in case IDs updated during stream creation
-  const urlPollEnd = Date.now() + 6000;
+  // ── Fetch IDs via breadcrumb property search ──────────────────────────────
+  console.log("🔍 Navigating to GA4 home for property search...");
+  await page.goto("https://analytics.google.com/analytics/web", { waitUntil: "domcontentloaded" });
+  const breadcrumbArrow = page.locator('mat-icon.gmp-breadcrumb-arrow').first();
+  await breadcrumbArrow.waitFor({ state: "visible", timeout: 15000 });
+  await page.waitForTimeout(500);
+  await breadcrumbArrow.click();
+  await page.waitForTimeout(800);
+  console.log(`🔍 Searching for property: "${property_name}"`);
+  await page.keyboard.type(String(property_name), { delay: 25 });
+  await page.waitForTimeout(1500);
+  const propertyResult = page
+    .locator('gmp-entity-item, [class*="gmp-entity"], [class*="entity-item"]')
+    .filter({ hasText: String(property_name) })
+    .first();
+  await propertyResult.waitFor({ timeout: 15000 });
+  await propertyResult.click();
+  await page.waitForTimeout(2000);
+  console.log("✅ Property selected from breadcrumb search");
+
+  let ga4FullPropertyId = null;
+  let accountIdFromUrl = null;
+  const urlPollEnd = Date.now() + 8000;
   while (Date.now() < urlPollEnd) {
     const m = page.url().match(/#\/a(\d+)p(\d+)/i);
     if (m) { accountIdFromUrl = m[1]; ga4FullPropertyId = m[2]; break; }
     await page.waitForTimeout(400);
   }
-  if (!ga4FullPropertyId) throw new Error("create_ga4_full: property ID not found in URL");
-  console.log(`🔑 Using IDs from wizard URL — account: ${accountIdFromUrl}, property: ${ga4FullPropertyId}`);
+  if (!ga4FullPropertyId) throw new Error("create_ga4_full: property ID not found in URL after property search");
+  console.log(`🔑 From URL — account: ${accountIdFromUrl}, property: ${ga4FullPropertyId}`);
 
   const streamsUrl = `https://analytics.google.com/analytics/web/#/a${accountIdFromUrl}p${ga4FullPropertyId}/admin/streams/table/web`;
   console.log("🔍 Navigating to streams:", streamsUrl);
