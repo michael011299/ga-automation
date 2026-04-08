@@ -2211,15 +2211,18 @@ async function handleMultiAccountGA4(req, res) {
   if (!websiteUrl || !websiteName)
     return res.status(400).json({ error: "create_ga4_full: missing websiteUrl or websiteName" });
 
-  // Sort by least-used first so full accounts are tried last
-  const sorted = [...accounts].sort((a, b) => (a.ga4_property_count || 0) - (b.ga4_property_count || 0));
+  // Filter out accounts missing credentials, sort by lowest ga4 count first
+  const sorted = [...accounts]
+    .filter(a => a.email && a.password)
+    .sort((a, b) => (parseInt(a.ga4) || 0) - (parseInt(b.ga4) || 0));
 
   const skipped = [];
   const errors  = [];
   let accountsTried = 0;
 
   for (const account of sorted) {
-    const { google_email, google_password } = account;
+    const google_email    = account.email;
+    const google_password = account.password;
     accountsTried++;
     let browser;
 
@@ -2294,7 +2297,7 @@ async function handleMultiAccountGA4(req, res) {
       }
 
       // ── Success ────────────────────────────────────────────────────────────
-      await incrementAccountCount(account.id, "ga4_property_count").catch((err) =>
+      await incrementAccountCount(account.id, "ga4").catch((err) =>
         console.error("⚠️ incrementAccountCount failed:", err.message)
       );
 

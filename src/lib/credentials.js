@@ -119,7 +119,7 @@ async function incrementAccountCount(accountId, field) {
     return;
   }
 
-  const current = data?.[field] ?? 0;
+  const current = parseInt(data?.[field] ?? 0) || 0;
 
   const { error: writeError } = await supabase
     .from("google_accounts")
