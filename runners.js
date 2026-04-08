@@ -2080,8 +2080,18 @@ async function performGA4Creation(initialPage, context, { account_name, property
   const ga4AcceptBtn = page.locator('button:has-text("I Accept"), button:has-text("Accept")').first();
   if ((await ga4AcceptBtn.count()) > 0) {
     await ga4AcceptBtn.waitFor({ timeout: 30000 });
+
+    // Dismiss embedded cookie consent banner inside the ToS modal first —
+    // "I Accept" stays disabled until this is clicked.
+    const termsPanel = page.locator('div[role="dialog"]:visible, .cdk-overlay-pane:visible, .mat-dialog-container:visible').first();
+    const cookieBtn = termsPanel.locator('button:has-text("No thanks"), button:has-text("Agree")').first();
+    if (await cookieBtn.isVisible({ timeout: 4000 }).catch(() => false)) {
+      await cookieBtn.click({ timeout: 10000 });
+      await page.waitForTimeout(600);
+    }
+
+    // Scroll and check GDPR Data Processing Terms checkbox if still disabled
     if (!(await ga4AcceptBtn.isEnabled().catch(() => false))) {
-      const termsPanel = page.locator('div[role="dialog"]:visible, .cdk-overlay-pane:visible, .mat-dialog-container:visible').first();
       await termsPanel.evaluate(el => { const s = el.querySelector('[class*="content"],[class*="body"],[class*="scroll"]') || el; s.scrollTop = s.scrollHeight; }).catch(() => {});
       await page.waitForTimeout(500);
       const termsCbs = termsPanel.locator('input[type="checkbox"]');
@@ -2091,6 +2101,13 @@ async function performGA4Creation(initialPage, context, { account_name, property
         const cb = termsCbs.nth(i);
         if (!(await cb.isChecked().catch(() => false))) { try { await cb.check({ force: true, timeout: 5000 }); } catch { await cb.click({ force: true, timeout: 5000 }); } await page.waitForTimeout(250); }
       }
+    }
+
+    // Wait up to 15s for I Accept to become enabled
+    const startAccept = Date.now();
+    while (!(await ga4AcceptBtn.isEnabled().catch(() => false))) {
+      if (Date.now() - startAccept > 15000) break;
+      await page.waitForTimeout(300);
     }
     await ga4AcceptBtn.click({ timeout: 15000 });
     await page.waitForTimeout(800);
@@ -2132,40 +2149,20 @@ async function performGA4Creation(initialPage, context, { account_name, property
   }
   await fillWebStreamForm(page, { websiteUrl, websiteName });
   console.log("✅ Web stream created");
-  await page.waitForTimeout(3000);
-
-  // ── Fetch IDs via breadcrumb property search ───────────────────────────────
-  console.log("🔍 Navigating to GA4 home for property search...");
-  await page.goto("https://analytics.google.com/analytics/web", { waitUntil: "domcontentloaded" });
-  const breadcrumbArrow = page.locator('mat-icon.gmp-breadcrumb-arrow').first();
-  await breadcrumbArrow.waitFor({ state: "visible", timeout: 15000 });
-  await page.waitForTimeout(500);
-  await breadcrumbArrow.click();
-  await page.waitForTimeout(800);
-
-  console.log(`🔍 Searching for property: "${property_name}"`);
-  await page.keyboard.type(String(property_name), { delay: 25 });
-  await page.waitForTimeout(1500);
-
-  const propertyResult = page
-    .locator('gmp-entity-item, [class*="gmp-entity"], [class*="entity-item"]')
-    .filter({ hasText: String(property_name) })
-    .first();
-  await propertyResult.waitFor({ timeout: 15000 });
-  await propertyResult.click();
   await page.waitForTimeout(2000);
-  console.log("✅ Property selected from breadcrumb search");
 
-  let ga4FullPropertyId = null;
-  let accountIdFromUrl = null;
-  const urlPollEnd = Date.now() + 8000;
+  // ── Use IDs already captured from wizard URL — no breadcrumb search needed ─
+  let ga4FullPropertyId = capturedPropertyId;
+  let accountIdFromUrl = capturedAccountId;
+  // Re-poll URL in case IDs updated during stream creation
+  const urlPollEnd = Date.now() + 6000;
   while (Date.now() < urlPollEnd) {
     const m = page.url().match(/#\/a(\d+)p(\d+)/i);
     if (m) { accountIdFromUrl = m[1]; ga4FullPropertyId = m[2]; break; }
     await page.waitForTimeout(400);
   }
-  if (!ga4FullPropertyId) throw new Error("create_ga4_full: property ID not found in URL after property search");
-  console.log(`🔑 From URL — account: ${accountIdFromUrl}, property: ${ga4FullPropertyId}`);
+  if (!ga4FullPropertyId) throw new Error("create_ga4_full: property ID not found in URL");
+  console.log(`🔑 Using IDs from wizard URL — account: ${accountIdFromUrl}, property: ${ga4FullPropertyId}`);
 
   const streamsUrl = `https://analytics.google.com/analytics/web/#/a${accountIdFromUrl}p${ga4FullPropertyId}/admin/streams/table/web`;
   console.log("🔍 Navigating to streams:", streamsUrl);
