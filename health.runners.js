@@ -27,6 +27,11 @@
 //                    plain preconnect/dns-prefetch to googletagmanager.com (was causing direct-GA4
 //                    sites to show "GTM is installed but..." instead of correct direct-GA4 message);
 //                    add post-consent scroll to trigger IntersectionObserver/consent-delayed GTM loads
+//   V36  2026-04-10  Fix CMP-blocked script detection: scan data-src, data-original-src,
+//                    data-href on <script> and data-src on <iframe> — consent managers
+//                    (CookieYes, Cookiebot, Complianz) move src→data-src to block execution
+//                    but GTM ID is still in the attribute; extend page.content() fallback
+//                    to scan full HTML (not just <head>) and detect data-src GTM pattern
 //   V35  2026-04-10  Remove early NO_TRACKING return — now visits all discovered pages before
 //                    concluding no tracking; re-runs detectTrackingSetup on inner pages so GTM
 //                    installed only on contact/inner pages is correctly detected; CTA tests only
@@ -36,7 +41,7 @@
 //                    on any domain
 //
 
-const SCRIPT_VERSION = "2026-04-10T10:00:00Z-V35";
+const SCRIPT_VERSION = "2026-04-10T12:00:00Z-V36";
 
 const { chromium } = require("playwright");
 
@@ -641,12 +646,20 @@ async function detectTrackingSetup(page, beacons) {
       for (const s of document.querySelectorAll("script")) {
         extract(s.src);
         extract(s.innerHTML);
+        // CMP-blocked scripts: consent managers (CookieYes, Cookiebot, Complianz etc.) change
+        // type="text/javascript" → type="text/plain" and move src → data-src to prevent execution.
+        // The GTM ID is still in the attribute — scan all data-* src variants.
+        extract(s.getAttribute("data-src") || "");
+        extract(s.getAttribute("data-original-src") || "");
+        extract(s.getAttribute("data-href") || "");
+        extract(s.getAttribute("data-gtmsrc") || "");
       }
       for (const ns of document.querySelectorAll("noscript")) extract(ns.innerHTML);
       // Live iframes from GTM noscript fallback (always present even when JS blocked).
       // Second clause catches server-side GTM proxying ns.html through a custom domain.
+      // Also check data-src — some CMPs block iframes the same way as scripts.
       for (const f of document.querySelectorAll("iframe")) {
-        const src = f.getAttribute("src") || "";
+        const src = f.getAttribute("src") || f.getAttribute("data-src") || "";
         if (/googletagmanager\.com\/ns\.html/i.test(src) || /\/ns\.html\?(?:[^#]*&)?id=GTM-[A-Z0-9]{4,}/i.test(src)) {
           found.gtmIframe = true;
           extract(src);
@@ -722,17 +735,20 @@ async function detectTrackingSetup(page, beacons) {
     await safeWait([500, 1000, 2000, 6000][attempt] || 1000);
   }
 
-  // Last-resort fallback: if safeEvaluate failed entirely (WAF blocking CDP injection),
-  // scan the serialised page HTML that Playwright already has in memory
+  // Last-resort fallback: scan the full serialised HTML Playwright has in memory.
+  // Catches CMP-blocked scripts where data-src holds the GTM ID but safeEvaluate
+  // only reads live DOM properties (script.src), not raw attribute strings.
   if (gtmIds.size === 0 && !gtmStartFired && !gtmIframe) {
     try {
       const html = await page.content();
       if (html) {
-        const headEnd = html.search(/<\/head>/i);
-        const region = headEnd > 0 ? html.slice(0, headEnd + 200) : html.slice(0, 10000);
+        // Scan entire HTML — CMP-injected or body-placed GTM may be outside <head>
+        const region = html;
         for (const m of region.toUpperCase().matchAll(/GTM-[A-Z0-9]{4,}/g)) { if (isValidGtmId(m[0])) gtmIds.add(m[0]); }
         for (const m of region.toUpperCase().matchAll(/\b(?:G|GT)-(?=[A-Z0-9]*[0-9])[A-Z0-9]{7,}\b/g)) { if (isValidGa4Id(m[0])) ga4Ids.add(m[0]); }
         if (/googletagmanager\.com\/ns\.html/i.test(region)) gtmIframe = true;
+        // Also catch CMP data-src pattern in raw HTML
+        if (/data-src="[^"]*googletagmanager\.com\/gtm\.js/i.test(region)) gtmIframe = true;
         logDebug(`page.content() GTM fallback: found ${gtmIds.size} GTM IDs`);
       }
     } catch (e) {
