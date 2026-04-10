@@ -27,9 +27,16 @@
 //                    plain preconnect/dns-prefetch to googletagmanager.com (was causing direct-GA4
 //                    sites to show "GTM is installed but..." instead of correct direct-GA4 message);
 //                    add post-consent scroll to trigger IntersectionObserver/consent-delayed GTM loads
+//   V35  2026-04-10  Remove early NO_TRACKING return — now visits all discovered pages before
+//                    concluding no tracking; re-runs detectTrackingSetup on inner pages so GTM
+//                    installed only on contact/inner pages is correctly detected; CTA tests only
+//                    run on pages where tracking is confirmed;
+//                    server-side GTM: extend GTM beacon classifier to match /gtm.js?id=GTM- on
+//                    any domain (sGTM proxy); extend noscript iframe check to match /ns.html?id=GTM-
+//                    on any domain
 //
 
-const SCRIPT_VERSION = "2026-04-08T12:00:00Z-V34";
+const SCRIPT_VERSION = "2026-04-10T10:00:00Z-V35";
 
 const { chromium } = require("playwright");
 
@@ -418,7 +425,7 @@ function classifyAndParseBeacon(reqUrl, postData) {
   if (u.includes("/g/collect") || u.includes("/r/collect")) type = "GA4";
   else if (u.includes("gtag/js")) type = "GTAG";
   else if (u.includes("google-analytics.com")) type = "GA";
-  else if (/googletagmanager\.com\/gtm\.js/.test(u)) type = "GTM";
+  else if (/googletagmanager\.com\/gtm\.js/.test(u) || /\/gtm\.js\?(?:[^#]*&)?id=GTM-[A-Z0-9]{4,}/i.test(u)) type = "GTM"; // second clause catches server-side GTM proxy on custom domain
   if (type === "OTHER") return null;
 
   let event_name = null;
@@ -636,10 +643,11 @@ async function detectTrackingSetup(page, beacons) {
         extract(s.innerHTML);
       }
       for (const ns of document.querySelectorAll("noscript")) extract(ns.innerHTML);
-      // Live iframes from GTM noscript fallback (always present even when JS blocked)
+      // Live iframes from GTM noscript fallback (always present even when JS blocked).
+      // Second clause catches server-side GTM proxying ns.html through a custom domain.
       for (const f of document.querySelectorAll("iframe")) {
         const src = f.getAttribute("src") || "";
-        if (/googletagmanager\.com\/ns\.html/i.test(src)) {
+        if (/googletagmanager\.com\/ns\.html/i.test(src) || /\/ns\.html\?(?:[^#]*&)?id=GTM-[A-Z0-9]{4,}/i.test(src)) {
           found.gtmIframe = true;
           extract(src);
         }
@@ -1738,38 +1746,17 @@ async function trackingHealthCheckSiteInternal(url) {
     await safeEvaluate(page, () => window.scrollBy(0, 200));
     await waitForGtmInit(page, beacons, POST_CONSENT_MAX_WAIT_MS);
 
-    const tracking = await detectTrackingSetup(page, beacons);
+    // tracking is mutable — may be updated if GTM is found on an inner page
+    let tracking = await detectTrackingSetup(page, beacons);
     results.detected_gtm_ids = tracking.gtm;
     results.detected_ga4_ids = [...tracking.ga4, ...tracking.unlinked_ga4];
 
     if (!tracking.has_gtm && !tracking.has_any_ga4) {
-      results.grade = "Fail";
-      results.health_status = "NO_TRACKING";
-      results.health_reasons =
-        "No GTM container detected after cookie consent was accepted. No GTM tag IDs in source, no GTM network requests, no google_tag_manager global object.";
-      results.failure_detail = [
-        {
-          category: "Google Tag Manager",
-          grade_impact: "FAIL",
-          summary: "No GTM container was found. GTM must be installed before any conversion tracking can work.",
-          fix: "Install a Google Tag Manager container. Add the GTM <head> snippet and <body> noscript snippet to every page, then republish.",
-        },
-      ];
-      results.fix =
-        "Install a Google Tag Manager container. Add the GTM <head> snippet and <body> noscript snippet to every page, then republish.";
-      logInfo(`╔══════════════════════════════════════════════╗`);
-      logInfo(`  GRADE : ❌ FAIL — NO GTM/GA4 DETECTED`);
-      logInfo(`╚══════════════════════════════════════════════╝`);
-      return results;
-    }
-
-    // Direct GA4 (gtag.js without GTM container): note the setup difference but continue testing
-    const directGa4Only = !tracking.has_gtm && tracking.has_any_ga4;
-    if (directGa4Only) {
-      logInfo(`⚠️  Direct GA4 detected (no GTM container) — continuing CTA tests`);
+      logInfo(`⚠️  No GTM/GA4 on homepage — will check inner pages before concluding NO_TRACKING`);
     }
 
     // ── Discover and visit pages ──
+    // Discover pages regardless of tracking state — GTM may only be installed on inner pages
     const discovered = await discoverCandidatePages(page, targetUrl);
     const pagesToVisit = [targetUrl, ...discovered].slice(0, MAX_PAGES_TO_VISIT);
 
@@ -1792,22 +1779,64 @@ async function trackingHealthCheckSiteInternal(url) {
         await handleCookieConsent(page);
         await safeEvaluate(page, () => window.scrollBy(0, 200));
         await waitForGtmInit(page, beacons, POST_CONSENT_MAX_WAIT_MS / 2);
+
+        // Re-run tracking detection on inner pages — GTM may only be on the contact page
+        if (!tracking.has_gtm && !tracking.has_any_ga4) {
+          const innerTracking = await detectTrackingSetup(page, beacons);
+          if (innerTracking.has_gtm || innerTracking.has_any_ga4) {
+            tracking = innerTracking;
+            results.detected_gtm_ids = uniq([...results.detected_gtm_ids, ...innerTracking.gtm]);
+            results.detected_ga4_ids = uniq([...results.detected_ga4_ids, ...innerTracking.ga4, ...innerTracking.unlinked_ga4]);
+            logInfo(`⚠️  GTM/GA4 detected on inner page — updating tracking state`, { url: page.url() });
+          }
+        }
       }
 
-      await testCTAsOnPage(
-        page,
-        beacons,
-        page.url(),
-        uniquePhones,
-        uniqueEmails,
-        phoneItems,
-        emailItems,
-        phoneDone,
-        emailDone,
-      );
+      // Only test CTAs on pages where tracking is confirmed — clicks on untracked pages never fire
+      if (tracking.has_gtm || tracking.has_any_ga4) {
+        await testCTAsOnPage(
+          page,
+          beacons,
+          page.url(),
+          uniquePhones,
+          uniqueEmails,
+          phoneItems,
+          emailItems,
+          phoneDone,
+          emailDone,
+        );
 
-      const formRes = await testAllFormsOnPage(page, beacons, page.url());
-      results.form_details.push(formRes);
+        const formRes = await testAllFormsOnPage(page, beacons, page.url());
+        results.form_details.push(formRes);
+      }
+    }
+
+    // After visiting all pages — if still no tracking found anywhere, return NO_TRACKING
+    if (!tracking.has_gtm && !tracking.has_any_ga4) {
+      results.grade = "Fail";
+      results.health_status = "NO_TRACKING";
+      results.health_reasons =
+        `No GTM container or GA4 detected on any of the ${pagesToVisit.length} page(s) visited (including homepage and contact pages). No GTM tag IDs in source, no GTM network requests, no google_tag_manager global object.`;
+      results.failure_detail = [
+        {
+          category: "Google Tag Manager",
+          grade_impact: "FAIL",
+          summary: "No GTM container was found on any page. GTM must be installed before any conversion tracking can work.",
+          fix: "Install a Google Tag Manager container. Add the GTM <head> snippet and <body> noscript snippet to every page, then republish.",
+        },
+      ];
+      results.fix =
+        "Install a Google Tag Manager container. Add the GTM <head> snippet and <body> noscript snippet to every page, then republish.";
+      logInfo(`╔══════════════════════════════════════════════╗`);
+      logInfo(`  GRADE : ❌ FAIL — NO GTM/GA4 DETECTED`);
+      logInfo(`╚══════════════════════════════════════════════╝`);
+      return results;
+    }
+
+    // Direct GA4 (gtag.js without GTM container): note the setup difference but continue to grading
+    const directGa4Only = !tracking.has_gtm && tracking.has_any_ga4;
+    if (directGa4Only) {
+      logInfo(`⚠️  Direct GA4 detected (no GTM container)`);
     }
 
     // ── Commit counts ──
