@@ -41,7 +41,7 @@
 //                    on any domain
 //
 
-const SCRIPT_VERSION = "2026-04-10T12:00:00Z-V36";
+const SCRIPT_VERSION = "2026-04-10T13:00:00Z-V37";
 
 const { chromium } = require("playwright");
 
@@ -1755,12 +1755,28 @@ async function trackingHealthCheckSiteInternal(url) {
     }
     visitedUrls.add(page.url());
 
+    // Wait for full page load so JS frameworks (React/Next.js) can hydrate and mount
+    // consent banners before we try to interact with them. Capped at 6s to avoid hanging
+    // on image-heavy sites where resources load slowly.
+    await page.waitForLoadState("load", { timeout: 6000 }).catch(() => null);
     await simulateHumanBrowsing(page);
 
     await handleCookieConsent(page);
     // Scroll slightly after consent so IntersectionObserver-gated or consent-delayed scripts fire
     await safeEvaluate(page, () => window.scrollBy(0, 200));
     await waitForGtmInit(page, beacons, POST_CONSENT_MAX_WAIT_MS);
+
+    // Second consent pass: for React/SPA sites where the cookie banner mounts AFTER our
+    // first attempt (banner rendered by JS that executes after DOMContentLoaded + hydration)
+    if (!(await safeEvaluate(page, () => !!window.google_tag_manager)) &&
+        !beacons.some(b => b.type === "GTM")) {
+      const retryConsent = await handleCookieConsent(page);
+      if (retryConsent.accepted) {
+        logInfo("🍪 Second consent pass accepted — re-polling for GTM");
+        await safeEvaluate(page, () => window.scrollBy(0, 200));
+        await waitForGtmInit(page, beacons, POST_CONSENT_MAX_WAIT_MS / 2);
+      }
+    }
 
     // tracking is mutable — may be updated if GTM is found on an inner page
     let tracking = await detectTrackingSetup(page, beacons);
@@ -1792,6 +1808,7 @@ async function trackingHealthCheckSiteInternal(url) {
         }
         visitedUrls.add(finalUrl);
 
+        await page.waitForLoadState("load", { timeout: 4000 }).catch(() => null);
         await handleCookieConsent(page);
         await safeEvaluate(page, () => window.scrollBy(0, 200));
         await waitForGtmInit(page, beacons, POST_CONSENT_MAX_WAIT_MS / 2);
