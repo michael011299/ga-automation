@@ -22,9 +22,14 @@
 //                    filter placeholder/fake GTM IDs (GTM-XXXXXXX, GTM-INIT, GTM-SCRIPT etc.);
 //                    filter too-short GA4 IDs (G-1234 etc., require ≥7 chars after dash);
 //                    expand CAPTCHA/bot-protection detection selectors
+//   V34  2026-04-08  Increase GLOBAL_TIMEOUT_MS 120s→180s (eliminates timeout ERRORs on slow sites);
+//                    fix <link href> false-positive GTM detection — only flag gtm.js links, not
+//                    plain preconnect/dns-prefetch to googletagmanager.com (was causing direct-GA4
+//                    sites to show "GTM is installed but..." instead of correct direct-GA4 message);
+//                    add post-consent scroll to trigger IntersectionObserver/consent-delayed GTM loads
 //
 
-const SCRIPT_VERSION = "2026-03-30T14:00:00Z-V33";
+const SCRIPT_VERSION = "2026-04-08T12:00:00Z-V34";
 
 const { chromium } = require("playwright");
 
@@ -66,8 +71,8 @@ const DUPLICATE_TEST_SETTLE_MS = Number(process.env.HEALTH_SETTLE_MS || 600);
 const FORM_SUBMIT_WAIT_MS = Number(process.env.HEALTH_FORM_WAIT_MS || 5000);
 
 // FIX 2: hard global cap per site; also used as acquireCheckSlot timeout
-const GLOBAL_TIMEOUT_MS = Number(process.env.HEALTH_GLOBAL_TIMEOUT || 120000);
-const SLOT_ACQUIRE_TIMEOUT = Number(process.env.HEALTH_SLOT_TIMEOUT || 90000);
+const GLOBAL_TIMEOUT_MS = Number(process.env.HEALTH_GLOBAL_TIMEOUT || 180000);
+const SLOT_ACQUIRE_TIMEOUT = Number(process.env.HEALTH_SLOT_TIMEOUT || 120000);
 
 // FIX 1: raised to 20; safe because each worker is mostly I/O-bound
 const MAX_CONCURRENT_CHECKS = Number(process.env.HEALTH_MAX_CONCURRENT || 20);
@@ -643,10 +648,12 @@ async function detectTrackingSetup(page, beacons) {
         extract(m.getAttribute("content") || "");
         extract(m.getAttribute("name") || "");
       }
-      // <link rel="preconnect/dns-prefetch"> to googletagmanager.com is a reliable GTM signal
+      // <link rel="preload"> referencing gtm.js is a reliable GTM signal.
+      // Deliberately NOT matching plain preconnect/dns-prefetch to googletagmanager.com —
+      // those appear on direct GA4 (gtag.js) sites and would cause a false GTM positive.
       for (const l of document.querySelectorAll("link[href]")) {
         const href = l.getAttribute("href") || "";
-        if (/googletagmanager\.com/i.test(href)) found.gtmIframe = true; // reuse as GTM-present flag
+        if (/googletagmanager\.com\/gtm\.js/i.test(href)) found.gtmIframe = true;
         extract(href);
       }
       if (Array.isArray(window.dataLayer)) {
@@ -1727,6 +1734,8 @@ async function trackingHealthCheckSiteInternal(url) {
     await simulateHumanBrowsing(page);
 
     await handleCookieConsent(page);
+    // Scroll slightly after consent so IntersectionObserver-gated or consent-delayed scripts fire
+    await safeEvaluate(page, () => window.scrollBy(0, 200));
     await waitForGtmInit(page, beacons, POST_CONSENT_MAX_WAIT_MS);
 
     const tracking = await detectTrackingSetup(page, beacons);
@@ -1781,6 +1790,7 @@ async function trackingHealthCheckSiteInternal(url) {
         visitedUrls.add(finalUrl);
 
         await handleCookieConsent(page);
+        await safeEvaluate(page, () => window.scrollBy(0, 200));
         await waitForGtmInit(page, beacons, POST_CONSENT_MAX_WAIT_MS / 2);
       }
 
