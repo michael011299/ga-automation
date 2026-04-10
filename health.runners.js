@@ -41,7 +41,7 @@
 //                    on any domain
 //
 
-const SCRIPT_VERSION = "2026-04-10T13:00:00Z-V37";
+const SCRIPT_VERSION = "2026-04-10T14:00:00Z-V38";
 
 const { chromium } = require("playwright");
 
@@ -476,6 +476,37 @@ function classifyAndParseBeacon(reqUrl, postData) {
 // ─────────────────────────────────────────────
 async function handleCookieConsent(page) {
   const out = { accepted: false };
+
+  // ── Native Playwright click (primary attempt) ──────────────────────────────
+  // React/SPA consent banners often don't respond to el.click() from safeEvaluate
+  // because they use synthetic event delegation. Playwright's locator.click() sends
+  // real pointer events (pointerdown → mousedown → mouseup → click) that React handles.
+  const nativePatterns = [
+    /^accept all$/i,
+    /^accept all cookies$/i,
+    /^accept cookies$/i,
+    /^allow all$/i,
+    /^allow all cookies$/i,
+    /^i accept$/i,
+    /^i agree$/i,
+    /^agree$/i,
+    /^agree and continue$/i,
+    /^ok$/i,
+    /^got it$/i,
+    /^continue$/i,
+  ];
+  for (const pattern of nativePatterns) {
+    try {
+      const btn = page.getByRole("button", { name: pattern });
+      if (await btn.count() > 0) {
+        await btn.first().click({ timeout: 1500, force: true });
+        out.accepted = true;
+        logDebug("🍪 Cookie consent accepted (native click)");
+        return out;
+      }
+    } catch {}
+  }
+  // ──────────────────────────────────────────────────────────────────────────
   const candidates = [
     // OneTrust
     "#onetrust-accept-btn-handler",
