@@ -2103,6 +2103,113 @@ app.post("/run", async (req, res) => {
     }
   }
 
+  // ── setup_gtm_tags: API-only GTM workspace + triggers + tags setup ────────
+  // Creates workspace, enables click variables, creates triggers and tags.
+  // No browser needed — pure GTM API v2.
+  if (action === "setup_gtm_tags") {
+    const {
+      google_email,
+      numeric_account_id,
+      numeric_container_id,
+      measurement_id,
+    } = req.body;
+
+    if (!google_email)          return res.status(400).json({ status: "error", error: "Missing google_email" });
+    if (!numeric_account_id)    return res.status(400).json({ status: "error", error: "Missing numeric_account_id" });
+    if (!numeric_container_id)  return res.status(400).json({ status: "error", error: "Missing numeric_container_id" });
+    if (!measurement_id)        return res.status(400).json({ status: "error", error: "Missing measurement_id" });
+
+    try {
+      const { getAllGoogleAccounts } = require("./src/lib/credentials");
+      const { getAccessToken }       = require("./src/lib/google-oauth");
+      const { createWorkspace, enableClickVariables, createTriggers, createTags } = require("./src/api/gtm-api");
+
+      console.log(`🚀 setup_gtm_tags: email=${google_email}, container=${numeric_container_id}, measurementId=${measurement_id}`);
+
+      // Look up the refresh token for the GTM account
+      const allAccounts = await getAllGoogleAccounts();
+      const gtmAccount  = allAccounts.find(a => a.google_email === google_email);
+      if (!gtmAccount) throw new Error(`setup_gtm_tags: no google_account found for email ${google_email}`);
+      if (!gtmAccount.gtm_ga4_refresh_token) throw new Error(`setup_gtm_tags: account ${google_email} has no refresh token`);
+
+      const accessToken = await getAccessToken(gtmAccount.gtm_ga4_refresh_token);
+
+      // 1. Create workspace
+      const workspaceId = await createWorkspace(accessToken, {
+        numericAccountId:   String(numeric_account_id),
+        numericContainerId: String(numeric_container_id),
+      });
+
+      // 2. Enable click built-in variables
+      await enableClickVariables(accessToken, {
+        numericAccountId:   String(numeric_account_id),
+        numericContainerId: String(numeric_container_id),
+        workspaceId,
+      });
+
+      // 3. Create triggers
+      const { callTriggerId, emailTriggerId, formTriggerId } = await createTriggers(accessToken, {
+        numericAccountId:   String(numeric_account_id),
+        numericContainerId: String(numeric_container_id),
+        workspaceId,
+      });
+
+      // 4. Create tags
+      await createTags(accessToken, {
+        numericAccountId:   String(numeric_account_id),
+        numericContainerId: String(numeric_container_id),
+        workspaceId,
+        measurementId:  measurement_id,
+        callTriggerId,
+        emailTriggerId,
+        formTriggerId,
+      });
+
+      console.log(`✅ setup_gtm_tags complete — workspaceId: ${workspaceId}`);
+      return res.json({
+        status:      "success",
+        workspace_id: workspaceId,
+        call_trigger_id:  callTriggerId,
+        email_trigger_id: emailTriggerId,
+        form_trigger_id:  formTriggerId,
+      });
+    } catch (err) {
+      console.error("❌ setup_gtm_tags error:", err.message);
+      return res.json({ status: "error", error: err.message });
+    }
+  }
+
+  // ── register_ga4_conversions: API-only GA4 conversion event registration ──
+  // Registers click_call, click_emails, contact_form as conversion events.
+  if (action === "register_ga4_conversions") {
+    const { google_email, property_id } = req.body;
+
+    if (!google_email) return res.status(400).json({ status: "error", error: "Missing google_email" });
+    if (!property_id)  return res.status(400).json({ status: "error", error: "Missing property_id" });
+
+    try {
+      const { getAllGoogleAccounts } = require("./src/lib/credentials");
+      const { getAccessToken }       = require("./src/lib/google-oauth");
+      const { createConversionEvents } = require("./src/api/ga4-api");
+
+      console.log(`🚀 register_ga4_conversions: email=${google_email}, property=${property_id}`);
+
+      const allAccounts = await getAllGoogleAccounts();
+      const ga4Account  = allAccounts.find(a => a.google_email === google_email);
+      if (!ga4Account) throw new Error(`register_ga4_conversions: no google_account found for email ${google_email}`);
+      if (!ga4Account.gtm_ga4_refresh_token) throw new Error(`register_ga4_conversions: account ${google_email} has no refresh token`);
+
+      const accessToken = await getAccessToken(ga4Account.gtm_ga4_refresh_token);
+      await createConversionEvents(accessToken, String(property_id));
+
+      console.log(`✅ register_ga4_conversions complete for property ${property_id}`);
+      return res.json({ status: "success", property_id });
+    } catch (err) {
+      console.error("❌ register_ga4_conversions error:", err.message);
+      return res.json({ status: "error", error: err.message });
+    }
+  }
+
   // ── handle_new_case: orchestrator manages its own browser sessions ─────────
   // This action does NOT go through the shared browser setup below.
   // It hands off to src/orchestrator/entry.js which opens/closes browsers
@@ -2431,6 +2538,7 @@ app.post("/run", async (req, res) => {
       ];
       for (const t of ga4LimitTexts) {
         if (await page.locator(t).first().isVisible().catch(() => false)) {
+          console.warn(`⛔ create_ga4_full: account_no_space — limit text matched: ${t} | URL: ${page.url()}`);
           if (browser) await browser.close();
           return res.json({ status: "failed", reason: "account_no_space" });
         }
@@ -2445,6 +2553,7 @@ app.post("/run", async (req, res) => {
         await page.waitForTimeout(300);
       }
       if (!ga4InAdmin) {
+        console.warn(`⛔ create_ga4_full: account_no_space — still on Reports page after 15 polls, never reached Admin | URL: ${page.url()}`);
         if (browser) await browser.close();
         return res.json({ status: "failed", reason: "account_no_space" });
       }
@@ -2453,6 +2562,7 @@ app.post("/run", async (req, res) => {
       try {
         await ga4AccountInput.waitFor({ timeout: 5000 });
       } catch {
+        console.warn(`⛔ create_ga4_full: account_no_space — Account name input not found within 5s after reaching create page | URL: ${page.url()}`);
         if (browser) await browser.close();
         return res.json({ status: "failed", reason: "account_no_space" });
       }
