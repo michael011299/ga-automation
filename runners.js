@@ -2045,7 +2045,10 @@ app.post("/run", async (req, res) => {
       "test_tracking_ctas",
       "submit_google_otp",
       "handle_new_case",        // orchestrator entry point — manages its own browsers
-      "search_ga4_accounts",    // API-only search across all 12 Google accounts
+      "search_ga4_accounts",        // API-only search across all 12 Google accounts
+      "fetch_ga4_measurement_id",   // API-only: get measurement ID for existing GA4 property
+      "setup_gtm_tags",             // API-only: create workspace, click vars, triggers, tags
+      "register_ga4_conversions",   // API-only: register conversion events on GA4 property
     ].includes(action)
   ) {
     return res.status(400).json({ error: "Unknown action" });
