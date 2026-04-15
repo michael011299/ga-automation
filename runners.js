@@ -2103,6 +2103,51 @@ app.post("/run", async (req, res) => {
     }
   }
 
+  // ── fetch_ga4_measurement_id: API-only GA4 measurement ID fetch ──────────
+  // Gets the web stream measurement ID for an existing GA4 property via the
+  // GA4 Admin API. No browser needed. Also constructs the gtag snippet.
+  if (action === "fetch_ga4_measurement_id") {
+    const { google_email, property_id } = req.body;
+
+    if (!google_email) return res.status(400).json({ status: "error", error: "Missing google_email" });
+    if (!property_id)  return res.status(400).json({ status: "error", error: "Missing property_id" });
+
+    try {
+      const { getAllGoogleAccounts } = require("./src/lib/credentials");
+      const { getAccessToken }       = require("./src/lib/google-oauth");
+      const axios = require("axios");
+
+      console.log(`🚀 fetch_ga4_measurement_id: email=${google_email}, property=${property_id}`);
+
+      const allAccounts = await getAllGoogleAccounts();
+      const ga4Account  = allAccounts.find(a => a.google_email === google_email);
+      if (!ga4Account)                     throw new Error(`fetch_ga4_measurement_id: no google_account found for email ${google_email}`);
+      if (!ga4Account.gtm_ga4_refresh_token) throw new Error(`fetch_ga4_measurement_id: account ${google_email} has no refresh token`);
+
+      const accessToken = await getAccessToken(ga4Account.gtm_ga4_refresh_token);
+
+      const response = await axios.get(
+        `https://analyticsadmin.googleapis.com/v1beta/properties/${property_id}/dataStreams`,
+        { headers: { Authorization: `Bearer ${accessToken}` } }
+      );
+
+      const streams   = response.data.dataStreams || [];
+      const webStream = streams.find(s => s.type === "WEB_DATA_STREAM");
+      if (!webStream) throw new Error(`No web data stream found for property ${property_id}`);
+
+      const measurementId = webStream.webStreamData?.measurementId;
+      if (!measurementId) throw new Error(`Web stream has no measurementId for property ${property_id}`);
+
+      const gtag = `<script async src="https://www.googletagmanager.com/gtag/js?id=${measurementId}"></script>\n<script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag('js',new Date());gtag('config','${measurementId}');</script>`;
+
+      console.log(`✅ fetch_ga4_measurement_id: ${measurementId}`);
+      return res.json({ status: "success", property_id: String(property_id), measurement_id: measurementId, gtag });
+    } catch (err) {
+      console.error("❌ fetch_ga4_measurement_id error:", err.message);
+      return res.json({ status: "error", error: err.message });
+    }
+  }
+
   // ── setup_gtm_tags: API-only GTM workspace + triggers + tags setup ────────
   // Creates workspace, enables click variables, creates triggers and tags.
   // No browser needed — pure GTM API v2.
