@@ -1036,6 +1036,19 @@ const spec = {
                   },
                 },
               },
+              social_links: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    platform: { type: "string", example: "Facebook" },
+                    href: { type: "string" },
+                    display_text: { type: "string" },
+                    opens_new_tab: { type: "boolean" },
+                    page_url: { type: "string" },
+                  },
+                },
+              },
               newsletter_forms: {
                 type: "array",
                 items: {

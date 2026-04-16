@@ -58,6 +58,25 @@ const NEWSLETTER_PLATFORMS = {
   'hubspot.com': 'HubSpot'
 };
 
+const SOCIAL_PLATFORMS = {
+  'facebook.com': 'Facebook',
+  'fb.com': 'Facebook',
+  'instagram.com': 'Instagram',
+  'twitter.com': 'X (Twitter)',
+  'x.com': 'X (Twitter)',
+  'linkedin.com': 'LinkedIn',
+  'youtube.com': 'YouTube',
+  'youtu.be': 'YouTube',
+  'tiktok.com': 'TikTok',
+  'pinterest.com': 'Pinterest',
+  'snapchat.com': 'Snapchat',
+  'threads.net': 'Threads',
+  'trustpilot.com': 'Trustpilot',
+  'google.com/maps': 'Google Maps',
+  'g.page': 'Google Maps',
+  'maps.google.com': 'Google Maps',
+};
+
 const LIVE_CHAT_DETECTORS = [
   { name: 'Intercom', global: 'Intercom' },
   { name: 'Drift', global: 'drift' },
@@ -404,6 +423,61 @@ async function extractBookingLinks(page, pageUrl) {
   return bookingLinks || [];
 }
 
+async function extractSocialLinks(page, pageUrl) {
+  const socialLinks = await safeEval(page, () => {
+    const platforms = {
+      'facebook.com': 'Facebook',
+      'fb.com': 'Facebook',
+      'instagram.com': 'Instagram',
+      'twitter.com': 'X (Twitter)',
+      'x.com': 'X (Twitter)',
+      'linkedin.com': 'LinkedIn',
+      'youtube.com': 'YouTube',
+      'youtu.be': 'YouTube',
+      'tiktok.com': 'TikTok',
+      'pinterest.com': 'Pinterest',
+      'snapchat.com': 'Snapchat',
+      'threads.net': 'Threads',
+      'trustpilot.com': 'Trustpilot',
+      'google.com/maps': 'Google Maps',
+      'g.page': 'Google Maps',
+      'maps.google.com': 'Google Maps',
+    };
+
+    const found = [];
+    const seen = new Set();
+
+    document.querySelectorAll('a[href]').forEach(a => {
+      const href = a.getAttribute('href') || '';
+      if (!href.startsWith('http')) return;
+
+      for (const [domain, platform] of Object.entries(platforms)) {
+        if (href.includes(domain)) {
+          const key = `${platform}:${href}`;
+          if (!seen.has(key)) {
+            seen.add(key);
+            found.push({
+              platform,
+              href,
+              display_text: a.textContent.trim() || a.getAttribute('aria-label') || '',
+              opens_new_tab: a.getAttribute('target') === '_blank',
+            });
+          }
+          break;
+        }
+      }
+    });
+
+    return found;
+  });
+
+  if (socialLinks) {
+    socialLinks.forEach(link => link.page_url = pageUrl);
+  }
+
+  return socialLinks || [];
+}
+
 async function extractForms(page, pageUrl) {
   const forms = await safeEval(page, (pageUrl) => {
     const formData = [];
@@ -669,6 +743,7 @@ async function generateGTMSummary(pageData) {
   let totalBookingLinks = 0;
   let totalForms = 0;
   let totalNewsletterForms = 0;
+  const socialPlatformsSeen = new Set();
 
   pageData.forEach(page => {
     totalClickablePhones += page.phones.clickable.length;
@@ -679,6 +754,7 @@ async function generateGTMSummary(pageData) {
     totalBookingLinks += page.booking_links.length;
     totalForms += page.forms.length;
     totalNewsletterForms += page.newsletter.length;
+    (page.social_links || []).forEach(s => socialPlatformsSeen.add(s.platform));
   });
 
   // Phone tracking
@@ -718,6 +794,13 @@ async function generateGTMSummary(pageData) {
   // Newsletter tracking
   if (totalNewsletterForms > 0) {
     tagsToCreate.push(`GA4 Event: form_submit_newsletter — Trigger: Form submission on newsletter forms`);
+  }
+
+  // Social link tracking
+  if (socialPlatformsSeen.size > 0) {
+    [...socialPlatformsSeen].forEach(platform => {
+      tagsToCreate.push(`GA4 Event: click_social_${platform.toLowerCase().replace(/[^a-z0-9]/g, '_')} — Trigger: Click - Just Links, {{Click URL}} contains ${platform}`);
+    });
   }
 
   // Live chat warnings
@@ -771,6 +854,7 @@ async function ctaAuditSite(url) {
       emails: await extractEmails(page, url),
       whatsapp: await extractWhatsApp(page, url),
       booking_links: await extractBookingLinks(page, url),
+      social_links: await extractSocialLinks(page, url),
       newsletter: await extractNewsletter(page, url),
       forms: await extractForms(page, url),
       live_chat: await extractLiveChat(page)
@@ -794,6 +878,7 @@ async function ctaAuditSite(url) {
           emails: await extractEmails(page, contactPageUrl),
           whatsapp: await extractWhatsApp(page, contactPageUrl),
           booking_links: await extractBookingLinks(page, contactPageUrl),
+          social_links: await extractSocialLinks(page, contactPageUrl),
           newsletter: await extractNewsletter(page, contactPageUrl),
           forms: await extractForms(page, contactPageUrl),
           live_chat: await extractLiveChat(page)
