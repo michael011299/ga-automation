@@ -41,7 +41,7 @@
 //                    on any domain
 //
 
-const SCRIPT_VERSION = "2026-04-16T00:00:00Z-V39";
+const SCRIPT_VERSION = "2026-04-16T00:00:00Z-V40";
 
 const { chromium } = require("playwright");
 
@@ -468,7 +468,37 @@ function classifyAndParseBeacon(reqUrl, postData) {
     gtmHash = new URL(reqUrl).searchParams.get("gtm");
   } catch {}
 
-  return { url: reqUrl, timestamp: nowIso(), type, event_name, payload_dump, tid, gtmHash };
+  // ── Feature 3: full GA4 payload extraction ──
+  // Parse all event parameters (ep.*), user properties (up.*), and session info
+  // from the GA4 collect request body so failure messages can be specific.
+  let params = null;
+  if (type === "GA4" && postData) {
+    try {
+      const p = new URLSearchParams(postData);
+      const extracted = {};
+      // Standard GA4 Measurement Protocol fields
+      for (const key of ["en", "tid", "cid", "sid", "sct", "_et", "dl", "dt", "dr"]) {
+        const v = p.get(key); if (v) extracted[key] = v;
+      }
+      // Event parameters (ep.XXX) and user properties (up.XXX)
+      for (const [k, v] of p.entries()) {
+        if (k.startsWith("ep.") || k.startsWith("up.") || k.startsWith("epn.")) {
+          extracted[k] = v;
+        }
+      }
+      if (Object.keys(extracted).length > 0) params = extracted;
+    } catch {}
+    // Also try JSON body (GA4 Measurement Protocol v2 batch format)
+    if (!params) {
+      try {
+        const body = JSON.parse(postData);
+        const ev = body?.events?.[0];
+        if (ev) params = { en: ev.name, ...(ev.params || {}) };
+      } catch {}
+    }
+  }
+
+  return { url: reqUrl, timestamp: nowIso(), type, event_name, payload_dump, tid, gtmHash, params };
 }
 
 // ─────────────────────────────────────────────
@@ -1673,6 +1703,78 @@ async function testAllFormsOnPage(page, beacons, pageUrl) {
 }
 
 // ─────────────────────────────────────────────
+// GTM container analysis
+// ─────────────────────────────────────────────
+
+// Map of GTM tag function names to human-readable labels
+const GTM_TAG_TYPES = {
+  "__googtag": "Google Tag (gtag)",
+  "__gaawe":   "GA4 Event",
+  "__sp":      "GA4 Configuration",
+  "__ua":      "Universal Analytics",
+  "__html":    "Custom HTML",
+  "__gclidw":  "Google Ads Conversion Linking",
+  "__awct":    "Google Ads Conversion Tracking",
+  "__flc":     "Floodlight Counter",
+  "__fls":     "Floodlight Sales",
+  "__bzi":     "Bizible Insights",
+  "__fb":      "Meta Pixel",
+  "__linkedin_insight": "LinkedIn Insight Tag",
+  "__msft_uet": "Microsoft/Bing UET",
+};
+
+/**
+ * Download and analyse a GTM container's compiled JS.
+ * Does NOT require API credentials — the container JS is publicly accessible.
+ *
+ * @param {string} gtmId  — e.g. "GTM-ABCD1234"
+ * @returns {{ version: string|null, tags: Array, eventNames: string[], rawTagCount: number }|null}
+ */
+async function downloadGtmContainerConfig(gtmId) {
+  if (!gtmId || !isValidGtmId(gtmId)) return null;
+  try {
+    const url = `https://www.googletagmanager.com/gtm.js?id=${gtmId}&l=dataLayer`;
+    const resp = await axios.get(url, {
+      timeout: 8000,
+      headers: { "User-Agent": "Mozilla/5.0" },
+      responseType: "text",
+    });
+    const js = resp.data || "";
+
+    // ── Tag types ──
+    const tags = [];
+    for (const [fn, label] of Object.entries(GTM_TAG_TYPES)) {
+      // Count occurrences of this tag function in the compiled container
+      const matches = js.match(new RegExp(`"function":"${fn.replace("__", "__")}"`, "g")) || [];
+      if (matches.length > 0) tags.push({ function: fn, label, count: matches.length });
+    }
+
+    // ── Custom event names from GA4 Event tags ──
+    const eventNames = [...js.matchAll(/"vtp_eventName":"([^"]+)"/g)].map((m) => m[1]);
+
+    // ── Measurement IDs referenced in the container ──
+    const measurementIds = [...new Set(
+      [...js.matchAll(/G-[A-Z0-9]{7,}/g)].map((m) => m[0]).filter(isValidGa4Id)
+    )];
+
+    // ── Container version (rough extract) ──
+    const verMatch = js.match(/"version":"(\d+)"/);
+    const version = verMatch ? verMatch[1] : null;
+
+    return {
+      version,
+      rawTagCount: tags.reduce((a, t) => a + t.count, 0),
+      tags,
+      eventNames: [...new Set(eventNames)],
+      measurementIds,
+    };
+  } catch (e) {
+    logDebug(`GTM container download failed for ${gtmId}: ${e.message}`);
+    return null;
+  }
+}
+
+// ─────────────────────────────────────────────
 // MAIN
 // ─────────────────────────────────────────────
 async function trackingHealthCheckSiteInternal(url) {
@@ -1688,6 +1790,7 @@ async function trackingHealthCheckSiteInternal(url) {
   const emailItems = [];
   const phoneDone = { value: false };
   const emailDone = { value: false };
+  const ga4ValidationErrors = []; // populated by /debug/mp/collect response listener
 
   // ── Return payload — maps directly to DB schema ──
   const results = {
@@ -1729,6 +1832,14 @@ async function trackingHealthCheckSiteInternal(url) {
     failure_detail: [],
 
     ga4_events_captured: [],
+    // Rich GA4 beacon payloads — event name + all parameters seen across the session
+    ga4_events_detail: [],
+    // dataLayer push sequence captured by the pre-load spy
+    datalayer_events: [],
+    // GTM container tag analysis (populated after GTM ID confirmed)
+    container_analysis: null,
+    // GA4 debug-mode validation errors returned by Google's servers
+    ga4_validation_errors: [],
     duration_ms: null,
   };
 
@@ -1762,6 +1873,64 @@ async function trackingHealthCheckSiteInternal(url) {
     }
     openContexts.set(context, { createdAt: Date.now(), url: targetUrl });
     page = await context.newPage();
+
+    // ── Feature 1: dataLayer spy ──
+    // Injected before ANY page script runs. Intercepts every dataLayer.push() call
+    // from the very first moment — catches gtm.start and all custom events even if
+    // they fire before our post-load safeEvaluate can read window.dataLayer.
+    await page.addInitScript(() => {
+      window.__dlSpy = [];
+      const _nativePush = Array.prototype.push;
+      function spyPush(...args) {
+        for (const a of args) {
+          try { window.__dlSpy.push(JSON.parse(JSON.stringify(a))); } catch {}
+        }
+        return _nativePush.apply(this, args);
+      }
+      function attachSpy(arr) {
+        if (arr && !arr.__spied) { arr.push = spyPush; arr.__spied = true; }
+        return arr;
+      }
+      // Spy on any existing dataLayer
+      let _backing = attachSpy(window.dataLayer || []);
+      try {
+        Object.defineProperty(window, "dataLayer", {
+          configurable: true,
+          enumerable: true,
+          get() { return _backing; },
+          // GTM's first action is: window.dataLayer = window.dataLayer || []
+          // This setter catches that and re-attaches the spy on the new array.
+          set(v) { _backing = attachSpy(v) || v; },
+        });
+      } catch {}
+      // Initialise if not already set
+      if (!window.dataLayer) window.dataLayer = [];
+    });
+
+    // ── Feature 4: GA4 debug mode injection ──
+    // Causes GA4 to route events to /debug/mp/collect which returns per-event
+    // validation JSON from Google's servers (invalid params, unknown events, etc.)
+    await page.addInitScript(() => {
+      window.__ga4DebugErrors = [];
+      // Override gtag once it's defined to inject debug_mode on every config call
+      const _origGtag = window.gtag;
+      Object.defineProperty(window, "gtag", {
+        configurable: true,
+        get() { return this._gtag; },
+        set(fn) {
+          this._gtag = function(...args) {
+            // Inject debug_mode into 'config' calls so GA4 uses /debug/mp/collect
+            if (args[0] === "config" && typeof args[2] === "undefined") {
+              args[2] = { debug_mode: true };
+            } else if (args[0] === "config" && typeof args[2] === "object") {
+              args[2] = { ...args[2], debug_mode: true };
+            }
+            return fn.apply(this, args);
+          };
+        },
+      });
+      if (typeof _origGtag === "function") window.gtag = _origGtag;
+    });
 
     await context.route("**/*", (route) => {
       const req = route.request();
@@ -1801,10 +1970,27 @@ async function trackingHealthCheckSiteInternal(url) {
         if (/googletagmanager\.com\/gtm\.js/i.test(req.url())) {
           logDebug("📡 GTM script response received — allowing 500ms for execution");
           safeWait(500).then(() => {
-            // Beacon the GTM load if not already recorded
             const already = beacons.some((b) => b.type === "GTM" && b.url === req.url());
-            if (!already) beacons.push({ url: req.url(), timestamp: nowIso(), type: "GTM", event_name: null, payload_dump: req.url().toLowerCase(), tid: null, gtmHash: null });
+            if (!already) beacons.push({ url: req.url(), timestamp: nowIso(), type: "GTM", event_name: null, payload_dump: req.url().toLowerCase(), tid: null, gtmHash: null, params: null });
           }).catch(() => null);
+        }
+        // ── Feature 4: GA4 debug validation response ──
+        // /debug/mp/collect returns a JSON body with per-event validation messages
+        // from Google's servers. Parse these and store for the results payload.
+        if (/\/debug\/mp\/collect/i.test(req.url())) {
+          try {
+            const body = await res.text();
+            const json = JSON.parse(body);
+            // validationMessages is an array of { fieldPath, description, validationCode }
+            const msgs = json?.validationMessages || [];
+            if (msgs.length > 0) {
+              const eventName = req.url().includes("en=")
+                ? new URL(req.url()).searchParams.get("en")
+                : (msgs[0]?.fieldPath || "unknown");
+              ga4ValidationErrors.push({ event: eventName, messages: msgs });
+              logDebug(`⚠️  GA4 debug validation errors for "${eventName}":`, msgs);
+            }
+          } catch {}
         }
         if (req.method() === "POST") {
           const b = classifyAndParseBeacon(req.url(), req.postData());
@@ -1855,6 +2041,17 @@ async function trackingHealthCheckSiteInternal(url) {
     results.detected_gtm_ids = tracking.gtm;
     results.detected_ga4_ids = [...tracking.ga4, ...tracking.unlinked_ga4];
 
+    // ── Feature 2: GTM container analysis ──
+    // Download and analyse the compiled container JS for the first detected GTM ID.
+    // Done once — no need to re-run for additional pages.
+    if (tracking.gtm.length > 0 && !results.container_analysis) {
+      logInfo(`📦 Downloading GTM container config for ${tracking.gtm[0]}...`);
+      results.container_analysis = await downloadGtmContainerConfig(tracking.gtm[0]);
+      if (results.container_analysis) {
+        logInfo(`📦 Container v${results.container_analysis.version}: ${results.container_analysis.rawTagCount} tag(s) — ${results.container_analysis.tags.map(t => t.label).join(", ")}`);
+      }
+    }
+
     if (!tracking.has_gtm && !tracking.has_any_ga4) {
       logInfo(`⚠️  No GTM/GA4 on homepage — will check inner pages before concluding NO_TRACKING`);
     }
@@ -1893,6 +2090,10 @@ async function trackingHealthCheckSiteInternal(url) {
             results.detected_gtm_ids = uniq([...results.detected_gtm_ids, ...innerTracking.gtm]);
             results.detected_ga4_ids = uniq([...results.detected_ga4_ids, ...innerTracking.ga4, ...innerTracking.unlinked_ga4]);
             logInfo(`⚠️  GTM/GA4 detected on inner page — updating tracking state`, { url: page.url() });
+            // Run container analysis now that we have an ID
+            if (innerTracking.gtm.length > 0 && !results.container_analysis) {
+              results.container_analysis = await downloadGtmContainerConfig(innerTracking.gtm[0]);
+            }
           }
         }
       }
@@ -2285,6 +2486,13 @@ async function trackingHealthCheckSiteInternal(url) {
     logInfo(`  DUPE FIRES : Phones ${phoneDuplicateItems.length} | Emails ${emailDuplicateItems.length}`);
     logInfo(`  GTM IDs    : ${results.detected_gtm_ids.join(", ") || "none"}`);
     logInfo(`  GA4 IDs    : ${results.detected_ga4_ids.join(", ") || "none"}`);
+    if (results.container_analysis) {
+      logInfo(`  CONTAINER  : v${results.container_analysis.version} — tags: ${results.container_analysis.tags.map(t => `${t.label}(${t.count})`).join(", ") || "none"}`);
+      if (results.container_analysis.eventNames.length > 0)
+        logInfo(`  DL EVENTS  : ${results.container_analysis.eventNames.join(", ")}`);
+    }
+    if (results.ga4_validation_errors.length > 0)
+      logInfo(`  GA4 ERRORS : ${results.ga4_validation_errors.map(e => `${e.event}(${e.messages.length} issue(s))`).join(", ")}`);
 
     if (failureDetail.length > 0) {
       logInfo(`\n  ── FAILURES ──`);
@@ -2317,6 +2525,39 @@ async function trackingHealthCheckSiteInternal(url) {
     }
 
     results.ga4_events_captured = [...new Set(beacons.filter(b => b.type === "GA4" && b.event_name).map(b => b.event_name))];
+
+    // ── Feature 1: harvest dataLayer spy ──
+    const dlSpy = await safeEvaluate(page, () => window.__dlSpy || []);
+    if (Array.isArray(dlSpy) && dlSpy.length > 0) {
+      // Summarise: event name + any event_category / event_action for UA-style pushes
+      results.datalayer_events = dlSpy
+        .filter(e => e && (e.event || e["gtm.start"]))
+        .map(e => ({
+          event: e.event || "gtm.start",
+          ...(e.event_category ? { event_category: e.event_category } : {}),
+          ...(e.event_action   ? { event_action:   e.event_action   } : {}),
+          ...(e.event_label    ? { event_label:     e.event_label    } : {}),
+        }))
+        .slice(0, 100); // cap to avoid huge payloads
+      logInfo(`📋 dataLayer spy: ${results.datalayer_events.length} event(s) captured`);
+    }
+
+    // ── Feature 3: rich GA4 event detail ──
+    results.ga4_events_detail = beacons
+      .filter(b => b.type === "GA4" && b.event_name)
+      .map(b => ({
+        event_name: b.event_name,
+        measurement_id: b.tid || null,
+        gtm_triggered: !!b.gtmHash,
+        params: b.params || null,
+      }));
+
+    // ── Feature 4: GA4 validation errors ──
+    results.ga4_validation_errors = ga4ValidationErrors;
+    if (ga4ValidationErrors.length > 0) {
+      logInfo(`⚠️  GA4 validation errors detected: ${ga4ValidationErrors.length} event(s) with issues`);
+    }
+
     results.duration_ms = Date.now() - _checkStart;
 
     logInfo(`╚══════════════════════════════════════════════╝\n`);
