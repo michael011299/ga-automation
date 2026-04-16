@@ -41,9 +41,11 @@
 //                    on any domain
 //
 
-const SCRIPT_VERSION = "2026-04-16T00:00:00Z-V40";
+const SCRIPT_VERSION = "2026-04-16T00:00:00Z-V41";
 
-const { chromium } = require("playwright");
+const { chromium } = require("playwright-extra");
+const StealthPlugin = require("puppeteer-extra-plugin-stealth");
+chromium.use(StealthPlugin());
 
 const LOG_LEVEL = (process.env.LOG_LEVEL || "info").toLowerCase();
 function logInfo(msg, data = null) {
@@ -1873,6 +1875,70 @@ async function trackingHealthCheckSiteInternal(url) {
     }
     openContexts.set(context, { createdAt: Date.now(), url: targetUrl });
     page = await context.newPage();
+
+    // ── Fingerprint hardening (supplements playwright-extra stealth plugin) ──
+    // The stealth plugin handles navigator.webdriver, window.chrome, plugins, and
+    // permissions. These patches cover the remaining signals that headless Chrome
+    // on a Linux server leaks and that Cloudflare's fingerprinting checks.
+    await page.addInitScript(() => {
+      // Remove Playwright's internal automation globals that can leak through
+      try { delete window.__playwright; } catch {}
+      try { delete window.__pw_manual; } catch {}
+      try { delete window.playwrightBinding; } catch {}
+
+      // hardwareConcurrency — headless on low-CPU VMs often returns 0 or 1
+      try {
+        if (!navigator.hardwareConcurrency || navigator.hardwareConcurrency < 2) {
+          Object.defineProperty(navigator, "hardwareConcurrency", { get: () => 4 });
+        }
+      } catch {}
+
+      // deviceMemory — often undefined in headless, real Chrome reports 8
+      try {
+        if (!navigator.deviceMemory) {
+          Object.defineProperty(navigator, "deviceMemory", { get: () => 8 });
+        }
+      } catch {}
+
+      // screen dimensions — viewport is 1920×1080 but screen properties can differ
+      try {
+        Object.defineProperty(screen, "availWidth",  { get: () => 1920 });
+        Object.defineProperty(screen, "availHeight", { get: () => 1040 }); // taskbar offset
+        Object.defineProperty(screen, "width",       { get: () => 1920 });
+        Object.defineProperty(screen, "height",      { get: () => 1080 });
+        Object.defineProperty(screen, "colorDepth",  { get: () => 24 });
+        Object.defineProperty(screen, "pixelDepth",  { get: () => 24 });
+      } catch {}
+
+      // window.outerWidth / outerHeight — should match viewport in a real browser
+      try {
+        Object.defineProperty(window, "outerWidth",  { get: () => 1920 });
+        Object.defineProperty(window, "outerHeight", { get: () => 1080 });
+      } catch {}
+
+      // Notification.permission — headless returns "default", but the Notification
+      // constructor itself may throw. Normalise to match real Chrome behaviour.
+      try {
+        if (typeof Notification !== "undefined" && Notification.permission === "default") {
+          Object.defineProperty(Notification, "permission", { get: () => "default" });
+        }
+      } catch {}
+
+      // MediaDevices.enumerateDevices — returns empty list in headless; real Chrome
+      // returns at least one audio/video device even without physical hardware.
+      try {
+        if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {
+          const _orig = navigator.mediaDevices.enumerateDevices.bind(navigator.mediaDevices);
+          navigator.mediaDevices.enumerateDevices = () =>
+            _orig().then((devices) =>
+              devices.length > 0 ? devices : [
+                { deviceId: "default", groupId: "default", kind: "audioinput",  label: "" },
+                { deviceId: "default", groupId: "default", kind: "audiooutput", label: "" },
+              ]
+            );
+        }
+      } catch {}
+    });
 
     // ── Feature 1: dataLayer spy ──
     // Injected before ANY page script runs. Intercepts every dataLayer.push() call
