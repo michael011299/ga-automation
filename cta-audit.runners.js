@@ -423,6 +423,147 @@ async function extractBookingLinks(page, pageUrl) {
   return bookingLinks || [];
 }
 
+const BOOKING_CTA_KEYWORDS = /\b(book\s*(now|online|a?\s*session|an?\s*appointment|a?\s*class|a?\s*consultation|a?\s*call|your|a?\s*slot|a?\s*visit)?|schedule(\s*(a?\s*call|a?\s*session|now))?|reserve(\s*(a?\s*spot|now))?|get\s*started|enquire\s*now|request\s*(a?\s*quote|a?\s*callback|a?\s*call)|make\s*(an?\s*appointment|a?\s*booking)|arrange\s*(a?\s*visit|a?\s*call))\b/i;
+
+const ALL_BOOKING_DOMAINS = {
+  'calendly.com': 'Calendly',
+  'acuityscheduling.com': 'Acuity Scheduling',
+  'simplybook.me': 'SimplyBook.me',
+  'booksy.com': 'Booksy',
+  'mindbodyonline.com': 'Mindbody',
+  'squareup.com': 'Square Appointments',
+  'setmore.com': 'Setmore',
+  'youcanbook.me': 'YouCanBook.me',
+  'fresha.com': 'Fresha',
+  'cliniko.com': 'Cliniko',
+  'janeapp.com': 'Jane App',
+  'treatwell.co.uk': 'Treatwell',
+  'treatwell.com': 'Treatwell',
+  'vagaro.com': 'Vagaro',
+  'doctolib.fr': 'Doctolib',
+  'practicepal.co.uk': 'PracticePal',
+  'healthcode.co.uk': 'Healthcode',
+  'nookal.com': 'Nookal',
+  'powerdiary.com': 'Power Diary',
+  'halaxy.com': 'Halaxy',
+};
+
+async function extractBookingCTAs(page, context, baseUrl) {
+  // Step 1 — collect all booking-related links from the current page
+  const rawLinks = await safeEval(page, () => {
+    const found = [];
+    document.querySelectorAll('a[href]').forEach(a => {
+      const text = (a.textContent || '').replace(/\s+/g, ' ').trim();
+      const ariaLabel = a.getAttribute('aria-label') || '';
+      const labelText = (text || ariaLabel).trim();
+      const href = a.getAttribute('href') || '';
+      if (!href || href.startsWith('#') || href.startsWith('tel:') || href.startsWith('mailto:')) return;
+      found.push({ label_text: labelText, href, opens_new_tab: a.getAttribute('target') === '_blank' });
+    });
+    return found;
+  });
+
+  if (!rawLinks) return [];
+
+  // Filter to booking keyword matches and deduplicate by href
+  const seenHrefs = new Set();
+  const bookingLinks = rawLinks.filter(link => {
+    if (!BOOKING_CTA_KEYWORDS.test(link.label_text)) return false;
+    if (seenHrefs.has(link.href)) return false;
+    seenHrefs.add(link.href);
+    return true;
+  }).slice(0, 6); // max 6 to keep the audit fast
+
+  // Step 2 — follow each link in a new tab and classify the destination
+  const results = [];
+
+  for (const link of bookingLinks) {
+    let newPage = null;
+    try {
+      let absoluteUrl;
+      try { absoluteUrl = new URL(link.href, baseUrl).href; } catch { continue; }
+
+      newPage = await context.newPage();
+      await newPage.goto(absoluteUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+      await newPage.waitForLoadState('load', { timeout: 5000 }).catch(() => {});
+
+      const finalUrl = newPage.url();
+      const pageTitle = await newPage.title().catch(() => '');
+      const pageSnippet = await safeEval(newPage, () =>
+        (document.body ? document.body.innerText.replace(/\s+/g, ' ').trim().substring(0, 400) : '')
+      );
+
+      // Classify destination
+      let destinationType = 'unknown';
+      let platform = null;
+
+      for (const [domain, name] of Object.entries(ALL_BOOKING_DOMAINS)) {
+        if (finalUrl.includes(domain)) {
+          destinationType = 'booking_platform';
+          platform = name;
+          break;
+        }
+      }
+
+      if (destinationType === 'unknown') {
+        try {
+          const isSameSite = new URL(finalUrl).origin === new URL(baseUrl).origin;
+          if (isSameSite) {
+            const formCount = await safeEval(newPage, () => document.querySelectorAll('form').length) || 0;
+            destinationType = formCount > 0 ? 'same_site_form' : 'same_site_page';
+          } else {
+            destinationType = 'external_unknown';
+          }
+        } catch {
+          destinationType = 'external_unknown';
+        }
+      }
+
+      // Build GTM recommendation
+      let gtm_recommendation;
+      if (destinationType === 'booking_platform') {
+        const hostname = new URL(finalUrl).hostname;
+        gtm_recommendation = `GA4 Event: click_booking — Trigger: Click - Just Links, {{Click URL}} contains "${hostname}"`;
+      } else if (destinationType === 'same_site_form') {
+        const path = new URL(finalUrl).pathname;
+        gtm_recommendation = `GA4 Event: click_book_cta — Trigger: Click - Just Links on this CTA. Also set up form submission tracking on "${path}"`;
+      } else if (destinationType === 'same_site_page') {
+        const path = new URL(finalUrl).pathname;
+        gtm_recommendation = `GA4 Event: click_book_cta — Trigger: Click - Just Links, {{Click URL}} contains "${path}"`;
+      } else {
+        gtm_recommendation = `GA4 Event: click_book_cta — Trigger: Click - Just Links on booking CTA button (destination: ${finalUrl})`;
+      }
+
+      results.push({
+        link_text: link.label_text,
+        source_href: link.href,
+        final_url: finalUrl,
+        page_title: pageTitle,
+        destination_type: destinationType,
+        platform,
+        page_snippet: pageSnippet,
+        gtm_recommendation,
+      });
+
+    } catch (err) {
+      results.push({
+        link_text: link.label_text,
+        source_href: link.href,
+        final_url: null,
+        page_title: null,
+        destination_type: 'error',
+        platform: null,
+        error: err.message,
+        gtm_recommendation: 'Could not follow link — check manually',
+      });
+    } finally {
+      if (newPage) await newPage.close().catch(() => {});
+    }
+  }
+
+  return results;
+}
+
 async function extractSocialLinks(page, pageUrl) {
   const socialLinks = await safeEval(page, () => {
     const platforms = {
@@ -796,6 +937,20 @@ async function generateGTMSummary(pageData) {
     tagsToCreate.push(`GA4 Event: form_submit_newsletter — Trigger: Form submission on newsletter forms`);
   }
 
+  // Booking CTA tracking
+  const allBookingCTAs = pageData.flatMap(p => p.booking_ctas || []);
+  if (allBookingCTAs.length > 0) {
+    const platformCTAs = allBookingCTAs.filter(c => c.destination_type === 'booking_platform');
+    const nonPlatformCTAs = allBookingCTAs.filter(c => c.destination_type !== 'booking_platform' && c.destination_type !== 'error');
+    const platformNames = [...new Set(platformCTAs.map(c => c.platform).filter(Boolean))];
+    platformNames.forEach(p => {
+      tagsToCreate.push(`GA4 Event: click_booking_cta — Destination: ${p}. Trigger: Click - Just Links on "${p}" CTA buttons`);
+    });
+    if (nonPlatformCTAs.length > 0) {
+      tagsToCreate.push(`GA4 Event: click_book_cta — Trigger: Click - Just Links on booking CTA buttons (see booking_ctas in audit for per-link GTM recommendations)`);
+    }
+  }
+
   // Social link tracking
   if (socialPlatformsSeen.size > 0) {
     [...socialPlatformsSeen].forEach(platform => {
@@ -854,6 +1009,7 @@ async function ctaAuditSite(url) {
       emails: await extractEmails(page, url),
       whatsapp: await extractWhatsApp(page, url),
       booking_links: await extractBookingLinks(page, url),
+      booking_ctas: await extractBookingCTAs(page, context, url),
       social_links: await extractSocialLinks(page, url),
       newsletter: await extractNewsletter(page, url),
       forms: await extractForms(page, url),
@@ -878,6 +1034,7 @@ async function ctaAuditSite(url) {
           emails: await extractEmails(page, contactPageUrl),
           whatsapp: await extractWhatsApp(page, contactPageUrl),
           booking_links: await extractBookingLinks(page, contactPageUrl),
+          booking_ctas: await extractBookingCTAs(page, context, contactPageUrl),
           social_links: await extractSocialLinks(page, contactPageUrl),
           newsletter: await extractNewsletter(page, contactPageUrl),
           forms: await extractForms(page, contactPageUrl),
