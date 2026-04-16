@@ -41,7 +41,7 @@
 //                    on any domain
 //
 
-const SCRIPT_VERSION = "2026-04-10T14:00:00Z-V38";
+const SCRIPT_VERSION = "2026-04-16T00:00:00Z-V39";
 
 const { chromium } = require("playwright");
 
@@ -427,7 +427,7 @@ async function simulateHumanBrowsing(page) {
 function classifyAndParseBeacon(reqUrl, postData) {
   const u = (reqUrl || "").toLowerCase();
   let type = "OTHER";
-  if (u.includes("/g/collect") || u.includes("/r/collect")) type = "GA4";
+  if (u.includes("/g/collect") || u.includes("/r/collect") || u.includes("/mp/collect")) type = "GA4";
   else if (u.includes("gtag/js")) type = "GTAG";
   else if (u.includes("google-analytics.com")) type = "GA";
   else if (/googletagmanager\.com\/gtm\.js/.test(u) || /\/gtm\.js\?(?:[^#]*&)?id=GTM-[A-Z0-9]{4,}/i.test(u)) type = "GTM"; // second clause catches server-side GTM proxy on custom domain
@@ -649,6 +649,27 @@ async function waitForGtmInit(page, beacons, maxWaitMs = POST_CONSENT_MAX_WAIT_M
       return true;
     }
 
+    // Early-exit for direct GA4 (no GTM) — gtag.js has loaded and a G- ID is present.
+    // These sites will never set window.google_tag_manager, so avoid burning the full wait window.
+    const directGa4Ready = await safeEvaluate(page, () => {
+      if (typeof window.gtag !== "function") return false;
+      for (const s of document.querySelectorAll("script[src]")) {
+        if (/googletagmanager\.com\/gtag\/js/i.test(s.src || "")) return true;
+      }
+      return false;
+    });
+    if (directGa4Ready) {
+      logDebug("✅ Direct GA4 (gtag.js) detected — skipping remaining GTM wait");
+      return false; // not GTM, but no point waiting longer
+    }
+
+    // Also early-exit if a GA4 collect beacon has already fired — tracking is clearly active
+    const ga4BeaconFired = beacons.some((b) => b.type === "GA4");
+    if (ga4BeaconFired) {
+      logDebug("✅ GA4 collect beacon detected — skipping remaining GTM wait");
+      return false;
+    }
+
     await safeWait(POST_CONSENT_POLL_MS);
   }
   logDebug("⏱ GTM init poll timed out — proceeding anyway");
@@ -769,21 +790,25 @@ async function detectTrackingSetup(page, beacons) {
   // Last-resort fallback: scan the full serialised HTML Playwright has in memory.
   // Catches CMP-blocked scripts where data-src holds the GTM ID but safeEvaluate
   // only reads live DOM properties (script.src), not raw attribute strings.
+  // For SPAs the first call may see a skeleton DOM — retry once after a short wait
+  // to give the framework time to hydrate and inject the GTM script tag.
   if (gtmIds.size === 0 && !gtmStartFired && !gtmIframe) {
-    try {
-      const html = await page.content();
-      if (html) {
-        // Scan entire HTML — CMP-injected or body-placed GTM may be outside <head>
-        const region = html;
-        for (const m of region.toUpperCase().matchAll(/GTM-[A-Z0-9]{4,}/g)) { if (isValidGtmId(m[0])) gtmIds.add(m[0]); }
-        for (const m of region.toUpperCase().matchAll(/\b(?:G|GT)-(?=[A-Z0-9]*[0-9])[A-Z0-9]{7,}\b/g)) { if (isValidGa4Id(m[0])) ga4Ids.add(m[0]); }
-        if (/googletagmanager\.com\/ns\.html/i.test(region)) gtmIframe = true;
-        // Also catch CMP data-src pattern in raw HTML
-        if (/data-src="[^"]*googletagmanager\.com\/gtm\.js/i.test(region)) gtmIframe = true;
-        logDebug(`page.content() GTM fallback: found ${gtmIds.size} GTM IDs`);
+    for (let htmlAttempt = 0; htmlAttempt < 2; htmlAttempt++) {
+      if (htmlAttempt === 1) await safeWait(1500); // give SPA hydration time to complete
+      try {
+        const html = await page.content();
+        if (html) {
+          for (const m of html.toUpperCase().matchAll(/GTM-[A-Z0-9]{4,}/g)) { if (isValidGtmId(m[0])) gtmIds.add(m[0]); }
+          for (const m of html.toUpperCase().matchAll(/\b(?:G|GT)-(?=[A-Z0-9]*[0-9])[A-Z0-9]{7,}\b/g)) { if (isValidGa4Id(m[0])) ga4Ids.add(m[0]); }
+          if (/googletagmanager\.com\/ns\.html/i.test(html)) gtmIframe = true;
+          if (/data-src="[^"]*googletagmanager\.com\/gtm\.js/i.test(html)) gtmIframe = true;
+          logDebug(`page.content() GTM fallback (attempt ${htmlAttempt + 1}): found ${gtmIds.size} GTM IDs`);
+          if (gtmIds.size > 0 || gtmIframe) break; // found something — no need to retry
+        }
+      } catch (e) {
+        logDebug(`page.content() GTM fallback failed: ${e.message}`);
+        break;
       }
-    } catch (e) {
-      logDebug(`page.content() GTM fallback failed: ${e.message}`);
     }
   }
 
@@ -862,20 +887,26 @@ async function discoverCandidatePages(page, baseUrl) {
     seen.add(x.url);
     return true;
   });
+  // Prioritise URLs that literally contain "contact" — they're the most likely to have CTAs
   const firstContact = uniqueSorted.find((x) => /contact/.test(x.url.toLowerCase()));
   let discovered = [firstContact?.url, ...uniqueSorted.filter((x) => x !== firstContact).map((x) => x.url)]
     .filter(Boolean)
     .slice(0, Math.max(0, MAX_PAGES_TO_VISIT - 1));
 
-  if (discovered.length === 0 && origin) {
+  // Always probe common contact paths even when keyword pages were found — they may not overlap.
+  // This ensures /contact is always checked regardless of discovery order or scoring.
+  if (origin) {
     for (const p of COMMON_CONTACT_PATHS) {
       const candidate = origin + p;
-      if (!seen.has(candidate)) {
+      if (!seen.has(candidate) && !discovered.includes(candidate)) {
         discovered.push(candidate);
+        seen.add(candidate);
         if (discovered.length >= MAX_PAGES_TO_VISIT - 1) break;
       }
     }
   }
+  // Trim to limit after injecting probes
+  discovered = discovered.slice(0, Math.max(0, MAX_PAGES_TO_VISIT - 1));
   return discovered;
 }
 
@@ -1765,6 +1796,16 @@ async function trackingHealthCheckSiteInternal(url) {
     page.on("response", async (res) => {
       try {
         const req = res.request();
+        // Capture GTM script response — once the response is received GTM JS has been fetched.
+        // We wait a beat after this for GTM to execute and push gtm.start into dataLayer.
+        if (/googletagmanager\.com\/gtm\.js/i.test(req.url())) {
+          logDebug("📡 GTM script response received — allowing 500ms for execution");
+          safeWait(500).then(() => {
+            // Beacon the GTM load if not already recorded
+            const already = beacons.some((b) => b.type === "GTM" && b.url === req.url());
+            if (!already) beacons.push({ url: req.url(), timestamp: nowIso(), type: "GTM", event_name: null, payload_dump: req.url().toLowerCase(), tid: null, gtmHash: null });
+          }).catch(() => null);
+        }
         if (req.method() === "POST") {
           const b = classifyAndParseBeacon(req.url(), req.postData());
           if (b && !beacons.find((x) => x.url === b.url && x.timestamp === b.timestamp)) beacons.push(b);
@@ -1856,22 +1897,31 @@ async function trackingHealthCheckSiteInternal(url) {
         }
       }
 
-      // Only test CTAs on pages where tracking is confirmed — clicks on untracked pages never fire
-      if (tracking.has_gtm || tracking.has_any_ga4) {
-        await testCTAsOnPage(
-          page,
-          beacons,
-          page.url(),
-          uniquePhones,
-          uniqueEmails,
-          phoneItems,
-          emailItems,
-          phoneDone,
-          emailDone,
-        );
+      // Always test CTAs — GTM may be deferred and only confirmed by post-click network beacons
+      await testCTAsOnPage(
+        page,
+        beacons,
+        page.url(),
+        uniquePhones,
+        uniqueEmails,
+        phoneItems,
+        emailItems,
+        phoneDone,
+        emailDone,
+      );
 
-        const formRes = await testAllFormsOnPage(page, beacons, page.url());
-        results.form_details.push(formRes);
+      const formRes = await testAllFormsOnPage(page, beacons, page.url());
+      results.form_details.push(formRes);
+
+      // Second-pass tracking detection using post-CTA beacons — catches deferred/lazy GTM
+      if (!tracking.has_gtm && !tracking.has_any_ga4) {
+        const postCtaTracking = await detectTrackingSetup(page, beacons);
+        if (postCtaTracking.has_gtm || postCtaTracking.has_any_ga4) {
+          tracking = postCtaTracking;
+          results.detected_gtm_ids = uniq([...results.detected_gtm_ids, ...postCtaTracking.gtm]);
+          results.detected_ga4_ids = uniq([...results.detected_ga4_ids, ...postCtaTracking.ga4, ...postCtaTracking.unlinked_ga4]);
+          logInfo(`⚠️  GTM/GA4 confirmed via post-CTA beacons — updating tracking state`);
+        }
       }
     }
 
