@@ -2,12 +2,16 @@ const express = require("express");
 const { chromium } = require("playwright-extra");
 const StealthPlugin = require("puppeteer-extra-plugin-stealth");
 chromium.use(StealthPlugin());
+const swaggerUi = require("swagger-ui-express");
+const swaggerSpec = require("./swagger");
 
 const app = express();
 app.use(express.json());
 
 const healthRouter = require("./health.routes");
 app.use("/health", healthRouter);
+
+app.use("/docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec, { customSiteTitle: "GA Automation API Docs" }));
 
 function extractPropertyIdFromUrl(page) {
   const url = page.url();
