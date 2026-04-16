@@ -2053,6 +2053,7 @@ app.post("/run", async (req, res) => {
       "fetch_ga4_measurement_id",   // API-only: get measurement ID for existing GA4 property
       "setup_gtm_tags",             // API-only: create workspace, click vars, triggers, tags
       "register_ga4_conversions",   // API-only: register conversion events on GA4 property
+      "build_gtm_from_audit",       // API-only: run CTA audit then build GTM container from results
     ].includes(action)
   ) {
     return res.status(400).json({ error: "Unknown action" });
@@ -2258,6 +2259,65 @@ app.post("/run", async (req, res) => {
       return res.json({ status: "success", property_id });
     } catch (err) {
       console.error("❌ register_ga4_conversions error:", err.message);
+      return res.json({ status: "error", error: err.message });
+    }
+  }
+
+  // ── build_gtm_from_audit: API-only — run CTA audit then build container ────
+  // Accepts either:
+  //   audit        — pre-computed result from POST /health/audit (skip re-crawl)
+  //   website_url  — run a fresh audit first, then build
+  //
+  // Required: google_email, numeric_account_id, numeric_container_id, measurement_id
+  if (action === "build_gtm_from_audit") {
+    const { google_email: gtmEmail, numeric_account_id, numeric_container_id, measurement_id, audit, website_url: auditUrl } = req.body;
+
+    if (!gtmEmail)             return res.status(400).json({ status: "error", error: "Missing google_email" });
+    if (!numeric_account_id)   return res.status(400).json({ status: "error", error: "Missing numeric_account_id" });
+    if (!numeric_container_id) return res.status(400).json({ status: "error", error: "Missing numeric_container_id" });
+    if (!measurement_id)       return res.status(400).json({ status: "error", error: "Missing measurement_id" });
+    if (!audit && !auditUrl)   return res.status(400).json({ status: "error", error: "Provide either 'audit' (from POST /health/audit) or 'website_url' to run a fresh audit" });
+
+    try {
+      const { getAllGoogleAccounts } = require("./src/lib/credentials");
+      const { getAccessToken }       = require("./src/lib/google-oauth");
+      const { buildContainerFromAudit } = require("./src/api/gtm-api");
+
+      // Optionally run a fresh audit if caller didn't provide one
+      let auditResult = audit;
+      if (!auditResult) {
+        const { ctaAuditSite } = require("./cta-audit.runners");
+        console.log(`🔍 build_gtm_from_audit: running CTA audit for ${auditUrl}...`);
+        auditResult = await ctaAuditSite(auditUrl);
+        console.log(`✅ Audit complete — ${auditResult.pages_crawled?.length} pages crawled`);
+      }
+
+      const allAccounts = await getAllGoogleAccounts();
+      const gtmAccount  = allAccounts.find(a => a.google_email === gtmEmail);
+      if (!gtmAccount)                       throw new Error(`No google_account found for email ${gtmEmail}`);
+      if (!gtmAccount.gtm_ga4_refresh_token) throw new Error(`Account ${gtmEmail} has no GTM refresh token`);
+
+      const accessToken = await getAccessToken(gtmAccount.gtm_ga4_refresh_token);
+
+      const result = await buildContainerFromAudit(accessToken, {
+        numericAccountId:   String(numeric_account_id),
+        numericContainerId: String(numeric_container_id),
+        measurementId:      measurement_id,
+        audit:              auditResult,
+      });
+
+      console.log(`✅ build_gtm_from_audit complete — ${result.tags.length} tags, ${result.triggers.length} triggers`);
+      return res.json({
+        status:        "success",
+        workspace_id:  result.workspace_id,
+        tags_created:  result.tags,
+        triggers_created: result.triggers,
+        skipped:       result.skipped,
+        audit_summary: auditResult.gtm_summary,
+        pages_crawled: auditResult.pages_crawled,
+      });
+    } catch (err) {
+      console.error("❌ build_gtm_from_audit error:", err.message);
       return res.json({ status: "error", error: err.message });
     }
   }

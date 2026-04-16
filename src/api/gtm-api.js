@@ -281,9 +281,280 @@ async function createTags(accessToken, {
   console.log("✅ All GTM tags created");
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Public — Audit-driven container builder
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Map of social platform names → domain fragments used in Click URL filters */
+const SOCIAL_TRIGGER_DOMAINS = {
+  "Facebook":     "facebook.com",
+  "Instagram":    "instagram.com",
+  "X (Twitter)":  "twitter.com",
+  "LinkedIn":     "linkedin.com",
+  "YouTube":      "youtube.com",
+  "TikTok":       "tiktok.com",
+  "Pinterest":    "pinterest.com",
+  "Snapchat":     "snapchat.com",
+  "Threads":      "threads.net",
+  "Trustpilot":   "trustpilot.com",
+  // Google Maps omitted — not a meaningful conversion CTA
+};
+
+/**
+ * Helper — create one LINK trigger + one GA4 event tag as a matched pair.
+ *
+ * @param {string} accessToken
+ * @param {string} triggersPath   — full API path to the workspace triggers collection
+ * @param {string} tagsPath       — full API path to the workspace tags collection
+ * @param {string} triggerName    — display name for the trigger
+ * @param {string} clickUrlFilter — substring that {{Click URL}} must contain
+ * @param {string} tagName        — display name for the tag
+ * @param {string} eventName      — GA4 event name (e.g. "click_call")
+ * @param {string} measurementId  — GA4 measurement ID
+ * @returns {{ triggerName, tagName }}
+ */
+async function createLinkTriggerAndTag(
+  accessToken, triggersPath, tagsPath,
+  triggerName, clickUrlFilter,
+  tagName, eventName, measurementId,
+) {
+  const trigger = await gtmRequest("POST", triggersPath, accessToken, {
+    name: triggerName,
+    type: "LINK",
+    filter: [{
+      type: "CONTAINS",
+      parameter: [
+        { type: "TEMPLATE", key: "arg0", value: "{{Click URL}}" },
+        { type: "TEMPLATE", key: "arg1", value: clickUrlFilter },
+      ],
+    }],
+    waitForTags:         { type: "BOOLEAN",  value: "false" },
+    checkValidation:     { type: "BOOLEAN",  value: "false" },
+    waitForTagsTimeout:  { type: "TEMPLATE", value: "2000"  },
+  });
+
+  await gtmRequest("POST", tagsPath, accessToken, {
+    name: tagName,
+    type: "gaawe",
+    parameter: [
+      { type: "TEMPLATE", key: "eventName",    value: eventName    },
+      { type: "TEMPLATE", key: "measurementId", value: measurementId },
+    ],
+    firingTriggerId: [String(trigger.triggerId)],
+  });
+
+  console.log(`✅ Created trigger "${triggerName}" → tag "${tagName}" (${eventName})`);
+  return { triggerName, tagName };
+}
+
+/**
+ * Dynamically build a GTM workspace with only the triggers and tags that are
+ * relevant to what the CTA audit found on the site.
+ *
+ * Always created:
+ *   - "AP Tracking Setup" workspace
+ *   - Click built-in variables (CLICK_URL, CLICK_ELEMENT, …)
+ *   - AP G-TAG (Google tag, fires on All Pages)
+ *
+ * Created only if the audit found them:
+ *   - click_call        — if clickable tel: links exist
+ *   - click_emails      — if clickable mailto: links exist
+ *   - contact_form      — if contact forms exist
+ *   - click_whatsapp    — if WhatsApp links exist
+ *   - click_social_X    — one per social platform found (Facebook, Instagram, …)
+ *   - click_book_cta    — per unique booking CTA destination path / platform domain
+ *
+ * @param {string} accessToken
+ * @param {{
+ *   numericAccountId:   string,
+ *   numericContainerId: string,
+ *   measurementId:      string,  — GA4 measurement ID e.g. "G-XXXXXXXXXX"
+ *   audit:              Object,  — full result from ctaAuditSite()
+ * }} params
+ * @returns {{ workspace_id, triggers: string[], tags: string[], skipped: string[] }}
+ */
+async function buildContainerFromAudit(accessToken, {
+  numericAccountId,
+  numericContainerId,
+  measurementId,
+  audit,
+}) {
+  const pages = audit.pages || [];
+
+  // ── Aggregate findings across all crawled pages ───────────────────────────
+  const hasClickablePhone   = pages.some(p => p.phones?.clickable?.length > 0);
+  const hasClickableEmail   = pages.some(p => p.emails?.clickable?.length > 0);
+  const hasForms            = pages.some(p => p.forms?.length > 0);
+  const hasWhatsApp         = pages.some(p => p.whatsapp?.links?.length > 0);
+
+  // Unique social platforms (only those in our trigger domain map)
+  const socialPlatforms = [
+    ...new Set(pages.flatMap(p => (p.social_links || []).map(s => s.platform)))
+  ].filter(p => SOCIAL_TRIGGER_DOMAINS[p]);
+
+  // Booking CTAs — deduplicate by destination key (hostname for platforms, pathname for same-site)
+  const bookingCTAs = pages.flatMap(p => p.booking_ctas || []).filter(c => c.destination_type !== "error");
+  const bookingDestinationsSeen = new Set();
+  const dedupedBookingCTAs = bookingCTAs.filter(cta => {
+    try {
+      const key = cta.destination_type === "booking_platform"
+        ? new URL(cta.final_url).hostname
+        : new URL(cta.final_url).pathname;
+      if (bookingDestinationsSeen.has(key)) return false;
+      bookingDestinationsSeen.add(key);
+      return true;
+    } catch { return false; }
+  });
+
+  const created  = { workspace_id: null, triggers: [], tags: [], skipped: [] };
+
+  // ── 1. Workspace ──────────────────────────────────────────────────────────
+  const workspaceId = await createWorkspace(accessToken, { numericAccountId, numericContainerId });
+  created.workspace_id = workspaceId;
+
+  // ── 2. Click built-in variables ───────────────────────────────────────────
+  await enableClickVariables(accessToken, { numericAccountId, numericContainerId, workspaceId });
+
+  const basePath     = workspacePath(numericAccountId, numericContainerId, workspaceId);
+  const triggersPath = `${basePath}/triggers`;
+  const tagsPath     = `${basePath}/tags`;
+
+  // ── 3. AP G-TAG (always) ──────────────────────────────────────────────────
+  await gtmRequest("POST", tagsPath, accessToken, {
+    name: "AP G-TAG",
+    type: "googtag",
+    parameter: [
+      { type: "TEMPLATE", key: "tagId",               value: measurementId },
+      { type: "TEMPLATE", key: "configSettingsTable",  value: ""           },
+    ],
+    firingTriggerId: [ALL_PAGES_TRIGGER_ID],
+  });
+  created.tags.push("AP G-TAG");
+  console.log("✅ AP G-TAG created");
+
+  // ── 4. Click to Call ──────────────────────────────────────────────────────
+  if (hasClickablePhone) {
+    const r = await createLinkTriggerAndTag(
+      accessToken, triggersPath, tagsPath,
+      "AP Click to Call", "tel:",
+      "AP Click Call", "click_call", measurementId,
+    );
+    created.triggers.push(r.triggerName);
+    created.tags.push(r.tagName);
+  } else {
+    created.skipped.push("click_call (no clickable tel: links found)");
+  }
+
+  // ── 5. Click to Email ─────────────────────────────────────────────────────
+  if (hasClickableEmail) {
+    const r = await createLinkTriggerAndTag(
+      accessToken, triggersPath, tagsPath,
+      "AP Click to Email", "mailto:",
+      "AP Click Emails", "click_emails", measurementId,
+    );
+    created.triggers.push(r.triggerName);
+    created.tags.push(r.tagName);
+  } else {
+    created.skipped.push("click_emails (no clickable mailto: links found)");
+  }
+
+  // ── 6. Contact Form ───────────────────────────────────────────────────────
+  if (hasForms) {
+    const formTrigger = await gtmRequest("POST", triggersPath, accessToken, {
+      name: "AP Contact Form",
+      type: "FORM_SUBMISSION",
+      waitForTags:        { type: "BOOLEAN",  value: "false" },
+      checkValidation:    { type: "BOOLEAN",  value: "false" },
+      waitForTagsTimeout: { type: "TEMPLATE", value: "2000"  },
+    });
+    created.triggers.push("AP Contact Form");
+
+    await gtmRequest("POST", tagsPath, accessToken, {
+      name: "AP Contact Form",
+      type: "gaawe",
+      parameter: [
+        { type: "TEMPLATE", key: "eventName",     value: "contact_form"  },
+        { type: "TEMPLATE", key: "measurementId",  value: measurementId  },
+      ],
+      firingTriggerId: [String(formTrigger.triggerId)],
+    });
+    created.tags.push("AP Contact Form");
+    console.log("✅ Created trigger \"AP Contact Form\" → tag \"AP Contact Form\" (contact_form)");
+  } else {
+    created.skipped.push("contact_form (no contact forms found)");
+  }
+
+  // ── 7. WhatsApp ───────────────────────────────────────────────────────────
+  if (hasWhatsApp) {
+    const r = await createLinkTriggerAndTag(
+      accessToken, triggersPath, tagsPath,
+      "AP Click WhatsApp", "wa.me",
+      "AP Click WhatsApp", "click_whatsapp", measurementId,
+    );
+    created.triggers.push(r.triggerName);
+    created.tags.push(r.tagName);
+  } else {
+    created.skipped.push("click_whatsapp (no WhatsApp links found)");
+  }
+
+  // ── 8. Social platforms ───────────────────────────────────────────────────
+  for (const platform of socialPlatforms) {
+    const domain    = SOCIAL_TRIGGER_DOMAINS[platform];
+    const safeName  = platform.replace(/[^a-zA-Z0-9]/g, "_");
+    const eventName = `click_social_${safeName.toLowerCase()}`;
+
+    const r = await createLinkTriggerAndTag(
+      accessToken, triggersPath, tagsPath,
+      `AP Click ${platform}`, domain,
+      `AP Click ${platform}`, eventName, measurementId,
+    );
+    created.triggers.push(r.triggerName);
+    created.tags.push(r.tagName);
+  }
+
+  // ── 9. Booking CTAs ───────────────────────────────────────────────────────
+  for (const cta of dedupedBookingCTAs) {
+    try {
+      if (cta.destination_type === "booking_platform") {
+        const hostname  = new URL(cta.final_url).hostname;
+        const safePlat  = (cta.platform || hostname).replace(/[^a-zA-Z0-9]/g, "_");
+        const eventName = `click_booking_${safePlat.toLowerCase()}`;
+        const r = await createLinkTriggerAndTag(
+          accessToken, triggersPath, tagsPath,
+          `AP Book CTA - ${cta.platform}`, hostname,
+          `AP Click Book - ${cta.platform}`, eventName, measurementId,
+        );
+        created.triggers.push(r.triggerName);
+        created.tags.push(r.tagName);
+      } else {
+        // same_site_page or same_site_form — trigger on the destination path
+        const path = new URL(cta.final_url).pathname;
+        const r = await createLinkTriggerAndTag(
+          accessToken, triggersPath, tagsPath,
+          `AP Book CTA - ${path}`, path,
+          "AP Click Book CTA", "click_book_cta", measurementId,
+        );
+        created.triggers.push(r.triggerName);
+        created.tags.push(r.tagName);
+      }
+    } catch (err) {
+      console.warn(`⚠️ Skipping booking CTA "${cta.link_text}": ${err.message}`);
+      created.skipped.push(`booking CTA "${cta.link_text}" — ${err.message}`);
+    }
+  }
+
+  if (dedupedBookingCTAs.length === 0) {
+    created.skipped.push("click_book_cta (no booking CTAs found)");
+  }
+
+  console.log(`✅ buildContainerFromAudit complete — ${created.tags.length} tags, ${created.triggers.length} triggers`);
+  return created;
+}
+
 module.exports = {
   createWorkspace,
   enableClickVariables,
   createTriggers,
   createTags,
+  buildContainerFromAudit,
 };
