@@ -672,9 +672,9 @@ async function generateGTMSummary(pageData) {
 
   pageData.forEach(page => {
     totalClickablePhones += page.phones.clickable.length;
-    totalPlainTextPhones += page.phones.plain_text.length;
+    totalPlainTextPhones += page.phones.plainText.length;
     totalClickableEmails += page.emails.clickable.length;
-    totalPlainTextEmails += page.emails.plain_text.length;
+    totalPlainTextEmails += page.emails.plainText.length;
     totalWhatsAppLinks += page.whatsapp.links.length;
     totalBookingLinks += page.booking_links.length;
     totalForms += page.forms.length;
