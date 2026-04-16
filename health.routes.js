@@ -1,5 +1,6 @@
 const express = require('express');
 const { trackingHealthCheckSite, runBatchHealthCheck, getBatchJob } = require('./health.runners');
+const { ctaAuditSite } = require('./cta-audit.runners');
 const crypto = require('crypto');
 const router = express.Router();
 
@@ -117,6 +118,18 @@ router.get('/batch/:job_id', (req, res) => {
     startedAt: job.startedAt,
     completedAt: job.status === 'complete' ? new Date().toISOString() : null
   });
+});
+
+router.post('/audit', async (req, res) => {
+  const { url } = req.body || {};
+  if (!url) return res.status(400).json({ ok: false, error: 'URL is required' });
+  try {
+    const result = await ctaAuditSite(url);
+    return res.json({ ok: true, ...result });
+  } catch (e) {
+    console.error('CTA audit error:', e);
+    return res.status(500).json({ ok: false, error: e.message, url });
+  }
 });
 
 module.exports = router;
