@@ -847,21 +847,21 @@ async function extractLocationLinks(page, pageUrl) {
 // ---------------------------------------------------------------------------
 
 const SERVICE_URL_PATTERN =
-  /\/(services?|treatments?|therapies|therapists?|what-we-do|solutions|programs?|packages?|specialties|procedures|expertise|offerings|portfolio)(\/|$|\?|#)/i;
+  /\/(services?|treatments?|therapies|therapists?|what-we-do|solutions|programs?|packages?|specialties|procedures|expertise|offerings|portfolio|our-service|physiotherapy|osteopathy|chiropractic|massage|acupuncture|nutrition|wellness|health|medical|clinic|practice|care|therapy|treatment|healing|rehab|rehabilitation|recovery|pain|injury|fitness|exercise|training|consultation|assessment|diagnosis|prescription|medicine|pharmacy|dental|dentistry|orthodontics|cosmetic|beauty|aesthetic|spa|wellbeing|holistic|alternative|complementary|integrative|functional|preventive|chronic|acute|specialist|specialty|department|unit|centre|center)(\/|$|\?|#)/i;
 const SERVICE_TEXT_PATTERN =
-  /^(services?|treatments?|therapies|therapy|what we do|solutions|programs?|packages?|specialties|our\s+work|offerings|how we help|expertise)\s*$/i;
+  /^(services?|treatments?|therapies|therapy|what we do|solutions|programs?|packages?|specialties|our\s+work|offerings|how we help|expertise|our services?|our treatments?|our therapies?|physiotherapy|osteopathy|chiropractic|massage|acupuncture|nutrition|wellness|health|clinic|practice|care|healing|rehab|pain|injury|fitness|consultation|assessment|diagnosis|prescription|dental|cosmetic|beauty|spa|wellbeing|holistic|alternative|complementary)\s*$/i;
 
 // URL pattern that flags a page as a service LISTING rather than an individual
 // service page — e.g. /services or /treatments (no trailing slug).
 const SERVICE_LISTING_PATTERN =
-  /\/(services?|treatments?|therapies|what-we-do|solutions|programs?|packages?|specialties|procedures|expertise|offerings|portfolio)\/?$/i;
+  /\/(services?|treatments?|therapies|what-we-do|solutions|programs?|packages?|specialties|procedures|expertise|offerings|portfolio|our-service)\/?$/i;
 
 async function findServicePages(page, baseUrl) {
   const links =
     (await safeEval(page, () =>
       Array.from(
         document.querySelectorAll(
-          'nav a[href], header a[href], [class*="nav"] a[href], [class*="menu"] a[href], [role="navigation"] a[href]',
+          'nav a[href], header a[href], [class*="nav"] a[href], [class*="menu"] a[href], [role="navigation"] a[href], .menu-item a[href]',
         ),
       ).map((a) => ({
         href: a.href,
@@ -901,8 +901,9 @@ async function findServicePages(page, baseUrl) {
 
 // ---------------------------------------------------------------------------
 // Service sub-page discovery — called when visiting a service LISTING page.
-// Finds all direct child pages linked from the listing (e.g. /services/massage
-// when visiting /services). Does NOT recurse deeper than one level.
+// Finds service-related pages linked from the listing. Looks for:
+// 1. Direct child pages (e.g. /services/massage when visiting /services)
+// 2. Any pages that match service patterns (e.g. /physiotherapy/, /massage/)
 // ---------------------------------------------------------------------------
 async function findServiceSubPages(page, currentUrl, baseOrigin, alreadySeen) {
   let currentPath;
@@ -913,7 +914,12 @@ async function findServiceSubPages(page, currentUrl, baseOrigin, alreadySeen) {
   }
 
   const links =
-    (await safeEval(page, () => Array.from(document.querySelectorAll("a[href]")).map((a) => ({ href: a.href })))) || [];
+    (await safeEval(page, () =>
+      Array.from(document.querySelectorAll("a[href]")).map((a) => ({
+        href: a.href,
+        text: (a.textContent || "").replace(/\s+/g, " ").trim(),
+      }))
+    )) || [];
 
   const subPages = [];
   const seen = new Set(alreadySeen);
@@ -925,13 +931,25 @@ async function findServiceSubPages(page, currentUrl, baseOrigin, alreadySeen) {
       const cleanPath = u.pathname.replace(/\/$/, "");
       const canonical = u.origin + cleanPath;
       if (seen.has(canonical)) continue;
-      // Must be a direct child of the current listing path — e.g. /services/massage
-      // when currentPath is /services. Skip grandchildren (/services/a/b).
-      if (!cleanPath.startsWith(currentPath + "/")) continue;
-      const remainder = cleanPath.slice(currentPath.length + 1);
-      if (remainder.includes("/")) continue; // grandchild — skip
-      seen.add(canonical);
-      subPages.push(u.href);
+
+      // Check for direct children first (original logic)
+      let isServiceSubPage = false;
+      if (cleanPath.startsWith(currentPath + "/")) {
+        const remainder = cleanPath.slice(currentPath.length + 1);
+        if (!remainder.includes("/")) { // not a grandchild
+          isServiceSubPage = true;
+        }
+      }
+
+      // Also check for any links that match service patterns
+      if (!isServiceSubPage && (SERVICE_URL_PATTERN.test(cleanPath) || SERVICE_TEXT_PATTERN.test(link.text))) {
+        isServiceSubPage = true;
+      }
+
+      if (isServiceSubPage) {
+        seen.add(canonical);
+        subPages.push(u.href);
+      }
     } catch {
       /* skip malformed */
     }

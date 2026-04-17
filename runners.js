@@ -123,7 +123,13 @@ async function fillWebStreamForm(page, { websiteUrl, websiteName }) {
   for (const sel of urlSelectors) {
     try {
       const loc = sel();
-      if ((await loc.count()) > 0 && (await loc.first().isVisible().catch(() => false))) {
+      if (
+        (await loc.count()) > 0 &&
+        (await loc
+          .first()
+          .isVisible()
+          .catch(() => false))
+      ) {
         domainInput = loc.first();
         console.log("✅ Found domain input via selector");
         break;
@@ -148,7 +154,7 @@ async function fillWebStreamForm(page, { websiteUrl, websiteName }) {
       await page.screenshot({ path: "fillWebStreamForm_noinput.png", fullPage: true }).catch(() => {});
       throw new Error(
         `fillWebStreamForm: cannot find URL input. Page URL: ${page.url()}. ` +
-        `Check fillWebStreamForm_noinput.png on the server for the current GA4 form state.`
+          `Check fillWebStreamForm_noinput.png on the server for the current GA4 form state.`,
       );
     }
   }
@@ -199,7 +205,13 @@ async function fillWebStreamForm(page, { websiteUrl, websiteName }) {
   for (const sel of streamSelectors) {
     try {
       const loc = sel();
-      if ((await loc.count()) > 0 && (await loc.first().isVisible().catch(() => false))) {
+      if (
+        (await loc.count()) > 0 &&
+        (await loc
+          .first()
+          .isVisible()
+          .catch(() => false))
+      ) {
         streamNameInput = loc.first();
         break;
       }
@@ -207,7 +219,9 @@ async function fillWebStreamForm(page, { websiteUrl, websiteName }) {
   }
   // Last resort: second visible text input on the full page
   if (!streamNameInput) {
-    const allPageInputs = page.locator('input[type="text"]:visible, input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):visible');
+    const allPageInputs = page.locator(
+      'input[type="text"]:visible, input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):visible',
+    );
     const pageInputCount = await allPageInputs.count();
     if (pageInputCount > 1) streamNameInput = allPageInputs.nth(1);
     else if (pageInputCount === 1) streamNameInput = allPageInputs.first();
@@ -224,7 +238,8 @@ async function fillWebStreamForm(page, { websiteUrl, websiteName }) {
   if ((await createBtn.count()) === 0) createBtn = scope.getByRole("button", { name: /Next/i });
   if ((await createBtn.count()) === 0) createBtn = scope.getByRole("button", { name: /Done/i });
   // Last resort: any visible primary/submit button in the form area
-  if ((await createBtn.count()) === 0) createBtn = page.locator('button[type="submit"], button.mat-primary, button.cdk-focused').last();
+  if ((await createBtn.count()) === 0)
+    createBtn = page.locator('button[type="submit"], button.mat-primary, button.cdk-focused').last();
 
   await createBtn.waitFor({ timeout: 20000 });
 
@@ -268,7 +283,13 @@ async function ensureCorrectPropertyContext(page, accountName, propertyName) {
 
   const adminBtn = page.getByRole("button", { name: /^Admin$/ }).or(page.locator('[aria-label="Admin"]'));
   for (let i = 1; i <= 3; i++) {
-    if (await adminBtn.first().isVisible().catch(() => false)) break;
+    if (
+      await adminBtn
+        .first()
+        .isVisible()
+        .catch(() => false)
+    )
+      break;
     console.log(`⏳ Admin button not visible (attempt ${i}/3), waiting...`);
     await page.waitForTimeout(4000);
   }
@@ -333,7 +354,7 @@ async function openAccountViaAccountsSearch(page, accountName) {
 
   // Click the arrow_drop_down icon in the breadcrumb — this opens the picker
   // AND auto-focuses the search input, so we can type immediately after.
-  const dropdownArrow = page.locator('mat-icon.gmp-breadcrumb-arrow').first();
+  const dropdownArrow = page.locator("mat-icon.gmp-breadcrumb-arrow").first();
   await dropdownArrow.waitFor({ timeout: 10000 });
   await dropdownArrow.click();
   await page.waitForTimeout(800);
@@ -368,7 +389,10 @@ async function openAdmin(page) {
 
   // Retry up to 3 times — GA4 SPA sometimes renders the nav late
   for (let attempt = 1; attempt <= 3; attempt++) {
-    const visible = await adminBtn.first().isVisible().catch(() => false);
+    const visible = await adminBtn
+      .first()
+      .isVisible()
+      .catch(() => false);
     if (visible) break;
     console.log(`⏳ Admin button not yet visible (attempt ${attempt}/3), waiting...`);
     await page.waitForTimeout(4000);
@@ -477,7 +501,13 @@ async function goToDataStreams(page) {
 
     const adminBtn = page.getByRole("button", { name: /^Admin$/ }).or(page.locator('[aria-label="Admin"]'));
     for (let i = 1; i <= 3; i++) {
-      if (await adminBtn.first().isVisible().catch(() => false)) break;
+      if (
+        await adminBtn
+          .first()
+          .isVisible()
+          .catch(() => false)
+      )
+        break;
       console.log(`⏳ Admin button not visible (attempt ${i}/3), waiting...`);
       await page.waitForTimeout(4000);
     }
@@ -1795,7 +1825,6 @@ async function detectSuccessSelector(page) {
 // Account capacity endpoints
 // ─────────────────────────────────────────────────────────────────────────────
 
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Account capacity endpoints
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1821,7 +1850,9 @@ app.patch("/accounts/:id/capacity", async (req, res) => {
   if (gtm_container_count !== undefined) updates.gtm_container_count = gtm_container_count;
 
   if (Object.keys(updates).length === 0) {
-    return res.status(400).json({ status: "error", error: "No updatable fields provided (ga4_property_count, gtm_container_count)" });
+    return res
+      .status(400)
+      .json({ status: "error", error: "No updatable fields provided (ga4_property_count, gtm_container_count)" });
   }
 
   try {
@@ -1874,14 +1905,16 @@ app.post("/accounts/scan-capacity", async (req, res) => {
           throw new Error("Google 2FA prompt detected — cannot automate this account");
         }
         const accountPickerEmail = page
-          .locator(`[data-identifier*="${google_email}"], li:has-text("${google_email}"), [data-email*="${google_email}"]`)
+          .locator(
+            `[data-identifier*="${google_email}"], li:has-text("${google_email}"), [data-email*="${google_email}"]`,
+          )
           .first();
         if (await accountPickerEmail.isVisible().catch(() => false)) {
           await accountPickerEmail.click();
           await page.waitForTimeout(3000);
           continue;
         }
-        const anyPickerAccount = page.locator('[data-identifier], .OVnw0d').first();
+        const anyPickerAccount = page.locator("[data-identifier], .OVnw0d").first();
         if (await anyPickerAccount.isVisible().catch(() => false)) {
           await anyPickerAccount.click();
           await page.waitForTimeout(3000);
@@ -1928,7 +1961,13 @@ app.post("/accounts/scan-capacity", async (req, res) => {
           .or(page.getByRole("link", { name: /^Admin$/ }))
           .or(page.locator('[aria-label="Admin"]'));
         for (let i = 1; i <= 6; i++) {
-          if (await adminBtn.first().isVisible().catch(() => false)) break;
+          if (
+            await adminBtn
+              .first()
+              .isVisible()
+              .catch(() => false)
+          )
+            break;
           await page.waitForTimeout(5000);
         }
         await adminBtn.first().waitFor({ state: "visible", timeout: 90000 });
@@ -1958,13 +1997,25 @@ app.post("/accounts/scan-capacity", async (req, res) => {
       // ── Read capacity text ───────────────────────────────────────────────
       // "68 more accounts can be created. The maximum is 100."
       const limitTexts = [
-        "text=/reached\\s+the\\s+limit/i", "text=/limit\\s+reached/i",
-        "text=/you\\s+have\\s+reached/i", "text=/too\\s+many/i",
-        "text=/account\\s+limit/i", "text=/can\\s+only\\s+create/i",
+        "text=/reached\\s+the\\s+limit/i",
+        "text=/limit\\s+reached/i",
+        "text=/you\\s+have\\s+reached/i",
+        "text=/too\\s+many/i",
+        "text=/account\\s+limit/i",
+        "text=/can\\s+only\\s+create/i",
       ];
       let atLimit = false;
       for (const t of limitTexts) {
-        if (await page.locator(t).first().isVisible().catch(() => false)) { atLimit = true; break; }
+        if (
+          await page
+            .locator(t)
+            .first()
+            .isVisible()
+            .catch(() => false)
+        ) {
+          atLimit = true;
+          break;
+        }
       }
 
       let remaining = null;
@@ -1973,13 +2024,16 @@ app.post("/accounts/scan-capacity", async (req, res) => {
       if (atLimit) {
         remaining = 0;
       } else {
-        const capacityText = await page.locator('text=/more accounts can be created/i').first()
-          .innerText({ timeout: 5000 }).catch(() => null);
+        const capacityText = await page
+          .locator("text=/more accounts can be created/i")
+          .first()
+          .innerText({ timeout: 5000 })
+          .catch(() => null);
         if (capacityText) {
           const remainingMatch = capacityText.match(/(\d+)\s+more accounts/i);
-          const maxMatch       = capacityText.match(/maximum is (\d+)/i);
+          const maxMatch = capacityText.match(/maximum is (\d+)/i);
           if (remainingMatch) remaining = parseInt(remainingMatch[1], 10);
-          if (maxMatch)       max       = parseInt(maxMatch[1], 10);
+          if (maxMatch) max = parseInt(maxMatch[1], 10);
         }
       }
 
@@ -1990,11 +2044,10 @@ app.post("/accounts/scan-capacity", async (req, res) => {
         account_name: account_name || google_email,
         google_email,
         remaining,
-        used:  remaining !== null ? max - remaining : null,
+        used: remaining !== null ? max - remaining : null,
         max,
         error: null,
       };
-
     } catch (err) {
       if (browser) await browser.close().catch(() => {});
       console.error(`❌ scan-capacity ${google_email}: ${err.message}`);
@@ -2003,9 +2056,9 @@ app.post("/accounts/scan-capacity", async (req, res) => {
         account_name: account_name || google_email,
         google_email,
         remaining: null,
-        used:      null,
-        max:       null,
-        error:     err.message,
+        used: null,
+        max: null,
+        error: err.message,
       };
     }
   };
@@ -2048,16 +2101,16 @@ app.post("/run", async (req, res) => {
       "fetch_gtm_codes",
       "test_tracking_ctas",
       "submit_google_otp",
-      "handle_new_case",        // orchestrator entry point — manages its own browsers
-      "search_ga4_accounts",        // API-only search across all 12 Google accounts
-      "fetch_ga4_measurement_id",   // API-only: get measurement ID for existing GA4 property
-      "setup_gtm_tags",             // API-only: create workspace, click vars, triggers, tags
-      "register_ga4_conversions",   // API-only: register conversion events on GA4 property
-      "build_gtm_from_audit",       // API-only: run CTA audit then build GTM container from results
-      "generate_gtm_payload",       // API-only: return ordered GTM API call sequence ready to execute
-      "execute_gtm_payload",        // API-only: accept raw access_token + execute all GTM calls internally
-      "generate_gtm_container",     // API-only: generate downloadable GTM container export JSON from audit
-      "build_audit_report",         // API-only: generate Google Docs batchUpdate requests from audit result
+      "handle_new_case", // orchestrator entry point — manages its own browsers
+      "search_ga4_accounts", // API-only search across all 12 Google accounts
+      "fetch_ga4_measurement_id", // API-only: get measurement ID for existing GA4 property
+      "setup_gtm_tags", // API-only: create workspace, click vars, triggers, tags
+      "register_ga4_conversions", // API-only: register conversion events on GA4 property
+      "build_gtm_from_audit", // API-only: run CTA audit then build GTM container from results
+      "generate_gtm_payload", // API-only: return ordered GTM API call sequence ready to execute
+      "execute_gtm_payload", // API-only: accept raw access_token + execute all GTM calls internally
+      "generate_gtm_container", // API-only: generate downloadable GTM container export JSON from audit
+      "build_audit_report", // API-only: generate Google Docs batchUpdate requests from audit result
     ].includes(action)
   ) {
     return res.status(400).json({ error: "Unknown action" });
@@ -2083,18 +2136,17 @@ app.post("/run", async (req, res) => {
         if (!googleAccount.gtm_ga4_refresh_token) continue;
         try {
           const token = await getAccessToken(googleAccount.gtm_ga4_refresh_token);
-          const response = await axios.get(
-            "https://analyticsadmin.googleapis.com/v1beta/accounts",
-            { headers: { Authorization: `Bearer ${token}` } }
-          );
+          const response = await axios.get("https://analyticsadmin.googleapis.com/v1beta/accounts", {
+            headers: { Authorization: `Bearer ${token}` },
+          });
           const ga4Accounts = response.data.accounts || [];
           for (const ga4Account of ga4Accounts) {
             if (ga4Account.displayName.toLowerCase().includes(query.toLowerCase())) {
               matches.push({
-                ga4_account_name:    ga4Account.displayName,
-                ga4_account_id:      ga4Account.name.replace("accounts/", ""),
+                ga4_account_name: ga4Account.displayName,
+                ga4_account_id: ga4Account.name.replace("accounts/", ""),
                 google_account_name: googleAccount.account_name,
-                google_email:        googleAccount.google_email,
+                google_email: googleAccount.google_email,
               });
             }
           }
@@ -2104,9 +2156,9 @@ app.post("/run", async (req, res) => {
       }
 
       return res.json({
-        status:  matches.length > 0 ? "found" : "not_found",
+        status: matches.length > 0 ? "found" : "not_found",
         query,
-        count:   matches.length,
+        count: matches.length,
         matches,
       });
     } catch (err) {
@@ -2122,29 +2174,30 @@ app.post("/run", async (req, res) => {
     const { google_email, property_id } = req.body;
 
     if (!google_email) return res.status(400).json({ status: "error", error: "Missing google_email" });
-    if (!property_id)  return res.status(400).json({ status: "error", error: "Missing property_id" });
+    if (!property_id) return res.status(400).json({ status: "error", error: "Missing property_id" });
 
     try {
       const { getAllGoogleAccounts } = require("./src/lib/credentials");
-      const { getAccessToken }       = require("./src/lib/google-oauth");
+      const { getAccessToken } = require("./src/lib/google-oauth");
       const axios = require("axios");
 
       console.log(`🚀 fetch_ga4_measurement_id: email=${google_email}, property=${property_id}`);
 
       const allAccounts = await getAllGoogleAccounts();
-      const ga4Account  = allAccounts.find(a => a.google_email === google_email);
-      if (!ga4Account)                     throw new Error(`fetch_ga4_measurement_id: no google_account found for email ${google_email}`);
-      if (!ga4Account.gtm_ga4_refresh_token) throw new Error(`fetch_ga4_measurement_id: account ${google_email} has no refresh token`);
+      const ga4Account = allAccounts.find((a) => a.google_email === google_email);
+      if (!ga4Account) throw new Error(`fetch_ga4_measurement_id: no google_account found for email ${google_email}`);
+      if (!ga4Account.gtm_ga4_refresh_token)
+        throw new Error(`fetch_ga4_measurement_id: account ${google_email} has no refresh token`);
 
       const accessToken = await getAccessToken(ga4Account.gtm_ga4_refresh_token);
 
       const response = await axios.get(
         `https://analyticsadmin.googleapis.com/v1beta/properties/${property_id}/dataStreams`,
-        { headers: { Authorization: `Bearer ${accessToken}` } }
+        { headers: { Authorization: `Bearer ${accessToken}` } },
       );
 
-      const streams   = response.data.dataStreams || [];
-      const webStream = streams.find(s => s.type === "WEB_DATA_STREAM");
+      const streams = response.data.dataStreams || [];
+      const webStream = streams.find((s) => s.type === "WEB_DATA_STREAM");
       if (!webStream) throw new Error(`No web data stream found for property ${property_id}`);
 
       const measurementId = webStream.webStreamData?.measurementId;
@@ -2164,59 +2217,57 @@ app.post("/run", async (req, res) => {
   // Creates workspace, enables click variables, creates triggers and tags.
   // No browser needed — pure GTM API v2.
   if (action === "setup_gtm_tags") {
-    const {
-      google_email,
-      numeric_account_id,
-      numeric_container_id,
-      measurement_id,
-    } = req.body;
+    const { google_email, numeric_account_id, numeric_container_id, measurement_id } = req.body;
 
-    if (!google_email)          return res.status(400).json({ status: "error", error: "Missing google_email" });
-    if (!numeric_account_id)    return res.status(400).json({ status: "error", error: "Missing numeric_account_id" });
-    if (!numeric_container_id)  return res.status(400).json({ status: "error", error: "Missing numeric_container_id" });
-    if (!measurement_id)        return res.status(400).json({ status: "error", error: "Missing measurement_id" });
+    if (!google_email) return res.status(400).json({ status: "error", error: "Missing google_email" });
+    if (!numeric_account_id) return res.status(400).json({ status: "error", error: "Missing numeric_account_id" });
+    if (!numeric_container_id) return res.status(400).json({ status: "error", error: "Missing numeric_container_id" });
+    if (!measurement_id) return res.status(400).json({ status: "error", error: "Missing measurement_id" });
 
     try {
       const { getAllGoogleAccounts } = require("./src/lib/credentials");
-      const { getAccessToken }       = require("./src/lib/google-oauth");
+      const { getAccessToken } = require("./src/lib/google-oauth");
       const { createWorkspace, enableClickVariables, createTriggers, createTags } = require("./src/api/gtm-api");
 
-      console.log(`🚀 setup_gtm_tags: email=${google_email}, container=${numeric_container_id}, measurementId=${measurement_id}`);
+      console.log(
+        `🚀 setup_gtm_tags: email=${google_email}, container=${numeric_container_id}, measurementId=${measurement_id}`,
+      );
 
       // Look up the refresh token for the GTM account
       const allAccounts = await getAllGoogleAccounts();
-      const gtmAccount  = allAccounts.find(a => a.google_email === google_email);
+      const gtmAccount = allAccounts.find((a) => a.google_email === google_email);
       if (!gtmAccount) throw new Error(`setup_gtm_tags: no google_account found for email ${google_email}`);
-      if (!gtmAccount.gtm_ga4_refresh_token) throw new Error(`setup_gtm_tags: account ${google_email} has no refresh token`);
+      if (!gtmAccount.gtm_ga4_refresh_token)
+        throw new Error(`setup_gtm_tags: account ${google_email} has no refresh token`);
 
       const accessToken = await getAccessToken(gtmAccount.gtm_ga4_refresh_token);
 
       // 1. Create workspace
       const workspaceId = await createWorkspace(accessToken, {
-        numericAccountId:   String(numeric_account_id),
+        numericAccountId: String(numeric_account_id),
         numericContainerId: String(numeric_container_id),
       });
 
       // 2. Enable click built-in variables
       await enableClickVariables(accessToken, {
-        numericAccountId:   String(numeric_account_id),
+        numericAccountId: String(numeric_account_id),
         numericContainerId: String(numeric_container_id),
         workspaceId,
       });
 
       // 3. Create triggers
       const { callTriggerId, emailTriggerId, formTriggerId } = await createTriggers(accessToken, {
-        numericAccountId:   String(numeric_account_id),
+        numericAccountId: String(numeric_account_id),
         numericContainerId: String(numeric_container_id),
         workspaceId,
       });
 
       // 4. Create tags
       await createTags(accessToken, {
-        numericAccountId:   String(numeric_account_id),
+        numericAccountId: String(numeric_account_id),
         numericContainerId: String(numeric_container_id),
         workspaceId,
-        measurementId:  measurement_id,
+        measurementId: measurement_id,
         callTriggerId,
         emailTriggerId,
         formTriggerId,
@@ -2224,11 +2275,11 @@ app.post("/run", async (req, res) => {
 
       console.log(`✅ setup_gtm_tags complete — workspaceId: ${workspaceId}`);
       return res.json({
-        status:      "success",
+        status: "success",
         workspace_id: workspaceId,
-        call_trigger_id:  callTriggerId,
+        call_trigger_id: callTriggerId,
         email_trigger_id: emailTriggerId,
-        form_trigger_id:  formTriggerId,
+        form_trigger_id: formTriggerId,
       });
     } catch (err) {
       console.error("❌ setup_gtm_tags error:", err.message);
@@ -2242,19 +2293,20 @@ app.post("/run", async (req, res) => {
     const { google_email, property_id } = req.body;
 
     if (!google_email) return res.status(400).json({ status: "error", error: "Missing google_email" });
-    if (!property_id)  return res.status(400).json({ status: "error", error: "Missing property_id" });
+    if (!property_id) return res.status(400).json({ status: "error", error: "Missing property_id" });
 
     try {
       const { getAllGoogleAccounts } = require("./src/lib/credentials");
-      const { getAccessToken }       = require("./src/lib/google-oauth");
+      const { getAccessToken } = require("./src/lib/google-oauth");
       const { createConversionEvents } = require("./src/api/ga4-api");
 
       console.log(`🚀 register_ga4_conversions: email=${google_email}, property=${property_id}`);
 
       const allAccounts = await getAllGoogleAccounts();
-      const ga4Account  = allAccounts.find(a => a.google_email === google_email);
+      const ga4Account = allAccounts.find((a) => a.google_email === google_email);
       if (!ga4Account) throw new Error(`register_ga4_conversions: no google_account found for email ${google_email}`);
-      if (!ga4Account.gtm_ga4_refresh_token) throw new Error(`register_ga4_conversions: account ${google_email} has no refresh token`);
+      if (!ga4Account.gtm_ga4_refresh_token)
+        throw new Error(`register_ga4_conversions: account ${google_email} has no refresh token`);
 
       const accessToken = await getAccessToken(ga4Account.gtm_ga4_refresh_token);
       await createConversionEvents(accessToken, String(property_id));
@@ -2276,10 +2328,11 @@ app.post("/run", async (req, res) => {
 
     if (!numeric_account_id || !numeric_container_id)
       return res.status(400).json({ status: "error", error: "Missing numeric_account_id or numeric_container_id" });
-    if (!measurement_id)
-      return res.status(400).json({ status: "error", error: "Missing measurement_id" });
+    if (!measurement_id) return res.status(400).json({ status: "error", error: "Missing measurement_id" });
     if (!audit && !auditUrl)
-      return res.status(400).json({ status: "error", error: "Provide either 'audit' (from POST /health/audit) or 'website_url'" });
+      return res
+        .status(400)
+        .json({ status: "error", error: "Provide either 'audit' (from POST /health/audit) or 'website_url'" });
 
     try {
       let auditResult = audit;
@@ -2297,7 +2350,9 @@ app.post("/run", async (req, res) => {
         String(numeric_container_id),
       );
 
-      console.log(`✅ generate_gtm_payload: ${payload.total_steps} steps, ${payload.tags_count} tags, ${payload.triggers_count} triggers`);
+      console.log(
+        `✅ generate_gtm_payload: ${payload.total_steps} steps, ${payload.tags_count} tags, ${payload.triggers_count} triggers`,
+      );
       return res.json({ status: "success", ...payload });
     } catch (err) {
       console.error("❌ generate_gtm_payload error:", err.message);
@@ -2322,11 +2377,19 @@ app.post("/run", async (req, res) => {
     } = req.body;
 
     if (!access_token && !refresh_token)
-      return res.status(400).json({ status: "error", error: "Provide either access_token (short-lived) or refresh_token (recommended — never expires)" });
-    if (!numeric_account_id)       return res.status(400).json({ status: "error", error: "Missing numeric_account_id" });
-    if (!numeric_container_id)     return res.status(400).json({ status: "error", error: "Missing numeric_container_id" });
-    if (!measurement_id)           return res.status(400).json({ status: "error", error: "Missing measurement_id" });
-    if (!audit && !auditUrl)       return res.status(400).json({ status: "error", error: "Provide either 'audit' (from POST /health/audit) or 'website_url'" });
+      return res
+        .status(400)
+        .json({
+          status: "error",
+          error: "Provide either access_token (short-lived) or refresh_token (recommended — never expires)",
+        });
+    if (!numeric_account_id) return res.status(400).json({ status: "error", error: "Missing numeric_account_id" });
+    if (!numeric_container_id) return res.status(400).json({ status: "error", error: "Missing numeric_container_id" });
+    if (!measurement_id) return res.status(400).json({ status: "error", error: "Missing measurement_id" });
+    if (!audit && !auditUrl)
+      return res
+        .status(400)
+        .json({ status: "error", error: "Provide either 'audit' (from POST /health/audit) or 'website_url'" });
 
     try {
       const axios = require("axios");
@@ -2357,12 +2420,11 @@ app.post("/run", async (req, res) => {
       );
 
       // Execute each step in order, resolving {{placeholders}} as we go
-      const savedVars = {};   // e.g. { workspace_id: "5", call_trigger_id: "12", ... }
+      const savedVars = {}; // e.g. { workspace_id: "5", call_trigger_id: "12", ... }
       const completed = [];
-      const failed    = [];
+      const failed = [];
 
-      const resolvePlaceholders = (str) =>
-        str.replace(/\{\{(\w+)\}\}/g, (_, key) => savedVars[key] ?? `{{${key}}}`);
+      const resolvePlaceholders = (str) => str.replace(/\{\{(\w+)\}\}/g, (_, key) => savedVars[key] ?? `{{${key}}}`);
 
       const resolveBody = (body) => {
         if (!body) return null;
@@ -2372,17 +2434,17 @@ app.post("/run", async (req, res) => {
       };
 
       for (const step of payload.steps) {
-        const url  = resolvePlaceholders(step.url);
+        const url = resolvePlaceholders(step.url);
         const body = resolveBody(step.body);
 
         try {
           console.log(`▶ Step ${step.step}: ${step.description}`);
           const response = await axios({
-            method:  step.method,
+            method: step.method,
             url,
             headers: {
-              "Authorization": `Bearer ${resolvedAccessToken}`,
-              "Content-Type":  "application/json",
+              Authorization: `Bearer ${resolvedAccessToken}`,
+              "Content-Type": "application/json",
             },
             data: body || undefined,
           });
@@ -2406,9 +2468,9 @@ app.post("/run", async (req, res) => {
           // Stop on workspace creation failure — nothing else can proceed
           if (step.step === 1) {
             return res.json({
-              status:  "failed",
-              reason:  "workspace_creation_failed",
-              error:   detail,
+              status: "failed",
+              reason: "workspace_creation_failed",
+              error: detail,
               completed,
               failed,
             });
@@ -2418,21 +2480,22 @@ app.post("/run", async (req, res) => {
       }
 
       const overallStatus = failed.length === 0 ? "success" : "partial";
-      console.log(`✅ execute_gtm_payload ${overallStatus} — ${completed.length} steps completed, ${failed.length} failed`);
+      console.log(
+        `✅ execute_gtm_payload ${overallStatus} — ${completed.length} steps completed, ${failed.length} failed`,
+      );
 
       return res.json({
-        status:         overallStatus,
-        workspace_id:   savedVars.workspace_id || null,
+        status: overallStatus,
+        workspace_id: savedVars.workspace_id || null,
         measurement_id,
         steps_completed: completed.length,
-        steps_failed:    failed.length,
+        steps_failed: failed.length,
         completed,
         failed,
-        skipped:        payload.skipped,
-        audit_summary:  auditResult.gtm_summary,
-        pages_crawled:  auditResult.pages_crawled,
+        skipped: payload.skipped,
+        audit_summary: auditResult.gtm_summary,
+        pages_crawled: auditResult.pages_crawled,
       });
-
     } catch (err) {
       console.error("❌ execute_gtm_payload error:", err.message);
       return res.json({ status: "error", error: err.message });
@@ -2447,14 +2510,19 @@ app.post("/run", async (req, res) => {
   if (action === "build_audit_report") {
     const {
       audit,
-      website_url:  auditUrl,
-      client_name:  clientName,
-      document_id:  documentId,
+      website_url: auditUrl,
+      client_name: clientName,
+      document_id: documentId,
       access_token: accessToken,
     } = req.body;
 
     if (!audit && !auditUrl) {
-      return res.status(400).json({ status: "error", error: "Provide either 'audit' (from POST /health/audit) or 'website_url' to run a fresh audit" });
+      return res
+        .status(400)
+        .json({
+          status: "error",
+          error: "Provide either 'audit' (from POST /health/audit) or 'website_url' to run a fresh audit",
+        });
     }
 
     try {
@@ -2471,39 +2539,40 @@ app.post("/run", async (req, res) => {
 
       // If a document_id + access_token are provided, write the doc directly.
       if (documentId && accessToken) {
-        const docsRes = await fetch(
-          `https://docs.googleapis.com/v1/documents/${documentId}:batchUpdate`,
-          {
-            method:  "POST",
-            headers: {
-              "Authorization": `Bearer ${accessToken}`,
-              "Content-Type":  "application/json",
-            },
-            body: JSON.stringify({ requests: report.requests }),
-          }
-        );
+        const docsRes = await fetch(`https://docs.googleapis.com/v1/documents/${documentId}:batchUpdate`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ requests: report.requests }),
+        });
         const docsBody = await docsRes.json();
         if (!docsRes.ok) {
-          return res.json({ status: "error", error: docsBody.error?.message || "Google Docs API error", docs_response: docsBody });
+          return res.json({
+            status: "error",
+            error: docsBody.error?.message || "Google Docs API error",
+            docs_response: docsBody,
+          });
         }
         console.log(`build_audit_report: wrote ${report.requests.length} requests to doc ${documentId}`);
         return res.json({
-          status:           "success",
-          document_id:      documentId,
-          document_title:   report.title,
+          status: "success",
+          document_id: documentId,
+          document_title: report.title,
           requests_applied: report.requests.length,
-          docs_response:    docsBody,
+          docs_response: docsBody,
         });
       }
 
       // Otherwise return the requests payload for the caller (n8n) to apply.
       console.log(`build_audit_report: returning ${report.requests.length} requests`);
       return res.json({
-        status:         "success",
+        status: "success",
         document_title: report.title,
-        requests:       report.requests,
-        request_count:  report.requests.length,
-        usage_hint:     "POST the 'requests' array to https://docs.googleapis.com/v1/documents/{documentId}:batchUpdate",
+        requests: report.requests,
+        request_count: report.requests.length,
+        usage_hint: "POST the 'requests' array to https://docs.googleapis.com/v1/documents/{documentId}:batchUpdate",
       });
     } catch (err) {
       console.error("build_audit_report error:", err.message);
@@ -2523,14 +2592,20 @@ app.post("/run", async (req, res) => {
     const {
       measurement_id,
       audit,
-      website_url:    auditUrl,
+      website_url: auditUrl,
       container_name: containerName,
-      account_id:     gtmAccountId,
-      container_id:   gtmContainerId,
+      account_id: gtmAccountId,
+      container_id: gtmContainerId,
     } = req.body;
 
-    if (!measurement_id)     return res.status(400).json({ status: "error", error: "Missing measurement_id" });
-    if (!audit && !auditUrl) return res.status(400).json({ status: "error", error: "Provide either 'audit' (from POST /health/audit) or 'website_url' to run a fresh audit" });
+    if (!measurement_id) return res.status(400).json({ status: "error", error: "Missing measurement_id" });
+    if (!audit && !auditUrl)
+      return res
+        .status(400)
+        .json({
+          status: "error",
+          error: "Provide either 'audit' (from POST /health/audit) or 'website_url' to run a fresh audit",
+        });
 
     try {
       let auditResult = audit;
@@ -2546,18 +2621,20 @@ app.post("/run", async (req, res) => {
         auditResult,
         measurement_id,
         containerName || "AP Tracking Setup",
-        String(gtmAccountId  || "0"),
+        String(gtmAccountId || "0"),
         String(gtmContainerId || "0"),
       );
 
-      console.log(`✅ generate_gtm_container: ${result.summary.tags_count} tags, ${result.summary.triggers_count} triggers`);
+      console.log(
+        `✅ generate_gtm_container: ${result.summary.tags_count} tags, ${result.summary.triggers_count} triggers`,
+      );
       return res.json({
-        status:         "success",
-        container:      result.export,
-        summary:        result.summary,
-        audit_summary:  auditResult.gtm_summary,
-        pages_crawled:  auditResult.pages_crawled,
-        download_hint:  "Save the 'container' field as a .json file, then import via GTM Admin → Import Container.",
+        status: "success",
+        container: result.export,
+        summary: result.summary,
+        audit_summary: auditResult.gtm_summary,
+        pages_crawled: auditResult.pages_crawled,
+        download_hint: "Save the 'container' field as a .json file, then import via GTM Admin → Import Container.",
       });
     } catch (err) {
       console.error("❌ generate_gtm_container error:", err.message);
@@ -2572,17 +2649,30 @@ app.post("/run", async (req, res) => {
   //
   // Required: google_email, numeric_account_id, numeric_container_id, measurement_id
   if (action === "build_gtm_from_audit") {
-    const { google_email: gtmEmail, numeric_account_id, numeric_container_id, measurement_id, audit, website_url: auditUrl } = req.body;
+    const {
+      google_email: gtmEmail,
+      numeric_account_id,
+      numeric_container_id,
+      measurement_id,
+      audit,
+      website_url: auditUrl,
+    } = req.body;
 
-    if (!gtmEmail)             return res.status(400).json({ status: "error", error: "Missing google_email" });
-    if (!numeric_account_id)   return res.status(400).json({ status: "error", error: "Missing numeric_account_id" });
+    if (!gtmEmail) return res.status(400).json({ status: "error", error: "Missing google_email" });
+    if (!numeric_account_id) return res.status(400).json({ status: "error", error: "Missing numeric_account_id" });
     if (!numeric_container_id) return res.status(400).json({ status: "error", error: "Missing numeric_container_id" });
-    if (!measurement_id)       return res.status(400).json({ status: "error", error: "Missing measurement_id" });
-    if (!audit && !auditUrl)   return res.status(400).json({ status: "error", error: "Provide either 'audit' (from POST /health/audit) or 'website_url' to run a fresh audit" });
+    if (!measurement_id) return res.status(400).json({ status: "error", error: "Missing measurement_id" });
+    if (!audit && !auditUrl)
+      return res
+        .status(400)
+        .json({
+          status: "error",
+          error: "Provide either 'audit' (from POST /health/audit) or 'website_url' to run a fresh audit",
+        });
 
     try {
       const { getAllGoogleAccounts } = require("./src/lib/credentials");
-      const { getAccessToken }       = require("./src/lib/google-oauth");
+      const { getAccessToken } = require("./src/lib/google-oauth");
       const { buildContainerFromAudit } = require("./src/api/gtm-api");
 
       // Optionally run a fresh audit if caller didn't provide one
@@ -2595,80 +2685,31 @@ app.post("/run", async (req, res) => {
       }
 
       const allAccounts = await getAllGoogleAccounts();
-      const gtmAccount  = allAccounts.find(a => a.google_email === gtmEmail);
-      if (!gtmAccount)                       throw new Error(`No google_account found for email ${gtmEmail}`);
+      const gtmAccount = allAccounts.find((a) => a.google_email === gtmEmail);
+      if (!gtmAccount) throw new Error(`No google_account found for email ${gtmEmail}`);
       if (!gtmAccount.gtm_ga4_refresh_token) throw new Error(`Account ${gtmEmail} has no GTM refresh token`);
 
       const accessToken = await getAccessToken(gtmAccount.gtm_ga4_refresh_token);
 
       const result = await buildContainerFromAudit(accessToken, {
-        numericAccountId:   String(numeric_account_id),
+        numericAccountId: String(numeric_account_id),
         numericContainerId: String(numeric_container_id),
-        measurementId:      measurement_id,
-        audit:              auditResult,
+        measurementId: measurement_id,
+        audit: auditResult,
       });
 
       console.log(`✅ build_gtm_from_audit complete — ${result.tags.length} tags, ${result.triggers.length} triggers`);
       return res.json({
-        status:        "success",
-        workspace_id:  result.workspace_id,
-        tags_created:  result.tags,
+        status: "success",
+        workspace_id: result.workspace_id,
+        tags_created: result.tags,
         triggers_created: result.triggers,
-        skipped:       result.skipped,
+        skipped: result.skipped,
         audit_summary: auditResult.gtm_summary,
         pages_crawled: auditResult.pages_crawled,
       });
     } catch (err) {
       console.error("❌ build_gtm_from_audit error:", err.message);
-      return res.json({ status: "error", error: err.message });
-    }
-  }
-
-  // ── generate_gtm_export: Generate GTM container JSON export from audit ────
-  // Accepts either:
-  //   audit        — pre-computed result from POST /health/audit (skip re-crawl)
-  //   website_url  — run a fresh audit first, then generate export
-  //
-  // Required: numeric_account_id, numeric_container_id, measurement_id
-  // Optional: container_name (defaults to "AP Tracking Setup")
-  if (action === "generate_gtm_export") {
-    const { numeric_account_id, numeric_container_id, measurement_id, audit, website_url: auditUrl, container_name } = req.body;
-
-    if (!numeric_account_id)   return res.status(400).json({ status: "error", error: "Missing numeric_account_id" });
-    if (!numeric_container_id) return res.status(400).json({ status: "error", error: "Missing numeric_container_id" });
-    if (!measurement_id)       return res.status(400).json({ status: "error", error: "Missing measurement_id" });
-    if (!audit && !auditUrl)   return res.status(400).json({ status: "error", error: "Provide either 'audit' (from POST /health/audit) or 'website_url' to run a fresh audit" });
-
-    try {
-      const { generateGTMContainerExport } = require("./gtm-container-generator");
-
-      // Optionally run a fresh audit if caller didn't provide one
-      let auditResult = audit;
-      if (!auditResult) {
-        const { ctaAuditSite } = require("./cta-audit.runners");
-        console.log(`🔍 generate_gtm_export: running CTA audit for ${auditUrl}...`);
-        auditResult = await ctaAuditSite(auditUrl);
-        console.log(`✅ Audit complete — ${auditResult.pages_crawled?.length} pages crawled`);
-      }
-
-      const result = generateGTMContainerExport(
-        auditResult,
-        measurement_id,
-        container_name || "AP Tracking Setup",
-        String(numeric_account_id),
-        String(numeric_container_id)
-      );
-
-      console.log(`✅ generate_gtm_export complete — ${result.summary.tags_count} tags, ${result.summary.triggers_count} triggers`);
-      return res.json({
-        status:         "success",
-        export:         result.export,
-        summary:        result.summary,
-        audit_summary:  auditResult.gtm_summary,
-        pages_crawled:  auditResult.pages_crawled,
-      });
-    } catch (err) {
-      console.error("❌ generate_gtm_export error:", err.message);
       return res.json({ status: "error", error: err.message });
     }
   }
@@ -2691,7 +2732,6 @@ app.post("/run", async (req, res) => {
     }
   }
 
-
   let browser;
 
   try {
@@ -2703,8 +2743,7 @@ app.post("/run", async (req, res) => {
     // Some actions operate on third-party sites and don't need a Google session
     const skipGoogleLogin = ["install_gtm_codes", "fetch_gtm_codes"].includes(action);
 
-    if (!skipGoogleLogin)
-    await page.goto("https://analytics.google.com", { waitUntil: "domcontentloaded" });
+    if (!skipGoogleLogin) await page.goto("https://analytics.google.com", { waitUntil: "domcontentloaded" });
 
     for (let i = 0; i < (skipGoogleLogin ? 0 : 15); i++) {
       const url = page.url();
@@ -2755,7 +2794,9 @@ app.post("/run", async (req, res) => {
       // ── "Choose an account" picker ────────────────────────────────────────────
       // Google shows this when multiple accounts are signed in to the browser
       const accountPickerEmail = page
-        .locator(`[data-identifier*="${google_email}"], li:has-text("${google_email}"), [data-email*="${google_email}"]`)
+        .locator(
+          `[data-identifier*="${google_email}"], li:has-text("${google_email}"), [data-email*="${google_email}"]`,
+        )
         .first();
       if (await accountPickerEmail.isVisible().catch(() => false)) {
         await accountPickerEmail.click();
@@ -2763,7 +2804,7 @@ app.post("/run", async (req, res) => {
         continue;
       }
       // Generic picker — just click the first listed account
-      const anyPickerAccount = page.locator('[data-identifier], .OVnw0d').first();
+      const anyPickerAccount = page.locator("[data-identifier], .OVnw0d").first();
       if (await anyPickerAccount.isVisible().catch(() => false)) {
         await anyPickerAccount.click();
         await page.waitForTimeout(3000);
@@ -2781,9 +2822,7 @@ app.post("/run", async (req, res) => {
       }
 
       // ── "Continue" interstitial (Google account confirmation screen) ──────────
-      const continueBtn = page
-        .locator('button:has-text("Continue"), a:has-text("Continue")')
-        .first();
+      const continueBtn = page.locator('button:has-text("Continue"), a:has-text("Continue")').first();
       if (await continueBtn.isVisible().catch(() => false)) {
         await continueBtn.click();
         await page.waitForTimeout(3000);
@@ -2954,10 +2993,8 @@ app.post("/run", async (req, res) => {
       console.log("🚀 create_ga4_full: check + create + fetch in one session");
 
       const { websiteUrl, websiteName } = getWebsiteInputs(req);
-      if (!account_name || !property_name)
-        throw new Error("create_ga4_full: missing account_name or property_name");
-      if (!websiteUrl || !websiteName)
-        throw new Error("create_ga4_full: missing websiteUrl or websiteName");
+      if (!account_name || !property_name) throw new Error("create_ga4_full: missing account_name or property_name");
+      if (!websiteUrl || !websiteName) throw new Error("create_ga4_full: missing websiteUrl or websiteName");
 
       // ── Navigate to GA4 Admin ──────────────────────────────────────────
       await page.goto("https://analytics.google.com/analytics/web", { waitUntil: "domcontentloaded" });
@@ -2995,12 +3032,21 @@ app.post("/run", async (req, res) => {
 
       // ── Capacity check ─────────────────────────────────────────────────
       const ga4LimitTexts = [
-        "text=/reached\\s+the\\s+limit/i", "text=/limit\\s+reached/i",
-        "text=/you\\s+have\\s+reached/i", "text=/too\\s+many/i",
-        "text=/account\\s+limit/i", "text=/can\\s+only\\s+create/i",
+        "text=/reached\\s+the\\s+limit/i",
+        "text=/limit\\s+reached/i",
+        "text=/you\\s+have\\s+reached/i",
+        "text=/too\\s+many/i",
+        "text=/account\\s+limit/i",
+        "text=/can\\s+only\\s+create/i",
       ];
       for (const t of ga4LimitTexts) {
-        if (await page.locator(t).first().isVisible().catch(() => false)) {
+        if (
+          await page
+            .locator(t)
+            .first()
+            .isVisible()
+            .catch(() => false)
+        ) {
           console.warn(`⛔ create_ga4_full: account_no_space — limit text matched: ${t} | URL: ${page.url()}`);
           if (browser) await browser.close();
           return res.json({ status: "failed", reason: "account_no_space" });
@@ -3011,12 +3057,22 @@ app.post("/run", async (req, res) => {
       let ga4InAdmin = false;
       for (let i = 0; i < 15; i++) {
         let rv = false;
-        for (const t of ga4ReportsTexts) { if ((await page.locator(t).count()) > 0) { rv = true; break; } }
-        if (!rv) { ga4InAdmin = true; break; }
+        for (const t of ga4ReportsTexts) {
+          if ((await page.locator(t).count()) > 0) {
+            rv = true;
+            break;
+          }
+        }
+        if (!rv) {
+          ga4InAdmin = true;
+          break;
+        }
         await page.waitForTimeout(300);
       }
       if (!ga4InAdmin) {
-        console.warn(`⛔ create_ga4_full: account_no_space — still on Reports page after 15 polls, never reached Admin | URL: ${page.url()}`);
+        console.warn(
+          `⛔ create_ga4_full: account_no_space — still on Reports page after 15 polls, never reached Admin | URL: ${page.url()}`,
+        );
         if (browser) await browser.close();
         return res.json({ status: "failed", reason: "account_no_space" });
       }
@@ -3025,7 +3081,9 @@ app.post("/run", async (req, res) => {
       try {
         await ga4AccountInput.waitFor({ timeout: 5000 });
       } catch {
-        console.warn(`⛔ create_ga4_full: account_no_space — Account name input not found within 5s after reaching create page | URL: ${page.url()}`);
+        console.warn(
+          `⛔ create_ga4_full: account_no_space — Account name input not found within 5s after reaching create page | URL: ${page.url()}`,
+        );
         if (browser) await browser.close();
         return res.json({ status: "failed", reason: "account_no_space" });
       }
@@ -3059,9 +3117,14 @@ app.post("/run", async (req, res) => {
         await page.waitForTimeout(300);
       }
       try {
-        const orgCb = page.locator('mat-checkbox:has-text("organisation"), mat-checkbox:has-text("organization")').first();
+        const orgCb = page
+          .locator('mat-checkbox:has-text("organisation"), mat-checkbox:has-text("organization")')
+          .first();
         if (await orgCb.isVisible({ timeout: 3000 }).catch(() => false)) {
-          const isChecked = await orgCb.locator('input[type="checkbox"]').isChecked().catch(() => false);
+          const isChecked = await orgCb
+            .locator('input[type="checkbox"]')
+            .isChecked()
+            .catch(() => false);
           if (isChecked) await orgCb.click();
         }
       } catch {}
@@ -3069,7 +3132,9 @@ app.post("/run", async (req, res) => {
 
       // ── Step 2: Property name (with retry + hard-reset recovery) ───────
       const ga4IsOnReports = async () => {
-        for (const t of ga4ReportsTexts) { if ((await page.locator(t).count()) > 0) return true; }
+        for (const t of ga4ReportsTexts) {
+          if ((await page.locator(t).count()) > 0) return true;
+        }
         return false;
       };
       const ga4OpenAdminViaUI = async () => {
@@ -3082,13 +3147,22 @@ app.post("/run", async (req, res) => {
       };
       const ga4OpenCreateWizard = async () => {
         try {
-          const cb = page.locator('[aria-label="Create"], button:has-text("Create"), button[aria-label*="Create"]').first();
+          const cb = page
+            .locator('[aria-label="Create"], button:has-text("Create"), button[aria-label*="Create"]')
+            .first();
           if ((await cb.count()) > 0) {
             await cb.waitFor({ timeout: 8000 });
             await cb.click();
             await page.waitForTimeout(800);
-            const ai = page.locator('[role="menuitem"]:has-text("Account"), button:has-text("Account"), a:has-text("Account")').first();
-            if ((await ai.count()) > 0) { await ai.waitFor({ timeout: 8000 }); await ai.click(); await page.waitForTimeout(1200); return; }
+            const ai = page
+              .locator('[role="menuitem"]:has-text("Account"), button:has-text("Account"), a:has-text("Account")')
+              .first();
+            if ((await ai.count()) > 0) {
+              await ai.waitFor({ timeout: 8000 });
+              await ai.click();
+              await page.waitForTimeout(1200);
+              return;
+            }
           }
         } catch {}
         await page.goto(ga4CreateUrl, { waitUntil: "domcontentloaded" });
@@ -3096,7 +3170,9 @@ app.post("/run", async (req, res) => {
       };
       const ga4HardResetAndRedoStep1 = async (reason) => {
         console.log(`🧯 Hard reset tab (${reason})…`);
-        try { await page.close({ runBeforeUnload: true }); } catch {}
+        try {
+          await page.close({ runBeforeUnload: true });
+        } catch {}
         page = await context.newPage();
         await ga4OpenAdminViaUI();
         await ga4OpenCreateWizard();
@@ -3109,16 +3185,55 @@ app.post("/run", async (req, res) => {
       const ga4FillProperty = async () => {
         const sel = "#name, input#name";
         for (const method of [
-          async () => { const i = page.locator(sel).first(); await i.waitFor({ timeout: 10000 }); await i.fill(property_name, { force: true }); await page.keyboard.press("Tab"); await page.waitForTimeout(200); return (await i.inputValue().catch(() => null)) === property_name; },
-          async () => { const i = page.locator(sel).first(); await i.waitFor({ timeout: 10000 }); await i.evaluate(el => el.focus()); await i.fill(property_name, { force: true }); await page.keyboard.press("Tab"); await page.waitForTimeout(200); return (await i.inputValue().catch(() => null)) === property_name; },
-          async () => { const ok = await page.evaluate(val => { const el = document.querySelector("#name") || document.querySelector("input#name"); if (!el) return false; el.focus(); el.value = val; el.dispatchEvent(new Event("input", { bubbles: true })); el.dispatchEvent(new Event("change", { bubbles: true })); el.blur(); return true; }, property_name); if (!ok) return false; await page.waitForTimeout(250); return (await page.locator(sel).first().inputValue().catch(() => null)) === property_name; },
+          async () => {
+            const i = page.locator(sel).first();
+            await i.waitFor({ timeout: 10000 });
+            await i.fill(property_name, { force: true });
+            await page.keyboard.press("Tab");
+            await page.waitForTimeout(200);
+            return (await i.inputValue().catch(() => null)) === property_name;
+          },
+          async () => {
+            const i = page.locator(sel).first();
+            await i.waitFor({ timeout: 10000 });
+            await i.evaluate((el) => el.focus());
+            await i.fill(property_name, { force: true });
+            await page.keyboard.press("Tab");
+            await page.waitForTimeout(200);
+            return (await i.inputValue().catch(() => null)) === property_name;
+          },
+          async () => {
+            const ok = await page.evaluate((val) => {
+              const el = document.querySelector("#name") || document.querySelector("input#name");
+              if (!el) return false;
+              el.focus();
+              el.value = val;
+              el.dispatchEvent(new Event("input", { bubbles: true }));
+              el.dispatchEvent(new Event("change", { bubbles: true }));
+              el.blur();
+              return true;
+            }, property_name);
+            if (!ok) return false;
+            await page.waitForTimeout(250);
+            return (
+              (await page
+                .locator(sel)
+                .first()
+                .inputValue()
+                .catch(() => null)) === property_name
+            );
+          },
         ]) {
-          try { if (await method()) return true; } catch {}
+          try {
+            if (await method()) return true;
+          } catch {}
         }
         return false;
       };
       const ga4ClickNext = async () => {
-        const stepperNext = page.locator("button[matsteppernext], button[matStepperNext], button[cdksteppernext], button[cdkStepperNext]");
+        const stepperNext = page.locator(
+          "button[matsteppernext], button[matStepperNext], button[cdksteppernext], button[cdkStepperNext]",
+        );
         if ((await stepperNext.count()) > 0) {
           for (let i = 0; i < (await stepperNext.count()); i++) {
             const b = stepperNext.nth(i);
@@ -3129,14 +3244,18 @@ app.post("/run", async (req, res) => {
           }
         }
         return !!(await page.evaluate(() => {
-          const isVis = el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+          const isVis = (el) => {
+            const r = el.getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+          };
           const cands = Array.from(document.querySelectorAll('button,[role="button"]'))
-            .filter(el => (el.textContent || "").trim().includes("Next"))
-            .filter(el => el.getAttribute("aria-disabled") !== "true" && !el.disabled)
+            .filter((el) => (el.textContent || "").trim().includes("Next"))
+            .filter((el) => el.getAttribute("aria-disabled") !== "true" && !el.disabled)
             .filter(isVis);
           if (!cands.length) return false;
           cands.sort((a, b) => b.getBoundingClientRect().top - a.getBoundingClientRect().top);
-          cands[0].click(); return true;
+          cands[0].click();
+          return true;
         }));
       };
 
@@ -3144,13 +3263,35 @@ app.post("/run", async (req, res) => {
       for (let attempt = 1; attempt <= 8; attempt++) {
         console.log(`🔧 Step 2 attempt ${attempt}/8`);
         if (await ga4IsOnReports()) await ga4HardResetAndRedoStep1("on Reports at Step 2 start");
-        try { await page.locator("#cdk-stepper-0-content-1").waitFor({ timeout: 12000 }); }
-        catch { if (await ga4IsOnReports()) { await ga4HardResetAndRedoStep1("redirected while waiting for Step 2"); continue; } continue; }
+        try {
+          await page.locator("#cdk-stepper-0-content-1").waitFor({ timeout: 12000 });
+        } catch {
+          if (await ga4IsOnReports()) {
+            await ga4HardResetAndRedoStep1("redirected while waiting for Step 2");
+            continue;
+          }
+          continue;
+        }
         await ga4FillProperty();
-        if (await ga4IsOnReports()) { await ga4HardResetAndRedoStep1("redirected after fill"); continue; }
-        if (!(await ga4ClickNext())) { if (await ga4IsOnReports()) await ga4HardResetAndRedoStep1("redirected clicking Next"); continue; }
-        try { await page.locator("#cdk-stepper-0-content-2").waitFor({ timeout: 15000 }); step2Success = true; break; }
-        catch { if (await ga4IsOnReports()) { await ga4HardResetAndRedoStep1("redirected after Next"); continue; } continue; }
+        if (await ga4IsOnReports()) {
+          await ga4HardResetAndRedoStep1("redirected after fill");
+          continue;
+        }
+        if (!(await ga4ClickNext())) {
+          if (await ga4IsOnReports()) await ga4HardResetAndRedoStep1("redirected clicking Next");
+          continue;
+        }
+        try {
+          await page.locator("#cdk-stepper-0-content-2").waitFor({ timeout: 15000 });
+          step2Success = true;
+          break;
+        } catch {
+          if (await ga4IsOnReports()) {
+            await ga4HardResetAndRedoStep1("redirected after Next");
+            continue;
+          }
+          continue;
+        }
       }
       if (!step2Success) throw new Error("create_ga4_full: Step 2 failed after 8 attempts");
 
@@ -3162,18 +3303,40 @@ app.post("/run", async (req, res) => {
       await selOneBtn.click({ timeout: 30000 });
       await page.waitForTimeout(300);
       let overPanel = page.locator(".cdk-overlay-pane:visible").last();
-      if ((await overPanel.count().catch(() => 0)) === 0) { await selOneBtn.click({ force: true, timeout: 30000 }); await page.waitForTimeout(300); overPanel = page.locator(".cdk-overlay-pane:visible").last(); }
+      if ((await overPanel.count().catch(() => 0)) === 0) {
+        await selOneBtn.click({ force: true, timeout: 30000 });
+        await page.waitForTimeout(300);
+        overPanel = page.locator(".cdk-overlay-pane:visible").last();
+      }
       await overPanel.waitFor({ timeout: 30000 });
-      const indSearch = overPanel.locator('input[type="text"], input[placeholder*="Search"], input[aria-label*="Search"]').first();
+      const indSearch = overPanel
+        .locator('input[type="text"], input[placeholder*="Search"], input[aria-label*="Search"]')
+        .first();
       if ((await indSearch.count().catch(() => 0)) > 0) {
         await indSearch.waitFor({ timeout: 10000 });
         await indSearch.fill("Other business activity");
         await page.waitForTimeout(300);
-        await overPanel.locator('[role="option"], mat-option, .mat-mdc-option, .mdc-list-item').filter({ hasText: "Other business activity" }).first().waitFor({ timeout: 30000 });
-        await overPanel.locator('[role="option"], mat-option, .mat-mdc-option, .mdc-list-item').filter({ hasText: "Other business activity" }).first().click({ timeout: 30000 });
+        await overPanel
+          .locator('[role="option"], mat-option, .mat-mdc-option, .mdc-list-item')
+          .filter({ hasText: "Other business activity" })
+          .first()
+          .waitFor({ timeout: 30000 });
+        await overPanel
+          .locator('[role="option"], mat-option, .mat-mdc-option, .mdc-list-item')
+          .filter({ hasText: "Other business activity" })
+          .first()
+          .click({ timeout: 30000 });
       } else {
-        await overPanel.locator('[role="option"], mat-option, .mat-mdc-option, .mdc-list-item').filter({ hasText: "Other business activity" }).first().waitFor({ timeout: 30000 });
-        await overPanel.locator('[role="option"], mat-option, .mat-mdc-option, .mdc-list-item').filter({ hasText: "Other business activity" }).first().click({ timeout: 30000 });
+        await overPanel
+          .locator('[role="option"], mat-option, .mat-mdc-option, .mdc-list-item')
+          .filter({ hasText: "Other business activity" })
+          .first()
+          .waitFor({ timeout: 30000 });
+        await overPanel
+          .locator('[role="option"], mat-option, .mat-mdc-option, .mdc-list-item')
+          .filter({ hasText: "Other business activity" })
+          .first()
+          .click({ timeout: 30000 });
       }
       await page.waitForTimeout(300);
       const smallInput = step3.locator("#mat-radio-0-input, input#mat-radio-0-input").first();
@@ -3186,9 +3349,21 @@ app.post("/run", async (req, res) => {
         () => step3.locator('mat-radio-button, [role="radio"]').filter({ hasText: smallTxt }).first(),
       ]) {
         if (clickedSmallFull) break;
-        try { const loc = locFn(); if ((await loc.count().catch(() => 0)) > 0) { await loc.click({ force: true, timeout: 8000 }); clickedSmallFull = true; } } catch {}
+        try {
+          const loc = locFn();
+          if ((await loc.count().catch(() => 0)) > 0) {
+            await loc.click({ force: true, timeout: 8000 });
+            clickedSmallFull = true;
+          }
+        } catch {}
       }
-      if (!clickedSmallFull) { try { await smallInput.check({ force: true, timeout: 8000 }); } catch { await smallInput.click({ force: true, timeout: 8000 }); } }
+      if (!clickedSmallFull) {
+        try {
+          await smallInput.check({ force: true, timeout: 8000 });
+        } catch {
+          await smallInput.click({ force: true, timeout: 8000 });
+        }
+      }
       const startSmallFull = Date.now();
       while (!(await smallInput.isChecked().catch(() => false))) {
         if (Date.now() - startSmallFull > 15000) throw new Error("create_ga4_full: Step 3 Small not confirmed");
@@ -3206,7 +3381,12 @@ app.post("/run", async (req, res) => {
       // ── Step 4: Objectives ─────────────────────────────────────────────
       const step4 = page.locator("#cdk-stepper-0-content-3");
       await step4.waitFor({ timeout: 30000 });
-      for (const label of ["Generate leads", "Drive sales", "Understand web and/or app traffic", "View user engagement and retention"]) {
+      for (const label of [
+        "Generate leads",
+        "Drive sales",
+        "Understand web and/or app traffic",
+        "View user engagement and retention",
+      ]) {
         const cb = step4.getByRole("checkbox", { name: label }).first();
         await cb.waitFor({ timeout: 30000 });
         if (!(await cb.isChecked().catch(() => false))) await cb.click({ timeout: 15000 });
@@ -3231,15 +3411,29 @@ app.post("/run", async (req, res) => {
       if ((await ga4AcceptBtn.count()) > 0) {
         await ga4AcceptBtn.waitFor({ timeout: 30000 });
         if (!(await ga4AcceptBtn.isEnabled().catch(() => false))) {
-          const termsPanel = page.locator('div[role="dialog"]:visible, .cdk-overlay-pane:visible, .mat-dialog-container:visible').first();
-          await termsPanel.evaluate(el => { const s = el.querySelector('[class*="content"],[class*="body"],[class*="scroll"]') || el; s.scrollTop = s.scrollHeight; }).catch(() => {});
+          const termsPanel = page
+            .locator('div[role="dialog"]:visible, .cdk-overlay-pane:visible, .mat-dialog-container:visible')
+            .first();
+          await termsPanel
+            .evaluate((el) => {
+              const s = el.querySelector('[class*="content"],[class*="body"],[class*="scroll"]') || el;
+              s.scrollTop = s.scrollHeight;
+            })
+            .catch(() => {});
           await page.waitForTimeout(500);
           const termsCbs = termsPanel.locator('input[type="checkbox"]');
           const n = await termsCbs.count();
           for (let i = 0; i < n; i++) {
             if (await ga4AcceptBtn.isEnabled().catch(() => false)) break;
             const cb = termsCbs.nth(i);
-            if (!(await cb.isChecked().catch(() => false))) { try { await cb.check({ force: true, timeout: 5000 }); } catch { await cb.click({ force: true, timeout: 5000 }); } await page.waitForTimeout(250); }
+            if (!(await cb.isChecked().catch(() => false))) {
+              try {
+                await cb.check({ force: true, timeout: 5000 });
+              } catch {
+                await cb.click({ force: true, timeout: 5000 });
+              }
+              await page.waitForTimeout(250);
+            }
           }
         }
         await ga4AcceptBtn.click({ timeout: 15000 });
@@ -3254,18 +3448,26 @@ app.post("/run", async (req, res) => {
       // Capture the new account + property IDs from the URL now — this is the
       // only reliable moment when the URL is guaranteed to contain the correct
       // newly-created property context (#/a<accountId>p<propertyId>/...).
-      let capturedAccountId = null, capturedPropertyId = null;
+      let capturedAccountId = null,
+        capturedPropertyId = null;
       const pollDeadline = Date.now() + 10000;
       while (Date.now() < pollDeadline) {
         const m = page.url().match(/#\/a(\d+)p(\d+)/i);
-        if (m) { capturedAccountId = m[1]; capturedPropertyId = m[2]; break; }
+        if (m) {
+          capturedAccountId = m[1];
+          capturedPropertyId = m[2];
+          break;
+        }
         await page.waitForTimeout(400);
       }
       console.log(`🔑 Captured IDs from URL — account: ${capturedAccountId}, property: ${capturedPropertyId}`);
 
       const ga4ClickWeb = async () => {
         const webBtn = page.locator("button").filter({ hasText: /^web$/i }).first();
-        const vis = await webBtn.waitFor({ state: "visible", timeout: 20000 }).then(() => true).catch(() => false);
+        const vis = await webBtn
+          .waitFor({ state: "visible", timeout: 20000 })
+          .then(() => true)
+          .catch(() => false);
         if (!vis) return false;
         const tt = webBtn.locator("span.mat-mdc-button-touch-target").first();
         if (await tt.count()) await tt.click({ timeout: 10000 });
@@ -3290,7 +3492,7 @@ app.post("/run", async (req, res) => {
       // ── Fetch IDs via breadcrumb property search ───────────────────────────
       console.log("🔍 Navigating to GA4 home for property search...");
       await page.goto("https://analytics.google.com/analytics/web", { waitUntil: "domcontentloaded" });
-      const breadcrumbArrow = page.locator('mat-icon.gmp-breadcrumb-arrow').first();
+      const breadcrumbArrow = page.locator("mat-icon.gmp-breadcrumb-arrow").first();
       await breadcrumbArrow.waitFor({ state: "visible", timeout: 15000 });
       await page.waitForTimeout(500);
       await breadcrumbArrow.click();
@@ -3312,7 +3514,11 @@ app.post("/run", async (req, res) => {
       const urlPollEnd = Date.now() + 8000;
       while (Date.now() < urlPollEnd) {
         const m = page.url().match(/#\/a(\d+)p(\d+)/i);
-        if (m) { accountIdFromUrl = m[1]; ga4FullPropertyId = m[2]; break; }
+        if (m) {
+          accountIdFromUrl = m[1];
+          ga4FullPropertyId = m[2];
+          break;
+        }
         await page.waitForTimeout(400);
       }
       if (!ga4FullPropertyId) throw new Error("create_ga4_full: property ID not found in URL after property search");
@@ -3331,10 +3537,10 @@ app.post("/run", async (req, res) => {
       if (browser) await browser.close();
 
       // ── Supabase + Monday subitem update ──────────────────────────────────
-      const recordId     = req.body.id || req.body.case_id;
-      const orderNumber  = req.body.order_number;
-      const dbMatchCol   = recordId ? "id" : orderNumber ? "order_number" : null;
-      const dbMatchVal   = recordId || orderNumber;
+      const recordId = req.body.id || req.body.case_id;
+      const orderNumber = req.body.order_number;
+      const dbMatchCol = recordId ? "id" : orderNumber ? "order_number" : null;
+      const dbMatchVal = recordId || orderNumber;
 
       if (dbMatchCol) {
         try {
@@ -3344,12 +3550,12 @@ app.post("/run", async (req, res) => {
           await supabase
             .from("automated_onboarding_builds")
             .update({
-              ga4_account_name:   account_name,
-              ga4_property_name:  property_name,
-              ga4_property_id:    ga4FullPropertyId,
+              ga4_account_name: account_name,
+              ga4_property_name: property_name,
+              ga4_property_id: ga4FullPropertyId,
               ga4_measurement_id: measurementId,
-              ga4_email_account:  google_email,
-              gtag_code:          gtagSnippet,
+              ga4_email_account: google_email,
+              gtag_code: gtagSnippet,
               ga4_setup_complete: true,
             })
             .eq(dbMatchCol, dbMatchVal);
@@ -3481,11 +3687,14 @@ app.post("/run", async (req, res) => {
       // Uncheck "Add this account to your current organisation" if it is checked.
       // Click the mat-checkbox label/wrapper — the native input is covered by the MDC overlay.
       try {
-        const orgCheckbox = page.locator(
-          'mat-checkbox:has-text("organisation"), mat-checkbox:has-text("organization")',
-        ).first();
+        const orgCheckbox = page
+          .locator('mat-checkbox:has-text("organisation"), mat-checkbox:has-text("organization")')
+          .first();
         if (await orgCheckbox.isVisible({ timeout: 3000 }).catch(() => false)) {
-          const isChecked = await orgCheckbox.locator('input[type="checkbox"]').isChecked().catch(() => false);
+          const isChecked = await orgCheckbox
+            .locator('input[type="checkbox"]')
+            .isChecked()
+            .catch(() => false);
           if (isChecked) {
             await orgCheckbox.click();
             console.log("✅ Unchecked organisation link checkbox");
@@ -3955,10 +4164,12 @@ app.post("/run", async (req, res) => {
             .first();
 
           // Scroll the terms content to the bottom — GA4 sometimes requires it before Accept enables
-          await panel.evaluate((el) => {
-            const scrollable = el.querySelector('[class*="content"], [class*="body"], [class*="scroll"]') || el;
-            scrollable.scrollTop = scrollable.scrollHeight;
-          }).catch(() => {});
+          await panel
+            .evaluate((el) => {
+              const scrollable = el.querySelector('[class*="content"], [class*="body"], [class*="scroll"]') || el;
+              scrollable.scrollTop = scrollable.scrollHeight;
+            })
+            .catch(() => {});
           await page.waitForTimeout(500);
 
           const cbs = panel.locator('input[type="checkbox"]');
@@ -4030,14 +4241,22 @@ app.post("/run", async (req, res) => {
         console.log("⚠️ Web button not visible — falling back to direct URL navigation");
         await page.screenshot({ path: "step6_fallback.png", fullPage: true }).catch(() => {});
 
-        let s6AccountId = null, s6PropertyId = null;
+        let s6AccountId = null,
+          s6PropertyId = null;
         const s6Deadline = Date.now() + 15000;
         while (Date.now() < s6Deadline) {
           const u = page.url();
           const m1 = u.match(/#\/a(\d+)p(\d+)/);
           const m2 = !m1 && u.match(/#\/p(\d+)/);
-          if (m1) { s6AccountId = m1[1]; s6PropertyId = m1[2]; break; }
-          if (m2) { s6PropertyId = m2[1]; break; }
+          if (m1) {
+            s6AccountId = m1[1];
+            s6PropertyId = m1[2];
+            break;
+          }
+          if (m2) {
+            s6PropertyId = m2[1];
+            break;
+          }
           await page.waitForTimeout(500);
         }
 
@@ -4430,9 +4649,9 @@ app.post("/run", async (req, res) => {
           async function dismissConfirmEmailIfPresent() {
             if (/action=confirm_admin_email/i.test(page.url())) {
               console.log("📧 Confirm admin email prompt detected — clicking Remind me later...");
-              const remindBtn = page.locator(
-                'a:has-text("Remind me later"), button:has-text("Remind me later"), input[value*="Remind"]'
-              ).first();
+              const remindBtn = page
+                .locator('a:has-text("Remind me later"), button:has-text("Remind me later"), input[value*="Remind"]')
+                .first();
               if (await remindBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
                 await remindBtn.click();
                 await page.waitForTimeout(1500);
@@ -4445,7 +4664,10 @@ app.post("/run", async (req, res) => {
             const deadline = Date.now() + 15000;
             while (Date.now() < deadline) {
               const title = await page.title().catch(() => "");
-              const bodyText = await page.locator("body").innerText().catch(() => "");
+              const bodyText = await page
+                .locator("body")
+                .innerText()
+                .catch(() => "");
               const isChallenge =
                 /one moment|please wait|verif|checking your browser|just a moment/i.test(title) ||
                 /please wait while your request is being verified/i.test(bodyText);
@@ -4472,10 +4694,10 @@ app.post("/run", async (req, res) => {
               await page.locator('#user_login, input[name="log"]').first().fill(cms_username);
               await page.locator('#user_pass, input[name="pwd"]').first().fill(cms_password);
               await page.locator('#wp-submit, input[type="submit"]').first().click();
-              await page.waitForURL(
-                (url) => /\/wp-admin/i.test(url) || /action=confirm_admin_email/i.test(url),
-                { timeout: 60000, waitUntil: "domcontentloaded" }
-              );
+              await page.waitForURL((url) => /\/wp-admin/i.test(url) || /action=confirm_admin_email/i.test(url), {
+                timeout: 60000,
+                waitUntil: "domcontentloaded",
+              });
               await page.waitForTimeout(1000);
               await dismissConfirmEmailIfPresent();
               await page.goto(url, { waitUntil: "domcontentloaded" });
@@ -4494,7 +4716,10 @@ app.post("/run", async (req, res) => {
           const cfDeadline = Date.now() + 15000;
           while (Date.now() < cfDeadline) {
             const title = await page.title().catch(() => "");
-            const bodyText = await page.locator("body").innerText().catch(() => "");
+            const bodyText = await page
+              .locator("body")
+              .innerText()
+              .catch(() => "");
             const isCfChallenge =
               /one moment|please wait|verif|checking your browser|just a moment/i.test(title) ||
               /please wait while your request is being verified/i.test(bodyText);
@@ -4509,10 +4734,10 @@ app.post("/run", async (req, res) => {
           await page.locator('#wp-submit, input[type="submit"]').first().click();
 
           // Wait for either wp-admin OR the confirm_admin_email interstitial
-          await page.waitForURL(
-            (url) => /\/wp-admin/i.test(url) || /action=confirm_admin_email/i.test(url),
-            { timeout: 60000, waitUntil: "domcontentloaded" }
-          );
+          await page.waitForURL((url) => /\/wp-admin/i.test(url) || /action=confirm_admin_email/i.test(url), {
+            timeout: 60000,
+            waitUntil: "domcontentloaded",
+          });
           await page.waitForTimeout(500);
           await dismissConfirmEmailIfPresent();
           console.log("✅ Logged into WordPress, URL:", page.url());
@@ -5706,12 +5931,12 @@ app.post("/run", async (req, res) => {
   } catch (err) {
     console.error("❌ ERROR:", err);
     let screenshotB64 = null;
-    let pageUrl       = null;
-    let pageSnippet   = null;
+    let pageUrl = null;
+    let pageSnippet = null;
     try {
       const catchPage = browser?.contexts()?.[0]?.pages()?.[0];
       if (catchPage) {
-        pageUrl     = catchPage.url();
+        pageUrl = catchPage.url();
         pageSnippet = await catchPage.evaluate(() => document.body.innerText.substring(0, 300)).catch(() => null);
         const screenshotPath = `/tmp/fail_${action}_${Date.now()}.png`;
         await catchPage.screenshot({ path: screenshotPath, fullPage: false });
@@ -5719,12 +5944,12 @@ app.post("/run", async (req, res) => {
       }
     } catch (_) {}
     return res.json({
-      status:          "failed",
-      reason:          "automation_error",
-      error:           err.message,
-      page_url:        pageUrl,
-      page_snippet:    pageSnippet,
-      screenshot_b64:  screenshotB64,
+      status: "failed",
+      reason: "automation_error",
+      error: err.message,
+      page_url: pageUrl,
+      page_snippet: pageSnippet,
+      screenshot_b64: screenshotB64,
     });
   } finally {
     // Always close the browser — prevents process leaks if res.json() itself throws
