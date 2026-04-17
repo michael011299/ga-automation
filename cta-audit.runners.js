@@ -190,14 +190,16 @@ async function findContactPageUrl(page, baseUrl) {
 
 async function extractPhones(page, pageUrl) {
   const phones = await safeEval(page, () => {
-    const clickable = [];
-    const plainText = [];
+    const clickableRaw = [];
 
-    // Find clickable tel: links
+    // Find clickable tel: links — skip invisible elements
     document.querySelectorAll('a[href^="tel:"]').forEach(a => {
+      const style = window.getComputedStyle(a);
+      if (style.display === 'none' || style.visibility === 'hidden') return;
       const href = a.getAttribute('href');
       const number = href.replace('tel:', '').replace(/\D/g, '');
-      clickable.push({
+      if (!number || number.length < 10) return;
+      clickableRaw.push({
         href,
         number,
         display_text: a.textContent.trim(),
@@ -205,8 +207,19 @@ async function extractPhones(page, pageUrl) {
       });
     });
 
-    // Find plain text phone numbers
-    const phoneRegex = /(?:\+?44\s*)?(?:\(?0\d{1,5}\)?\s*\d{3,4}\s*\d{3,4}|\d{3,4}[\s-]?\d{3,4}[\s-]?\d{3,4})/g;
+    // Deduplicate by normalised number — keep first DOM occurrence (avoids
+    // header + footer + mobile-nav copies of the same number inflating the count)
+    const seenNumbers = new Set();
+    const clickable = clickableRaw.filter(p => {
+      if (seenNumbers.has(p.number)) return false;
+      seenNumbers.add(p.number);
+      return true;
+    });
+
+    // Find plain text phone numbers — tighter UK/international regex to avoid
+    // false positives from dates, order numbers, postcodes, etc.
+    const phoneRegex = /(?:\+44|0044|0)[\s-]?\(?\d{2,5}\)?[\s-]?\d{3,4}[\s-]?\d{3,4}/g;
+    const plainText = [];
     const walker = document.createTreeWalker(
       document.body,
       NodeFilter.SHOW_TEXT,
@@ -214,8 +227,12 @@ async function extractPhones(page, pageUrl) {
         acceptNode: (node) => {
           const parent = node.parentElement;
           if (!parent) return NodeFilter.FILTER_REJECT;
+          // Already covered by a tel: link
           if (parent.closest('a[href^="tel:"]')) return NodeFilter.FILTER_REJECT;
-          if (parent.closest('script, style, noscript')) return NodeFilter.FILTER_REJECT;
+          // Non-visible or non-content nodes
+          if (parent.closest('script, style, noscript, [aria-hidden="true"], [hidden], input, select, option, time, data')) return NodeFilter.FILTER_REJECT;
+          const pStyle = window.getComputedStyle(parent);
+          if (pStyle.display === 'none' || pStyle.visibility === 'hidden') return NodeFilter.FILTER_REJECT;
           return NodeFilter.FILTER_ACCEPT;
         }
       }
@@ -228,12 +245,10 @@ async function extractPhones(page, pageUrl) {
       if (matches) {
         matches.forEach(match => {
           const digits = match.replace(/\D/g, '');
-          if (digits.length >= 10 && digits.length <= 15) {
-            plainText.push({
-              number: match,
-              digits,
-              clickable: false
-            });
+          if (digits.length >= 10 && digits.length <= 13) {
+            // Skip if this number is already covered by a clickable tel: link
+            if (seenNumbers.has(digits)) return;
+            plainText.push({ number: match.trim(), digits, clickable: false });
           }
         });
       }
@@ -423,7 +438,14 @@ async function extractBookingLinks(page, pageUrl) {
   return bookingLinks || [];
 }
 
-const BOOKING_CTA_KEYWORDS = /\b(book\s*(now|online|a?\s*session|an?\s*appointment|a?\s*class|a?\s*consultation|a?\s*call|your|a?\s*slot|a?\s*visit)?|schedule(\s*(a?\s*call|a?\s*session|now))?|reserve(\s*(a?\s*spot|now))?|get\s*started|enquire\s*now|request\s*(a?\s*quote|a?\s*callback|a?\s*call)|make\s*(an?\s*appointment|a?\s*booking)|arrange\s*(a?\s*visit|a?\s*call))\b/i;
+// Only match labels that signal direct intent to book/convert — not soft enquiry
+// terms like "enquire now", "request a quote", "get started" which typically lead
+// to contact forms rather than an actual booking action.
+const BOOKING_CTA_KEYWORDS = /\b(book\s*(now|online|a?\s*session|an?\s*appointment|a?\s*class|a?\s*consultation|a?\s*call|your|a?\s*slot|a?\s*visit)?|schedule(\s*(a?\s*call|a?\s*session|now))?|reserve(\s*(a?\s*spot|now))?|make\s*(an?\s*appointment|a?\s*booking)|arrange\s*a?\s*visit)\b/i;
+
+// URL patterns that indicate a generic contact/enquiry page — links landing here
+// are soft leads, not direct conversions, and should be excluded from booking CTAs.
+const CONTACT_PAGE_PATTERN = /\/(contact|contact-us|get-in-touch|enquire|enquiry|enquiries|reach-us|say-hello|talk-to-us|message-us)(\/|$|\?)/i;
 
 const ALL_BOOKING_DOMAINS = {
   'calendly.com': 'Calendly',
@@ -524,6 +546,26 @@ async function extractBookingCTAs(page, context, baseUrl) {
         }
       }
 
+      // Determine how many user clicks from the source page to reach an actual
+      // booking action. booking_platform / same_site_form = 1 click (already there).
+      // same_site_page = follow one level deeper to see if a booking platform or
+      // form lives there — if so, 2 clicks; otherwise null (depth unclear).
+      let clicksToBook = null;
+      if (destinationType === 'booking_platform' || destinationType === 'same_site_form') {
+        clicksToBook = 1;
+      } else if (destinationType === 'external_unknown') {
+        clicksToBook = 1; // reached something off-site — treat as 1, destination unknown
+      } else if (destinationType === 'same_site_page') {
+        const deepLinks = await safeEval(newPage, () =>
+          Array.from(document.querySelectorAll('a[href]')).map(a => a.href)
+        ) || [];
+        const bookingDomainKeys = Object.keys(ALL_BOOKING_DOMAINS);
+        const hasDeepBookingPlatform = deepLinks.some(href =>
+          bookingDomainKeys.some(d => href.includes(d))
+        );
+        clicksToBook = hasDeepBookingPlatform ? 2 : null;
+      }
+
       // Build GTM recommendation
       let gtm_recommendation;
       if (destinationType === 'booking_platform') {
@@ -539,6 +581,20 @@ async function extractBookingCTAs(page, context, baseUrl) {
         gtm_recommendation = `GA4 Event: click_book_cta — Trigger: Click - Just Links on booking CTA button (destination: ${finalUrl})`;
       }
 
+      // Only keep CTAs that lead directly to a conversion:
+      //   booking_platform  → definite conversion
+      //   same_site_form    → conversion only if it's a booking/appointment page,
+      //                       not a generic contact/enquiry page
+      //   same_site_page    → only if a booking platform was found one level deeper
+      //   external_unknown  → keep (may be a custom booking system we don't recognise)
+      const isDirectConversion =
+        destinationType === 'booking_platform' ||
+        destinationType === 'external_unknown' ||
+        (destinationType === 'same_site_form' && !CONTACT_PAGE_PATTERN.test(finalUrl)) ||
+        (destinationType === 'same_site_page' && clicksToBook !== null);
+
+      if (!isDirectConversion) continue;
+
       results.push({
         link_text: link.label_text,
         source_href: link.href,
@@ -546,6 +602,7 @@ async function extractBookingCTAs(page, context, baseUrl) {
         page_title: pageTitle,
         destination_type: destinationType,
         platform,
+        clicks_to_book: clicksToBook,
         redirect_hops: redirectHops,
         page_snippet: pageSnippet,
         gtm_recommendation,
@@ -938,9 +995,14 @@ async function generateGTMSummary(pageData) {
   let totalNewsletterForms = 0;
   const socialPlatformsSeen = new Set();
 
+  // Collect unique numbers across pages before summing
+  const _uniqueClickableNums = new Set(pageData.flatMap(p => p.phones.clickable.map(ph => ph.number)));
+  const _uniquePlainTextNums = new Set(pageData.flatMap(p => p.phones.plainText.map(ph => ph.digits)));
+  _uniqueClickableNums.forEach(n => _uniquePlainTextNums.delete(n));
+  totalClickablePhones = _uniqueClickableNums.size;
+  totalPlainTextPhones  = _uniquePlainTextNums.size;
+
   pageData.forEach(page => {
-    totalClickablePhones += page.phones.clickable.length;
-    totalPlainTextPhones += page.phones.plainText.length;
     totalClickableEmails += page.emails.clickable.length;
     totalPlainTextEmails += page.emails.plainText.length;
     totalWhatsAppLinks += page.whatsapp.links.length;
@@ -1027,8 +1089,19 @@ function generateCTAQualityReport(pagesData) {
   const recommendations = [];
 
   // --- Phone accessibility ---
-  const totalClickablePhones = pagesData.reduce((n, p) => n + p.phones.clickable.length, 0);
-  const totalPlainTextPhones  = pagesData.reduce((n, p) => n + p.phones.plainText.length, 0);
+  // Deduplicate by normalised digit string across all pages — the same number
+  // in the header/footer of every crawled page should count as one, not many.
+  const uniqueClickableNumbers = new Set(
+    pagesData.flatMap(p => p.phones.clickable.map(ph => ph.number))
+  );
+  const uniquePlainTextDigits = new Set(
+    pagesData.flatMap(p => p.phones.plainText.map(ph => ph.digits))
+  );
+  // Don't double-count a plain-text instance of a number that's also clickable
+  uniqueClickableNumbers.forEach(n => uniquePlainTextDigits.delete(n));
+
+  const totalClickablePhones = uniqueClickableNumbers.size;
+  const totalPlainTextPhones  = uniquePlainTextDigits.size;
   const phonesAboveFold = pagesData.some(p => (p.above_fold_ctas?.phone_links?.length ?? 0) > 0);
 
   let phoneVerdict = 'none';
@@ -1115,11 +1188,23 @@ function generateCTAQualityReport(pagesData) {
     ? Math.round(successfulCTAs.reduce((n, c) => n + (c.redirect_hops ?? 0), 0) / successfulCTAs.length * 10) / 10
     : 0;
 
+  const ctasWithClickDepth = successfulCTAs.filter(c => c.clicks_to_book !== null && c.clicks_to_book !== undefined);
+  const minClicksToBook    = ctasWithClickDepth.length
+    ? Math.min(...ctasWithClickDepth.map(c => c.clicks_to_book))
+    : null;
+
   if (allBookingCTAs.length === 0) {
     issues.push('No booking CTAs detected on the site — visitors may not know how to book');
     recommendations.push('Add a visible "Book Now" or "Schedule" button linking directly to your booking system');
   } else if (directToPlatform > 0) {
     strengths.push(`${directToPlatform} booking CTA(s) link directly to a booking platform — minimal friction`);
+  }
+
+  if (minClicksToBook !== null && minClicksToBook > 1) {
+    issues.push(`Booking requires at least ${minClicksToBook} clicks from the page — consider adding a direct booking CTA higher up`);
+    recommendations.push('Add a direct "Book Now" link to your booking platform in the header or hero section');
+  } else if (minClicksToBook === 1) {
+    strengths.push('Booking is reachable in 1 click from at least one page CTA');
   }
 
   if (highHopCTAs.length > 0) {
@@ -1146,10 +1231,10 @@ function generateCTAQualityReport(pagesData) {
     overall_score: score,
     grade,
     phone_quality: {
-      clickable_count:  totalClickablePhones,
-      plain_text_count: totalPlainTextPhones,
-      above_fold:       phonesAboveFold,
-      verdict:          phoneVerdict,
+      unique_clickable:  totalClickablePhones,
+      unique_plain_text: totalPlainTextPhones,
+      above_fold:        phonesAboveFold,
+      verdict:           phoneVerdict,
     },
     email_quality: {
       clickable_count:  totalClickableEmails,
@@ -1172,6 +1257,7 @@ function generateCTAQualityReport(pagesData) {
     },
     booking_journey: {
       ctas_found:         allBookingCTAs.length,
+      min_clicks_to_book: minClicksToBook,
       avg_redirect_hops:  avgRedirectHops,
       direct_to_platform: directToPlatform,
       high_hop_ctas:      highHopCTAs.length,
