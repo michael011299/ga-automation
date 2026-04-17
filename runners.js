@@ -2055,6 +2055,7 @@ app.post("/run", async (req, res) => {
       "register_ga4_conversions",   // API-only: register conversion events on GA4 property
       "build_gtm_from_audit",       // API-only: run CTA audit then build GTM container from results
       "generate_gtm_payload",       // API-only: return ordered GTM API call sequence ready to execute
+      "execute_gtm_payload",        // API-only: accept raw access_token + execute all GTM calls internally
     ].includes(action)
   ) {
     return res.status(400).json({ error: "Unknown action" });
@@ -2298,6 +2299,130 @@ app.post("/run", async (req, res) => {
       return res.json({ status: "success", ...payload });
     } catch (err) {
       console.error("❌ generate_gtm_payload error:", err.message);
+      return res.json({ status: "error", error: err.message });
+    }
+  }
+
+  // ── execute_gtm_payload: API-only — accept raw access_token, run all steps ─
+  // The caller provides their own Google OAuth access token. We generate the
+  // full step sequence from the audit then execute every GTM API call in order,
+  // resolving {{placeholders}} as IDs come back from each response.
+  // Single n8n HTTP Request node — no looping or Code nodes required.
+  if (action === "execute_gtm_payload") {
+    const {
+      access_token,
+      numeric_account_id,
+      numeric_container_id,
+      measurement_id,
+      audit,
+      website_url: auditUrl,
+    } = req.body;
+
+    if (!access_token)             return res.status(400).json({ status: "error", error: "Missing access_token (Google OAuth2 access token)" });
+    if (!numeric_account_id)       return res.status(400).json({ status: "error", error: "Missing numeric_account_id" });
+    if (!numeric_container_id)     return res.status(400).json({ status: "error", error: "Missing numeric_container_id" });
+    if (!measurement_id)           return res.status(400).json({ status: "error", error: "Missing measurement_id" });
+    if (!audit && !auditUrl)       return res.status(400).json({ status: "error", error: "Provide either 'audit' (from POST /health/audit) or 'website_url'" });
+
+    try {
+      const axios = require("axios");
+      const { generateGTMPayload } = require("./gtm-payload-generator");
+
+      // Optionally run a fresh audit
+      let auditResult = audit;
+      if (!auditResult) {
+        const { ctaAuditSite } = require("./cta-audit.runners");
+        console.log(`🔍 execute_gtm_payload: running CTA audit for ${auditUrl}...`);
+        auditResult = await ctaAuditSite(auditUrl);
+      }
+
+      // Generate the ordered step list
+      const payload = generateGTMPayload(
+        auditResult,
+        measurement_id,
+        String(numeric_account_id),
+        String(numeric_container_id),
+      );
+
+      // Execute each step in order, resolving {{placeholders}} as we go
+      const savedVars = {};   // e.g. { workspace_id: "5", call_trigger_id: "12", ... }
+      const completed = [];
+      const failed    = [];
+
+      const resolvePlaceholders = (str) =>
+        str.replace(/\{\{(\w+)\}\}/g, (_, key) => savedVars[key] ?? `{{${key}}}`);
+
+      const resolveBody = (body) => {
+        if (!body) return null;
+        // Deep-resolve all string values within the body
+        const str = JSON.stringify(body);
+        return JSON.parse(resolvePlaceholders(str));
+      };
+
+      for (const step of payload.steps) {
+        const url  = resolvePlaceholders(step.url);
+        const body = resolveBody(step.body);
+
+        try {
+          console.log(`▶ Step ${step.step}: ${step.description}`);
+          const response = await axios({
+            method:  step.method,
+            url,
+            headers: {
+              "Authorization": `Bearer ${access_token}`,
+              "Content-Type":  "application/json",
+            },
+            data: body || undefined,
+          });
+
+          // Save returned ID if this step needs it
+          if (step.save_as && step.save_from_response) {
+            const value = response.data?.[step.save_from_response];
+            if (value) {
+              savedVars[step.save_as] = String(value);
+              console.log(`  ✅ Saved ${step.save_as} = ${savedVars[step.save_as]}`);
+            } else {
+              console.warn(`  ⚠️ Expected ${step.save_from_response} in response but not found`);
+            }
+          }
+
+          completed.push({ step: step.step, description: step.description });
+        } catch (err) {
+          const detail = err.response?.data ? JSON.stringify(err.response.data) : err.message;
+          console.error(`  ❌ Step ${step.step} failed: ${detail}`);
+          failed.push({ step: step.step, description: step.description, error: detail });
+          // Stop on workspace creation failure — nothing else can proceed
+          if (step.step === 1) {
+            return res.json({
+              status:  "failed",
+              reason:  "workspace_creation_failed",
+              error:   detail,
+              completed,
+              failed,
+            });
+          }
+          // Otherwise continue — a single trigger/tag failure shouldn't abort the whole run
+        }
+      }
+
+      const overallStatus = failed.length === 0 ? "success" : "partial";
+      console.log(`✅ execute_gtm_payload ${overallStatus} — ${completed.length} steps completed, ${failed.length} failed`);
+
+      return res.json({
+        status:         overallStatus,
+        workspace_id:   savedVars.workspace_id || null,
+        measurement_id,
+        steps_completed: completed.length,
+        steps_failed:    failed.length,
+        completed,
+        failed,
+        skipped:        payload.skipped,
+        audit_summary:  auditResult.gtm_summary,
+        pages_crawled:  auditResult.pages_crawled,
+      });
+
+    } catch (err) {
+      console.error("❌ execute_gtm_payload error:", err.message);
       return res.json({ status: "error", error: err.message });
     }
   }
