@@ -823,7 +823,7 @@ async function extractLocationLinks(page, pageUrl) {
 }
 
 // ---------------------------------------------------------------------------
-// Service page discovery — finds up to 2 service/treatment pages from the nav.
+// Service page discovery — finds all service/treatment pages from the nav.
 // ---------------------------------------------------------------------------
 async function findServicePages(page, baseUrl) {
   const SERVICE_URL_PATTERN  = /\/(services?|treatments?|therapies|therapists?|what-we-do|solutions|programs?|packages?|specialties|procedures|expertise|offerings|portfolio)(\/|$|\?|#)/i;
@@ -855,7 +855,6 @@ async function findServicePages(page, baseUrl) {
       if (SERVICE_URL_PATTERN.test(u.pathname) || SERVICE_TEXT_PATTERN.test(link.text)) {
         seen.add(canonical);
         serviceUrls.push(u.href);
-        if (serviceUrls.length >= 2) break;
       }
     } catch { /* skip malformed */ }
   }
@@ -1884,7 +1883,7 @@ async function ctaAuditSite(url) {
       }
     }
 
-    // ── Service pages (up to 2) ───────────────────────────────────────────────
+    // ── Service pages (all found in nav) ─────────────────────────────────────
     for (const serviceUrl of servicePageUrls) {
       if (pagesCrawled.includes(serviceUrl)) continue;
       try {
