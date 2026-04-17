@@ -484,6 +484,11 @@ async function extractBookingCTAs(page, context, baseUrl) {
       try { absoluteUrl = new URL(link.href, baseUrl).href; } catch { continue; }
 
       newPage = await context.newPage();
+      let redirectHops = 0;
+      newPage.on('response', (response) => {
+        const status = response.status();
+        if (status >= 300 && status < 400) redirectHops++;
+      });
       await newPage.goto(absoluteUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
       await newPage.waitForLoadState('load', { timeout: 5000 }).catch(() => {});
 
@@ -541,6 +546,7 @@ async function extractBookingCTAs(page, context, baseUrl) {
         page_title: pageTitle,
         destination_type: destinationType,
         platform,
+        redirect_hops: redirectHops,
         page_snippet: pageSnippet,
         gtm_recommendation,
       });
@@ -619,6 +625,47 @@ async function extractSocialLinks(page, pageUrl) {
   return socialLinks || [];
 }
 
+async function extractAboveFoldCTAs(page) {
+  return await safeEval(page, () => {
+    const viewportHeight = window.innerHeight;
+    const results = { phone_links: [], email_links: [], whatsapp_links: [], cta_buttons: [] };
+
+    const isAboveFold = (el) => {
+      try {
+        const rect = el.getBoundingClientRect();
+        return rect.top >= 0 && rect.top < viewportHeight && rect.width > 0 && rect.height > 0;
+      } catch { return false; }
+    };
+
+    document.querySelectorAll('a[href^="tel:"]').forEach(a => {
+      if (isAboveFold(a))
+        results.phone_links.push({ text: a.textContent.replace(/\s+/g, ' ').trim(), href: a.getAttribute('href') });
+    });
+
+    document.querySelectorAll('a[href^="mailto:"]').forEach(a => {
+      if (isAboveFold(a))
+        results.email_links.push({ text: a.textContent.replace(/\s+/g, ' ').trim(), href: a.getAttribute('href') });
+    });
+
+    document.querySelectorAll('a[href*="wa.me"], a[href*="whatsapp.com"]').forEach(a => {
+      if (isAboveFold(a))
+        results.whatsapp_links.push({ text: a.textContent.replace(/\s+/g, ' ').trim(), href: a.getAttribute('href') });
+    });
+
+    const ctaPattern = /\b(book(\s*(now|online|appointment|session|call|a\s*class|a\s*consultation))?|schedule|reserve|get\s*started|enquire(\s*now)?|contact\s*us|call\s*(us|now)|get\s*a?\s*quote|free\s*consultation|request\s*(a?\s*(quote|call|callback)))\b/i;
+    document.querySelectorAll('a[href], button').forEach(el => {
+      const text = (el.textContent || '').replace(/\s+/g, ' ').trim();
+      const href = el.getAttribute('href') || '';
+      if (!ctaPattern.test(text)) return;
+      if (href.startsWith('tel:') || href.startsWith('mailto:') || href.includes('wa.me')) return;
+      if (isAboveFold(el))
+        results.cta_buttons.push({ text, href: href || null, tag: el.tagName.toLowerCase() });
+    });
+
+    return results;
+  }) || { phone_links: [], email_links: [], whatsapp_links: [], cta_buttons: [] };
+}
+
 async function extractForms(page, pageUrl) {
   const forms = await safeEval(page, (pageUrl) => {
     const formData = [];
@@ -669,10 +716,15 @@ async function extractForms(page, pageUrl) {
                           /hubspot|typeform|gravity|jotform/i.test(form.className) ||
                           !!form.querySelector('[class*="hubspot"], [class*="typeform"], [class*="gravity"], [class*="jotform"]');
 
+        const fieldCount = inputs.length;
+        const requiredCount = [...inputs].filter(i => i.hasAttribute('required')).length;
         formData.push({
           page_url: pageUrl,
           form_index: index,
           fields,
+          field_count: fieldCount,
+          required_field_count: requiredCount,
+          friction_level: fieldCount <= 3 ? 'low' : fieldCount <= 6 ? 'medium' : 'high',
           submit_button_text: submitButtonText,
           has_email_field: hasEmailField,
           has_phone_field: hasPhoneField,
@@ -969,6 +1021,167 @@ async function generateGTMSummary(pageData) {
   return { tags_to_create: tagsToCreate, fixes_needed: fixesNeeded, warnings };
 }
 
+function generateCTAQualityReport(pagesData) {
+  const issues = [];
+  const strengths = [];
+  const recommendations = [];
+
+  // --- Phone accessibility ---
+  const totalClickablePhones = pagesData.reduce((n, p) => n + p.phones.clickable.length, 0);
+  const totalPlainTextPhones  = pagesData.reduce((n, p) => n + p.phones.plainText.length, 0);
+  const phonesAboveFold = pagesData.some(p => (p.above_fold_ctas?.phone_links?.length ?? 0) > 0);
+
+  let phoneVerdict = 'none';
+  if (totalClickablePhones > 0 && totalPlainTextPhones === 0) {
+    phoneVerdict = 'good';
+    strengths.push('All phone numbers are clickable — trackable and tappable on mobile');
+  } else if (totalClickablePhones > 0 && totalPlainTextPhones > 0) {
+    phoneVerdict = 'partial';
+    issues.push(`${totalPlainTextPhones} plain-text phone number(s) alongside ${totalClickablePhones} clickable — plain-text ones are not trackable or tappable on mobile`);
+    recommendations.push('Wrap remaining plain-text phone numbers in <a href="tel:..."> tags');
+  } else if (totalPlainTextPhones > 0) {
+    phoneVerdict = 'poor';
+    issues.push(`${totalPlainTextPhones} phone number(s) are plain text — not clickable on mobile and not trackable in GA4`);
+    recommendations.push('Wrap all phone numbers in <a href="tel:..."> tags');
+  }
+
+  if (phonesAboveFold) {
+    strengths.push('Phone number is visible in the first fold — immediately accessible to visitors');
+  } else if (totalClickablePhones > 0 || totalPlainTextPhones > 0) {
+    issues.push('Phone number is not visible above the fold — users must scroll to find it');
+    recommendations.push('Move phone number to the header or hero section so it is immediately visible');
+  }
+
+  // --- Email accessibility ---
+  const totalClickableEmails = pagesData.reduce((n, p) => n + p.emails.clickable.length, 0);
+  const totalPlainTextEmails  = pagesData.reduce((n, p) => n + p.emails.plainText.length, 0);
+
+  let emailVerdict = 'none';
+  if (totalClickableEmails > 0 && totalPlainTextEmails === 0) {
+    emailVerdict = 'good';
+    strengths.push('Email addresses are clickable mailto: links — trackable in GA4');
+  } else if (totalClickableEmails > 0 && totalPlainTextEmails > 0) {
+    emailVerdict = 'partial';
+    issues.push(`${totalPlainTextEmails} plain-text email address(es) found alongside clickable ones — plain-text ones are not trackable`);
+    recommendations.push('Wrap plain-text email addresses in <a href="mailto:..."> tags');
+  } else if (totalPlainTextEmails > 0) {
+    emailVerdict = 'poor';
+    issues.push(`${totalPlainTextEmails} email address(es) are plain text — not clickable or trackable`);
+    recommendations.push('Wrap all email addresses in <a href="mailto:..."> tags');
+  }
+
+  // --- Above the fold ---
+  const homepageAboveFold = pagesData.find(p => p.label === 'homepage')?.above_fold_ctas;
+  const aboveFoldCount = homepageAboveFold
+    ? (homepageAboveFold.phone_links.length + homepageAboveFold.email_links.length +
+       homepageAboveFold.whatsapp_links.length + homepageAboveFold.cta_buttons.length)
+    : 0;
+
+  if (aboveFoldCount > 0) {
+    strengths.push(`${aboveFoldCount} CTA(s) visible above the fold on the homepage — visitors see them immediately`);
+  } else {
+    issues.push('No CTAs (phone, email, booking button) are visible above the fold on the homepage');
+    recommendations.push('Add a prominent call-to-action (e.g. "Book Now" button or phone number) in the hero section');
+  }
+
+  // --- Form friction ---
+  const allForms = pagesData.flatMap(p => p.forms || []);
+  const avgFieldCount     = allForms.length ? Math.round(allForms.reduce((n, f) => n + (f.field_count ?? f.fields?.length ?? 0), 0) / allForms.length) : 0;
+  const avgRequiredCount  = allForms.length ? Math.round(allForms.reduce((n, f) => n + (f.required_field_count ?? 0), 0) / allForms.length) : 0;
+  const highFrictionForms = allForms.filter(f => f.friction_level === 'high').length;
+
+  let formFrictionVerdict = 'none';
+  if (allForms.length > 0) {
+    if (highFrictionForms > 0) {
+      formFrictionVerdict = 'high';
+      issues.push(`${highFrictionForms} form(s) have more than 6 fields — high friction, likely reducing conversions`);
+      recommendations.push('Reduce contact forms to 4 fields or fewer (name, phone or email, message, submit)');
+    } else if (avgFieldCount > 4) {
+      formFrictionVerdict = 'medium';
+      issues.push(`Contact forms average ${avgFieldCount} fields — moderate friction for users`);
+      recommendations.push('Consider trimming form fields to improve conversion rate');
+    } else {
+      formFrictionVerdict = 'low';
+      strengths.push(`Contact forms are concise (avg ${avgFieldCount} fields) — low friction for users`);
+    }
+  }
+
+  // --- Booking journey ---
+  const allBookingCTAs    = pagesData.flatMap(p => p.booking_ctas || []);
+  const successfulCTAs    = allBookingCTAs.filter(c => c.destination_type !== 'error');
+  const directToPlatform  = successfulCTAs.filter(c => c.destination_type === 'booking_platform').length;
+  const highHopCTAs       = successfulCTAs.filter(c => (c.redirect_hops ?? 0) > 1);
+  const avgRedirectHops   = successfulCTAs.length
+    ? Math.round(successfulCTAs.reduce((n, c) => n + (c.redirect_hops ?? 0), 0) / successfulCTAs.length * 10) / 10
+    : 0;
+
+  if (allBookingCTAs.length === 0) {
+    issues.push('No booking CTAs detected on the site — visitors may not know how to book');
+    recommendations.push('Add a visible "Book Now" or "Schedule" button linking directly to your booking system');
+  } else if (directToPlatform > 0) {
+    strengths.push(`${directToPlatform} booking CTA(s) link directly to a booking platform — minimal friction`);
+  }
+
+  if (highHopCTAs.length > 0) {
+    issues.push(`${highHopCTAs.length} booking CTA(s) pass through multiple redirects before reaching the destination — adds load time and drop-off risk`);
+    recommendations.push('Update booking CTA links to point directly to the final booking URL to reduce redirects');
+  }
+
+  // --- Overall score ---
+  let score = 100;
+  if (phoneVerdict === 'poor')         score -= 20;
+  else if (phoneVerdict === 'partial') score -= 10;
+  if (!phonesAboveFold && (totalClickablePhones + totalPlainTextPhones) > 0) score -= 5;
+  if (emailVerdict === 'poor')         score -= 10;
+  else if (emailVerdict === 'partial') score -= 5;
+  if (aboveFoldCount === 0)            score -= 15;
+  if (formFrictionVerdict === 'high')  score -= 15;
+  else if (formFrictionVerdict === 'medium') score -= 5;
+  if (allBookingCTAs.length === 0)     score -= 10;
+  score -= highHopCTAs.length * 5;
+  score = Math.max(0, Math.min(100, score));
+  const grade = score >= 85 ? 'A' : score >= 70 ? 'B' : score >= 55 ? 'C' : score >= 40 ? 'D' : 'F';
+
+  return {
+    overall_score: score,
+    grade,
+    phone_quality: {
+      clickable_count:  totalClickablePhones,
+      plain_text_count: totalPlainTextPhones,
+      above_fold:       phonesAboveFold,
+      verdict:          phoneVerdict,
+    },
+    email_quality: {
+      clickable_count:  totalClickableEmails,
+      plain_text_count: totalPlainTextEmails,
+      verdict:          emailVerdict,
+    },
+    above_fold: {
+      has_phone:      (homepageAboveFold?.phone_links?.length ?? 0) > 0,
+      has_email:      (homepageAboveFold?.email_links?.length ?? 0) > 0,
+      has_whatsapp:   (homepageAboveFold?.whatsapp_links?.length ?? 0) > 0,
+      has_cta_button: (homepageAboveFold?.cta_buttons?.length ?? 0) > 0,
+      elements:       homepageAboveFold ?? {},
+    },
+    form_friction: {
+      forms_found:         allForms.length,
+      avg_field_count:     avgFieldCount,
+      avg_required_fields: avgRequiredCount,
+      high_friction_forms: highFrictionForms,
+      verdict:             formFrictionVerdict,
+    },
+    booking_journey: {
+      ctas_found:         allBookingCTAs.length,
+      avg_redirect_hops:  avgRedirectHops,
+      direct_to_platform: directToPlatform,
+      high_hop_ctas:      highHopCTAs.length,
+    },
+    strengths,
+    issues,
+    recommendations,
+  };
+}
+
 async function ctaAuditSite(url) {
   const startTime = Date.now();
 
@@ -1013,7 +1226,8 @@ async function ctaAuditSite(url) {
       social_links: await extractSocialLinks(page, url),
       newsletter: await extractNewsletter(page, url),
       forms: await extractForms(page, url),
-      live_chat: await extractLiveChat(page)
+      live_chat: await extractLiveChat(page),
+      above_fold_ctas: await extractAboveFoldCTAs(page),
     };
 
     pagesData.push(homepageData);
@@ -1038,7 +1252,8 @@ async function ctaAuditSite(url) {
           social_links: await extractSocialLinks(page, contactPageUrl),
           newsletter: await extractNewsletter(page, contactPageUrl),
           forms: await extractForms(page, contactPageUrl),
-          live_chat: await extractLiveChat(page)
+          live_chat: await extractLiveChat(page),
+          above_fold_ctas: await extractAboveFoldCTAs(page),
         };
 
         pagesData.push(contactPageData);
@@ -1057,6 +1272,7 @@ async function ctaAuditSite(url) {
       pages_crawled: pagesCrawled,
       pages: pagesData,
       gtm_summary: gtmSummary,
+      cta_quality: generateCTAQualityReport(pagesData),
       duration_ms: Date.now() - startTime
     };
 
