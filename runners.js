@@ -2056,6 +2056,7 @@ app.post("/run", async (req, res) => {
       "build_gtm_from_audit",       // API-only: run CTA audit then build GTM container from results
       "generate_gtm_payload",       // API-only: return ordered GTM API call sequence ready to execute
       "execute_gtm_payload",        // API-only: accept raw access_token + execute all GTM calls internally
+      "generate_gtm_container",     // API-only: generate downloadable GTM container export JSON from audit
     ].includes(action)
   ) {
     return res.status(400).json({ error: "Unknown action" });
@@ -2433,6 +2434,60 @@ app.post("/run", async (req, res) => {
 
     } catch (err) {
       console.error("❌ execute_gtm_payload error:", err.message);
+      return res.json({ status: "error", error: err.message });
+    }
+  }
+
+  // ── generate_gtm_container: API-only — return downloadable GTM export JSON ──
+  // Returns a fully-populated GTM container export JSON (same format as GTM Admin
+  // → Export Container) that the user can save as a .json file and import via
+  // GTM Admin → Import Container, or push via the GTM API.
+  //
+  // Accepts either audit (pre-computed) or website_url (runs fresh audit).
+  // Optional: container_name (display name in the export), account_id, container_id
+  //           (cosmetic — used in the export metadata, defaults to "0").
+  if (action === "generate_gtm_container") {
+    const {
+      measurement_id,
+      audit,
+      website_url:    auditUrl,
+      container_name: containerName,
+      account_id:     gtmAccountId,
+      container_id:   gtmContainerId,
+    } = req.body;
+
+    if (!measurement_id)     return res.status(400).json({ status: "error", error: "Missing measurement_id" });
+    if (!audit && !auditUrl) return res.status(400).json({ status: "error", error: "Provide either 'audit' (from POST /health/audit) or 'website_url' to run a fresh audit" });
+
+    try {
+      let auditResult = audit;
+      if (!auditResult) {
+        const { ctaAuditSite } = require("./cta-audit.runners");
+        console.log(`🔍 generate_gtm_container: running CTA audit for ${auditUrl}...`);
+        auditResult = await ctaAuditSite(auditUrl);
+        console.log(`✅ Audit complete — ${auditResult.pages?.length ?? 0} pages`);
+      }
+
+      const { generateGTMContainerExport } = require("./gtm-container-generator");
+      const result = generateGTMContainerExport(
+        auditResult,
+        measurement_id,
+        containerName || "AP Tracking Setup",
+        String(gtmAccountId  || "0"),
+        String(gtmContainerId || "0"),
+      );
+
+      console.log(`✅ generate_gtm_container: ${result.summary.tags_count} tags, ${result.summary.triggers_count} triggers`);
+      return res.json({
+        status:         "success",
+        container:      result.export,
+        summary:        result.summary,
+        audit_summary:  auditResult.gtm_summary,
+        pages_crawled:  auditResult.pages_crawled,
+        download_hint:  "Save the 'container' field as a .json file, then import via GTM Admin → Import Container.",
+      });
+    } catch (err) {
+      console.error("❌ generate_gtm_container error:", err.message);
       return res.json({ status: "error", error: err.message });
     }
   }
