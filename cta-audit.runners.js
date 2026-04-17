@@ -326,41 +326,72 @@ async function extractEmails(page, pageUrl) {
 async function extractWhatsApp(page, pageUrl) {
   const whatsapp = await safeEval(page, () => {
     const links = [];
-    const patterns = [
-      /wa\.me\/([0-9]+)/,
-      /api\.whatsapp\.com\/send\?phone=([0-9]+)/,
-      /whatsapp\.com\/send\?phone=([0-9]+)/
-    ];
+    const seenHrefs = new Set();
 
-    document.querySelectorAll('a[href*="wa.me"], a[href*="whatsapp.com"], a[href*="api.whatsapp.com"]').forEach(a => {
-      const href = a.getAttribute('href');
-      let type = null;
-      let number = null;
+    const numberFromStr = (str) => {
+      const m = str.match(/wa\.me\/([0-9]+)/) ||
+                str.match(/phone=([0-9]+)/) ||
+                str.match(/whatsapp:\/\/send\?phone=([0-9]+)/);
+      return m ? m[1] : null;
+    };
 
-      if (href.includes('wa.me')) {
-        type = 'wa.me';
-        const match = href.match(patterns[0]);
-        if (match) number = match[1];
-      } else if (href.includes('api.whatsapp.com') || href.includes('whatsapp.com')) {
-        type = 'api.whatsapp.com';
-        const match = href.match(patterns[1]) || href.match(patterns[2]);
-        if (match) number = match[1];
+    const typeFromStr = (str) => {
+      if (str.includes('wa.me')) return 'wa.me';
+      if (str.includes('api.whatsapp.com') || str.includes('whatsapp.com/send')) return 'api.whatsapp.com';
+      if (str.includes('whatsapp://')) return 'whatsapp://';
+      return null;
+    };
+
+    const isFixed = (el) => {
+      let node = el;
+      while (node && node !== document.body) {
+        const pos = window.getComputedStyle(node).position;
+        if (pos === 'fixed' || pos === 'sticky') return true;
+        node = node.parentElement;
       }
+      return false;
+    };
 
-      if (type && number) {
-        links.push({
-          href,
-          type,
-          number,
-          display_text: a.textContent.trim()
-        });
-      }
+    const pushLink = (href, el) => {
+      const key = href.replace(/\s+/g, '');
+      if (seenHrefs.has(key)) return;
+      seenHrefs.add(key);
+      const type = typeFromStr(href);
+      const number = numberFromStr(href);
+      if (!type) return;
+      links.push({
+        href: key,
+        type,
+        number: number || 'unknown',
+        display_text: (el.textContent || '').trim() || el.getAttribute('aria-label') || '',
+        is_floating: isFixed(el),
+      });
+    };
+
+    // 1. Standard anchor hrefs — wa.me, whatsapp.com, whatsapp:// protocol
+    document.querySelectorAll(
+      'a[href*="wa.me"], a[href*="whatsapp.com"], a[href*="api.whatsapp.com"], a[href*="whatsapp://"]'
+    ).forEach(a => pushLink(a.getAttribute('href') || '', a));
+
+    // 2. Non-anchor elements — div/button/span with onclick, data-href, or data-url
+    //    containing a WhatsApp URL (common in floating button plugins)
+    document.querySelectorAll('[onclick*="wa.me"], [onclick*="whatsapp"], [data-href*="wa.me"], [data-href*="whatsapp"], [data-url*="wa.me"], [data-url*="whatsapp"], [data-link*="wa.me"], [data-link*="whatsapp"]').forEach(el => {
+      if (el.tagName === 'A') return; // already handled above
+      const src = el.getAttribute('onclick') || el.getAttribute('data-href') ||
+                  el.getAttribute('data-url') || el.getAttribute('data-link') || '';
+      const urlMatch = src.match(/https?:\/\/[^\s'")\]]+/);
+      if (urlMatch) pushLink(urlMatch[0], el);
     });
 
-    // Check for WhatsApp widget
-    const hasWidget = !!document.querySelector('script[src*="whatsapp"]') ||
-                     !!window.WhatsAppWidget ||
-                     !!document.querySelector('[class*="whatsapp"], [id*="whatsapp"]');
+    // 3. Widget detection — broader class/id patterns used by popular WP plugins
+    const hasWidget =
+      !!document.querySelector('script[src*="whatsapp"]') ||
+      !!window.WhatsAppWidget ||
+      !!document.querySelector(
+        '[class*="whatsapp"],[id*="whatsapp"],[class*="wts-chat"],[class*="wwa-btn"],' +
+        '[class*="wa-chat"],[class*="wp-whatsapp"],[class*="whatshelp"],' +
+        '[class*="wpwl-"],[id*="wpwl-"],[class*="tawkto-whatsapp"]'
+      );
 
     return { links, has_widget: hasWidget };
   });
@@ -687,26 +718,68 @@ async function extractAboveFoldCTAs(page) {
     const viewportHeight = window.innerHeight;
     const results = { phone_links: [], email_links: [], whatsapp_links: [], cta_buttons: [] };
 
-    const isAboveFold = (el) => {
+    // Fixed/sticky elements are always visible regardless of scroll position —
+    // treat them as always-present CTAs even if their rect.top is near the bottom.
+    const isFloating = (el) => {
+      let node = el;
+      while (node && node !== document.body) {
+        const pos = window.getComputedStyle(node).position;
+        if (pos === 'fixed' || pos === 'sticky') return true;
+        node = node.parentElement;
+      }
+      return false;
+    };
+
+    const isVisibleInFold = (el) => {
       try {
+        if (isFloating(el)) return true; // always on screen
         const rect = el.getBoundingClientRect();
         return rect.top >= 0 && rect.top < viewportHeight && rect.width > 0 && rect.height > 0;
       } catch { return false; }
     };
 
     document.querySelectorAll('a[href^="tel:"]').forEach(a => {
-      if (isAboveFold(a))
-        results.phone_links.push({ text: a.textContent.replace(/\s+/g, ' ').trim(), href: a.getAttribute('href') });
+      if (isVisibleInFold(a))
+        results.phone_links.push({
+          text: a.textContent.replace(/\s+/g, ' ').trim(),
+          href: a.getAttribute('href'),
+          is_floating: isFloating(a),
+        });
     });
 
     document.querySelectorAll('a[href^="mailto:"]').forEach(a => {
-      if (isAboveFold(a))
-        results.email_links.push({ text: a.textContent.replace(/\s+/g, ' ').trim(), href: a.getAttribute('href') });
+      if (isVisibleInFold(a))
+        results.email_links.push({
+          text: a.textContent.replace(/\s+/g, ' ').trim(),
+          href: a.getAttribute('href'),
+          is_floating: isFloating(a),
+        });
     });
 
-    document.querySelectorAll('a[href*="wa.me"], a[href*="whatsapp.com"]').forEach(a => {
-      if (isAboveFold(a))
-        results.whatsapp_links.push({ text: a.textContent.replace(/\s+/g, ' ').trim(), href: a.getAttribute('href') });
+    // WhatsApp — anchor hrefs AND non-anchor elements (div/button floating plugins)
+    const waSeen = new Set();
+    const pushWa = (el, href) => {
+      if (waSeen.has(href)) return;
+      waSeen.add(href);
+      if (isVisibleInFold(el))
+        results.whatsapp_links.push({
+          text: (el.textContent || '').replace(/\s+/g, ' ').trim() || el.getAttribute('aria-label') || '',
+          href,
+          is_floating: isFloating(el),
+        });
+    };
+    document.querySelectorAll(
+      'a[href*="wa.me"], a[href*="whatsapp.com"], a[href*="api.whatsapp.com"], a[href*="whatsapp://"]'
+    ).forEach(a => pushWa(a, a.getAttribute('href') || ''));
+    document.querySelectorAll(
+      '[onclick*="wa.me"],[onclick*="whatsapp"],[data-href*="wa.me"],[data-href*="whatsapp"],' +
+      '[data-url*="wa.me"],[data-url*="whatsapp"],[data-link*="wa.me"],[data-link*="whatsapp"]'
+    ).forEach(el => {
+      if (el.tagName === 'A') return;
+      const src = el.getAttribute('onclick') || el.getAttribute('data-href') ||
+                  el.getAttribute('data-url') || el.getAttribute('data-link') || '';
+      const m = src.match(/https?:\/\/[^\s'")\]]+/);
+      if (m) pushWa(el, m[0]);
     });
 
     const ctaPattern = /\b(book(\s*(now|online|appointment|session|call|a\s*class|a\s*consultation))?|schedule|reserve|get\s*started|enquire(\s*now)?|contact\s*us|call\s*(us|now)|get\s*a?\s*quote|free\s*consultation|request\s*(a?\s*(quote|call|callback)))\b/i;
@@ -715,8 +788,13 @@ async function extractAboveFoldCTAs(page) {
       const href = el.getAttribute('href') || '';
       if (!ctaPattern.test(text)) return;
       if (href.startsWith('tel:') || href.startsWith('mailto:') || href.includes('wa.me')) return;
-      if (isAboveFold(el))
-        results.cta_buttons.push({ text, href: href || null, tag: el.tagName.toLowerCase() });
+      if (isVisibleInFold(el))
+        results.cta_buttons.push({
+          text,
+          href: href || null,
+          tag: el.tagName.toLowerCase(),
+          is_floating: isFloating(el),
+        });
     });
 
     return results;
