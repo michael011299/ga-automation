@@ -1003,7 +1003,7 @@ async function findServicePages(page, baseUrl) {
     (await safeEval(page, () =>
       Array.from(
         document.querySelectorAll(
-          'nav a[href], header a[href], [class*="nav"] a[href], [class*="menu"] a[href], [role="navigation"] a[href], .menu-item a[href]',
+          'nav a[href], header a[href], [class*="nav"] a[href], [class*="menu"] a[href], [role="navigation"] a[href], .menu-item a[href], main a[href], [class*="content"] a[href], [class*="main"] a[href], footer a[href], aside a[href], [class*="sidebar"] a[href], [class*="services"] a[href]',
         ),
       ).map((a) => ({
         href: a.href,
@@ -1057,7 +1057,11 @@ async function findServiceSubPages(page, currentUrl, baseOrigin, alreadySeen) {
 
   const links =
     (await safeEval(page, () =>
-      Array.from(document.querySelectorAll("a[href]")).map((a) => ({
+      Array.from(
+        document.querySelectorAll(
+          'main a[href], [class*="content"] a[href], [class*="services"] a[href], [class*="service"] a[href], [class*="treatment"] a[href], [class*="therapy"] a[href], article a[href], section a[href], .entry-content a[href], [class*="post"] a[href]',
+        ),
+      ).map((a) => ({
         href: a.href,
         text: (a.textContent || "").replace(/\s+/g, " ").trim(),
       })),

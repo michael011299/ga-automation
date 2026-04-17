@@ -23,16 +23,16 @@
 const ALL_PAGES_TRIGGER_ID = "2147479553"; // GTM built-in — always exists
 
 const SOCIAL_TRIGGER_DOMAINS = {
-  "Facebook":    "facebook.com",
-  "Instagram":   "instagram.com",
+  Facebook: "facebook.com",
+  Instagram: "instagram.com",
   "X (Twitter)": "twitter.com",
-  "LinkedIn":    "linkedin.com",
-  "YouTube":     "youtube.com",
-  "TikTok":      "tiktok.com",
-  "Pinterest":   "pinterest.com",
-  "Snapchat":    "snapchat.com",
-  "Threads":     "threads.net",
-  "Trustpilot":  "trustpilot.com",
+  LinkedIn: "linkedin.com",
+  YouTube: "youtube.com",
+  TikTok: "tiktok.com",
+  Pinterest: "pinterest.com",
+  Snapchat: "snapchat.com",
+  Threads: "threads.net",
+  Trustpilot: "trustpilot.com",
 };
 
 // ---------------------------------------------------------------------------
@@ -54,8 +54,8 @@ const COOKIE_BANNER_HTML = `<!-- AP Cookie Banner: replace this comment with you
  * @param {string[]} emailAddresses — raw email strings e.g. ["info@example.com"]
  */
 function buildMakeClickableHTML(phoneNumbers, emailAddresses) {
-  const phonesJson  = JSON.stringify(phoneNumbers.map(n => n.replace(/\D/g, "")));
-  const emailsJson  = JSON.stringify(emailAddresses);
+  const phonesJson = JSON.stringify(phoneNumbers.map((n) => n.replace(/\D/g, "")));
+  const emailsJson = JSON.stringify(emailAddresses);
 
   return `<script>
 (function () {
@@ -143,70 +143,83 @@ function generateGTMContainerExport(audit, measurementId, containerName, account
   const pages = audit.pages || [];
 
   // ── Aggregate audit findings ──────────────────────────────────────────────
-  const hasClickablePhone = pages.some(p => p.phones?.clickable?.length > 0);
-  const hasClickableEmail = pages.some(p => p.emails?.clickable?.length > 0);
-  const hasForms          = pages.some(p => p.forms?.length > 0);
-  const hasWhatsApp       = pages.some(p => p.whatsapp?.links?.length > 0);
+  const hasClickablePhone = pages.some((p) => p.phones?.clickable?.length > 0);
+  const hasClickableEmail = pages.some((p) => p.emails?.clickable?.length > 0);
+  const hasForms = pages.some((p) => p.forms?.length > 0);
+  const hasNewsletter = pages.some((p) => p.newsletter?.length > 0);
+  const hasWhatsApp = pages.some((p) => p.whatsapp?.links?.length > 0);
 
-  const socialPlatforms = [
-    ...new Set(pages.flatMap(p => (p.social_links || []).map(s => s.platform)))
-  ].filter(p => SOCIAL_TRIGGER_DOMAINS[p]);
+  const socialPlatforms = [...new Set(pages.flatMap((p) => (p.social_links || []).map((s) => s.platform)))].filter(
+    (p) => SOCIAL_TRIGGER_DOMAINS[p],
+  );
 
   // Unique plain-text phone numbers for "Make Clickable" tag
   const allClickablePhones = [
-    ...new Set(pages.flatMap(p => (p.phones?.clickable || []).map(ph => ph.number || ph.href?.replace("tel:", "") || "")))
+    ...new Set(
+      pages.flatMap((p) => (p.phones?.clickable || []).map((ph) => ph.number || ph.href?.replace("tel:", "") || "")),
+    ),
   ].filter(Boolean);
   const allPlainTextPhones = [
-    ...new Set(pages.flatMap(p => (p.phones?.plainText || []).map(ph => ph.digits || ph.number || "")))
-  ].filter(n => n && !allClickablePhones.some(c => c.replace(/\D/g, "") === n.replace(/\D/g, "")));
+    ...new Set(pages.flatMap((p) => (p.phones?.plainText || []).map((ph) => ph.digits || ph.number || ""))),
+  ].filter((n) => n && !allClickablePhones.some((c) => c.replace(/\D/g, "") === n.replace(/\D/g, "")));
   const allPhoneNumbers = [...allClickablePhones, ...allPlainTextPhones];
 
   const allEmails = [
-    ...new Set(pages.flatMap(p => [
-      ...(p.emails?.clickable || []).map(e => e.email || e.href?.replace("mailto:", "") || ""),
-      ...(p.emails?.plainText || []).map(e => e.email || ""),
-    ]))
+    ...new Set(
+      pages.flatMap((p) => [
+        ...(p.emails?.clickable || []).map((e) => e.email || e.href?.replace("mailto:", "") || ""),
+        ...(p.emails?.plainText || []).map((e) => e.email || ""),
+      ]),
+    ),
   ].filter(Boolean);
 
+  // Deduplicated location links
+  const locationLinks = pages
+    .flatMap((p) => p.location_links || [])
+    .filter((loc, index, arr) => arr.findIndex((l) => l.href === loc.href) === index);
+
   // Deduplicated booking CTAs
-  const bookingCTAs = pages.flatMap(p => p.booking_ctas || []).filter(c => c.destination_type !== "error" && c.final_url);
+  const bookingCTAs = pages
+    .flatMap((p) => p.booking_ctas || [])
+    .filter((c) => c.destination_type !== "error" && c.final_url);
   const seenBookingKeys = new Set();
-  const dedupedBookingCTAs = bookingCTAs.filter(cta => {
+  const dedupedBookingCTAs = bookingCTAs.filter((cta) => {
     try {
-      const key = cta.destination_type === "booking_platform"
-        ? new URL(cta.final_url).hostname
-        : new URL(cta.final_url).pathname;
+      const key =
+        cta.destination_type === "booking_platform" ? new URL(cta.final_url).hostname : new URL(cta.final_url).pathname;
       if (seenBookingKeys.has(key)) return false;
       seenBookingKeys.add(key);
       return true;
-    } catch { return false; }
+    } catch {
+      return false;
+    }
   });
 
   // ── ID allocators ─────────────────────────────────────────────────────────
   const nextTriggerId = makeIdCounter(10);
-  const nextTagId     = makeIdCounter(100);
+  const nextTagId = makeIdCounter(100);
 
-  const triggers         = [];
-  const tags             = [];
-  const skipped          = [];
+  const triggers = [];
+  const tags = [];
+  const skipped = [];
 
   // Helper — meta object shared across tags/triggers (cosmetic, GTM ignores on import)
   const meta = { accountId, containerId };
 
   // ── Built-in variables ────────────────────────────────────────────────────
   const builtInVariables = [
-    { accountId, containerId, type: "CLICK_URL",     name: "Click URL"     },
-    { accountId, containerId, type: "CLICK_ELEMENT",  name: "Click Element" },
-    { accountId, containerId, type: "CLICK_CLASSES",  name: "Click Classes" },
-    { accountId, containerId, type: "CLICK_ID",       name: "Click ID"      },
-    { accountId, containerId, type: "CLICK_TEXT",     name: "Click Text"    },
-    { accountId, containerId, type: "CLICK_TARGET",   name: "Click Target"  },
-    { accountId, containerId, type: "FORM_ELEMENT",   name: "Form Element"  },
-    { accountId, containerId, type: "FORM_CLASSES",   name: "Form Classes"  },
-    { accountId, containerId, type: "FORM_ID",        name: "Form ID"       },
-    { accountId, containerId, type: "FORM_TARGET",    name: "Form Target"   },
-    { accountId, containerId, type: "FORM_TEXT",      name: "Form Text"     },
-    { accountId, containerId, type: "FORM_URL",       name: "Form URL"      },
+    { accountId, containerId, type: "CLICK_URL", name: "Click URL" },
+    { accountId, containerId, type: "CLICK_ELEMENT", name: "Click Element" },
+    { accountId, containerId, type: "CLICK_CLASSES", name: "Click Classes" },
+    { accountId, containerId, type: "CLICK_ID", name: "Click ID" },
+    { accountId, containerId, type: "CLICK_TEXT", name: "Click Text" },
+    { accountId, containerId, type: "CLICK_TARGET", name: "Click Target" },
+    { accountId, containerId, type: "FORM_ELEMENT", name: "Form Element" },
+    { accountId, containerId, type: "FORM_CLASSES", name: "Form Classes" },
+    { accountId, containerId, type: "FORM_ID", name: "Form ID" },
+    { accountId, containerId, type: "FORM_TARGET", name: "Form Target" },
+    { accountId, containerId, type: "FORM_TEXT", name: "Form Text" },
+    { accountId, containerId, type: "FORM_URL", name: "Form URL" },
   ];
 
   // ── Helper: add LINK trigger ───────────────────────────────────────────────
@@ -217,16 +230,18 @@ function generateGTMContainerExport(audit, measurementId, containerName, account
       triggerId,
       name,
       type: "LINK",
-      filter: [{
-        type: "CONTAINS",
-        parameter: [
-          { type: "TEMPLATE", key: "arg0", value: "{{Click URL}}" },
-          { type: "TEMPLATE", key: "arg1", value: urlContains     },
-        ],
-      }],
-      waitForTags:        { type: "BOOLEAN",  value: "false" },
-      checkValidation:    { type: "BOOLEAN",  value: "false" },
-      waitForTagsTimeout: { type: "TEMPLATE", value: "2000"  },
+      filter: [
+        {
+          type: "CONTAINS",
+          parameter: [
+            { type: "TEMPLATE", key: "arg0", value: "{{Click URL}}" },
+            { type: "TEMPLATE", key: "arg1", value: urlContains },
+          ],
+        },
+      ],
+      waitForTags: { type: "BOOLEAN", value: "false" },
+      checkValidation: { type: "BOOLEAN", value: "false" },
+      waitForTagsTimeout: { type: "TEMPLATE", value: "2000" },
     });
     return triggerId;
   }
@@ -240,7 +255,7 @@ function generateGTMContainerExport(audit, measurementId, containerName, account
       name,
       type: "gaawe",
       parameter: [
-        { type: "TEMPLATE", key: "eventName",           value: eventName    },
+        { type: "TEMPLATE", key: "eventName", value: eventName },
         { type: "TEMPLATE", key: "measurementIdOverride", value: measurementId },
       ],
       firingTriggerId: firingTriggerIds,
@@ -261,8 +276,8 @@ function generateGTMContainerExport(audit, measurementId, containerName, account
     name: "AP G-TAG",
     type: "googtag",
     parameter: [
-      { type: "TEMPLATE", key: "tagId",               value: measurementId },
-      { type: "TEMPLATE", key: "configSettingsTable",  value: ""           },
+      { type: "TEMPLATE", key: "tagId", value: measurementId },
+      { type: "TEMPLATE", key: "configSettingsTable", value: "" },
     ],
     firingTriggerId: [ALL_PAGES_TRIGGER_ID],
   });
@@ -274,8 +289,8 @@ function generateGTMContainerExport(audit, measurementId, containerName, account
     name: "AP Cookie Banner",
     type: "html",
     parameter: [
-      { type: "TEMPLATE", key: "html",           value: COOKIE_BANNER_HTML },
-      { type: "BOOLEAN",  key: "supportDocumentWrite", value: "false"      },
+      { type: "TEMPLATE", key: "html", value: COOKIE_BANNER_HTML },
+      { type: "BOOLEAN", key: "supportDocumentWrite", value: "false" },
     ],
     firingTriggerId: [ALL_PAGES_TRIGGER_ID],
     paused: true,
@@ -289,8 +304,8 @@ function generateGTMContainerExport(audit, measurementId, containerName, account
       name: "AP Make Contact Details Clickable",
       type: "html",
       parameter: [
-        { type: "TEMPLATE", key: "html",               value: buildMakeClickableHTML(allPhoneNumbers, allEmails) },
-        { type: "BOOLEAN",  key: "supportDocumentWrite", value: "false"                                          },
+        { type: "TEMPLATE", key: "html", value: buildMakeClickableHTML(allPhoneNumbers, allEmails) },
+        { type: "BOOLEAN", key: "supportDocumentWrite", value: "false" },
       ],
       firingTriggerId: [ALL_PAGES_TRIGGER_ID],
     });
@@ -318,13 +333,30 @@ function generateGTMContainerExport(audit, measurementId, containerName, account
       triggerId,
       name: "AP Contact Form",
       type: "FORM_SUBMISSION",
-      waitForTags:        { type: "BOOLEAN",  value: "false" },
-      checkValidation:    { type: "BOOLEAN",  value: "false" },
-      waitForTagsTimeout: { type: "TEMPLATE", value: "2000"  },
+      waitForTags: { type: "BOOLEAN", value: "false" },
+      checkValidation: { type: "BOOLEAN", value: "false" },
+      waitForTagsTimeout: { type: "TEMPLATE", value: "2000" },
     });
     addGA4EventTag("AP Contact Form", "contact_form", [triggerId]);
   } else {
     skipped.push("contact_form — no contact forms found on site");
+  }
+
+  // ── Newsletter Form ────────────────────────────────────────────────────────
+  if (hasNewsletter) {
+    const triggerId = nextTriggerId();
+    triggers.push({
+      ...meta,
+      triggerId,
+      name: "AP Newsletter Form",
+      type: "FORM_SUBMISSION",
+      waitForTags: { type: "BOOLEAN", value: "false" },
+      checkValidation: { type: "BOOLEAN", value: "false" },
+      waitForTagsTimeout: { type: "TEMPLATE", value: "2000" },
+    });
+    addGA4EventTag("AP Newsletter Form", "newsletter_signup", [triggerId]);
+  } else {
+    skipped.push("newsletter_signup — no newsletter forms found on site");
   }
 
   // ── WhatsApp ──────────────────────────────────────────────────────────────
@@ -336,23 +368,26 @@ function generateGTMContainerExport(audit, measurementId, containerName, account
       triggerId,
       name: "AP Click WhatsApp",
       type: "LINK",
-      filter: [{
-        type: "MATCHES_CSS_SELECTOR",
-        parameter: [
-          { type: "TEMPLATE", key: "arg0", value: "{{Click URL}}" },
-          { type: "TEMPLATE", key: "arg1", value: "wa.me|api.whatsapp.com|whatsapp://" },
-        ],
-      }, {
-        // Fallback: CONTAINS filter matching the most common domain
-        type: "CONTAINS",
-        parameter: [
-          { type: "TEMPLATE", key: "arg0", value: "{{Click URL}}" },
-          { type: "TEMPLATE", key: "arg1", value: "wa.me"         },
-        ],
-      }],
-      waitForTags:        { type: "BOOLEAN",  value: "false" },
-      checkValidation:    { type: "BOOLEAN",  value: "false" },
-      waitForTagsTimeout: { type: "TEMPLATE", value: "2000"  },
+      filter: [
+        {
+          type: "MATCHES_CSS_SELECTOR",
+          parameter: [
+            { type: "TEMPLATE", key: "arg0", value: "{{Click URL}}" },
+            { type: "TEMPLATE", key: "arg1", value: "wa.me|api.whatsapp.com|whatsapp://" },
+          ],
+        },
+        {
+          // Fallback: CONTAINS filter matching the most common domain
+          type: "CONTAINS",
+          parameter: [
+            { type: "TEMPLATE", key: "arg0", value: "{{Click URL}}" },
+            { type: "TEMPLATE", key: "arg1", value: "wa.me" },
+          ],
+        },
+      ],
+      waitForTags: { type: "BOOLEAN", value: "false" },
+      checkValidation: { type: "BOOLEAN", value: "false" },
+      waitForTagsTimeout: { type: "TEMPLATE", value: "2000" },
     });
     addGA4EventTag("AP Click WhatsApp", "click_whatsapp", [triggerId]);
   } else {
@@ -363,13 +398,10 @@ function generateGTMContainerExport(audit, measurementId, containerName, account
   if (socialPlatforms.length === 0) {
     skipped.push("click_social — no social platform links found on site");
   } else {
-    socialPlatforms.forEach(platform => {
-      const domain    = SOCIAL_TRIGGER_DOMAINS[platform];
-      const safeName  = platform.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase();
-      addLinkTriggerAndTag(
-        `AP Click ${platform}`, domain,
-        `AP Click ${platform}`, `click_social_${safeName}`,
-      );
+    socialPlatforms.forEach((platform) => {
+      const domain = SOCIAL_TRIGGER_DOMAINS[platform];
+      const safeName = platform.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase();
+      addLinkTriggerAndTag(`AP Click ${platform}`, domain, `AP Click ${platform}`, `click_social_${safeName}`);
     });
   }
 
@@ -380,18 +412,17 @@ function generateGTMContainerExport(audit, measurementId, containerName, account
     dedupedBookingCTAs.forEach((cta, i) => {
       try {
         if (cta.destination_type === "booking_platform") {
-          const hostname  = new URL(cta.final_url).hostname;
+          const hostname = new URL(cta.final_url).hostname;
           const safePlatform = (cta.platform || hostname).replace(/[^a-zA-Z0-9]/g, "_").toLowerCase();
           addLinkTriggerAndTag(
-            `AP Book CTA - ${cta.platform || hostname}`, hostname,
-            `AP Click Book - ${cta.platform || hostname}`, `click_booking_${safePlatform}`,
+            `AP Book CTA - ${cta.platform || hostname}`,
+            hostname,
+            `AP Click Book - ${cta.platform || hostname}`,
+            `click_booking_${safePlatform}`,
           );
         } else {
           const path = new URL(cta.final_url).pathname;
-          addLinkTriggerAndTag(
-            `AP Book CTA - ${path}`, path,
-            "AP Click Book CTA", "click_book_cta",
-          );
+          addLinkTriggerAndTag(`AP Book CTA - ${path}`, path, "AP Click Book CTA", "click_book_cta");
         }
       } catch (e) {
         skipped.push(`booking CTA "${cta.link_text}" — ${e.message}`);
@@ -399,39 +430,61 @@ function generateGTMContainerExport(audit, measurementId, containerName, account
     });
   }
 
+  // ── Google Maps Location Links ─────────────────────────────────────────────
+  if (locationLinks.length === 0) {
+    skipped.push("click_location — no Google Maps location links found on site");
+  } else {
+    locationLinks.forEach((loc) => {
+      const safeName = loc.location_name
+        .replace(/[^a-zA-Z0-9\s]/g, "")
+        .trim()
+        .replace(/\s+/g, "_")
+        .toLowerCase();
+      addLinkTriggerAndTag(
+        `AP Click Location - ${loc.location_name}`,
+        loc.href,
+        `AP Click Location - ${loc.location_name}`,
+        `click_location_${safeName}`,
+      );
+    });
+  }
+
   // ── Assemble export JSON ──────────────────────────────────────────────────
-  const exportTime = new Date().toISOString().replace("T", " ").replace(/\.\d+Z$/, "");
+  const exportTime = new Date()
+    .toISOString()
+    .replace("T", " ")
+    .replace(/\.\d+Z$/, "");
 
   const containerExport = {
     exportFormatVersion: 2,
     exportTime,
     containerVersion: {
-      path:               `accounts/${accountId}/containers/${containerId}/versions/0`,
+      path: `accounts/${accountId}/containers/${containerId}/versions/0`,
       accountId,
       containerId,
       containerVersionId: "0",
-      name:               containerName || "AP Tracking Setup",
-      description:        `Generated by AP automation — measurement ID: ${measurementId}`,
+      name: containerName || "AP Tracking Setup",
+      description: `Generated by AP automation — measurement ID: ${measurementId}`,
       container: {
-        path:         `accounts/${accountId}/containers/${containerId}`,
+        path: `accounts/${accountId}/containers/${containerId}`,
         accountId,
         containerId,
-        name:         containerName || "AP Tracking Setup",
+        name: containerName || "AP Tracking Setup",
         usageContext: ["WEB"],
       },
-      tag:             tags,
-      trigger:         triggers,
+      tag: tags,
+      trigger: triggers,
       builtInVariable: builtInVariables,
-      fingerprint:     String(Date.now()),
+      fingerprint: String(Date.now()),
     },
   };
 
   return {
-    export:  containerExport,
+    export: containerExport,
     summary: {
-      measurement_id:  measurementId,
-      tags_count:      tags.length,
-      triggers_count:  triggers.length,
+      measurement_id: measurementId,
+      tags_count: tags.length,
+      triggers_count: triggers.length,
       skipped,
       phones_included: allPhoneNumbers,
       emails_included: allEmails,
