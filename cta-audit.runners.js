@@ -72,10 +72,33 @@ const SOCIAL_PLATFORMS = {
   'snapchat.com': 'Snapchat',
   'threads.net': 'Threads',
   'trustpilot.com': 'Trustpilot',
-  'google.com/maps': 'Google Maps',
-  'g.page': 'Google Maps',
-  'maps.google.com': 'Google Maps',
+  // Google Maps removed — handled separately via extractLocationLinks
 };
+
+// Free consumer email providers — any address at these domains is filtered out
+// (real businesses should use their own domain email)
+const GENERIC_EMAIL_PROVIDERS = new Set([
+  'gmail.com', 'googlemail.com',
+  'yahoo.com', 'yahoo.co.uk', 'yahoo.fr', 'yahoo.de', 'yahoo.es', 'yahoo.com.au',
+  'hotmail.com', 'hotmail.co.uk', 'hotmail.fr',
+  'outlook.com', 'outlook.co.uk',
+  'live.com', 'live.co.uk', 'live.ca',
+  'msn.com', 'icloud.com', 'me.com', 'mac.com',
+  'aol.com', 'protonmail.com', 'proton.me',
+  'mail.com', 'inbox.com', 'yandex.com', 'yandex.ru',
+]);
+
+// Automated/system local-parts — filtered regardless of domain
+const GENERIC_EMAIL_LOCAL = /^(noreply|no[-_.]reply|donotreply|do[-_.]not[-_.]reply|bounce|bounces?|mailer[-_]daemon|postmaster|webmaster|hostmaster|daemon|automated|unsubscribe|subscribe|notification|notifications|alerts?|info-noreply|support-noreply|admin-noreply)$/i;
+
+function isGenericEmail(address) {
+  if (!address || !address.includes('@')) return false;
+  const [local, domain] = address.toLowerCase().split('@');
+  if (!domain) return false;
+  if (GENERIC_EMAIL_PROVIDERS.has(domain)) return true;
+  if (GENERIC_EMAIL_LOCAL.test(local)) return true;
+  return false;
+}
 
 const LIVE_CHAT_DETECTORS = [
   { name: 'Intercom', global: 'Intercom' },
@@ -96,6 +119,19 @@ async function safeEval(page, script) {
   } catch (e) {
     return null;
   }
+}
+
+// Strip leading country code / trunk prefix to get the 9–10 digit subscriber core.
+// Used to match a UK tel: number against the same number in a wa.me link.
+//   447911123456 → 7911123456  (international with 44)
+//   07911123456  → 7911123456  (UK local, strip leading 0)
+//   17145551234  → 7145551234  (North American +1)
+function normalisePhoneCore(digits) {
+  const d = (digits || '').replace(/\D/g, '');
+  if (d.startsWith('44') && d.length >= 11) return d.slice(2);
+  if (d.startsWith('1')  && d.length === 11) return d.slice(1);
+  if (d.startsWith('0')  && d.length >= 10)  return d.slice(1);
+  return d;
 }
 
 async function getBrowser() {
@@ -316,6 +352,9 @@ async function extractEmails(page, pageUrl) {
   });
 
   if (emails) {
+    // Remove free-provider and automated addresses — not the business's own contact info
+    emails.clickable = emails.clickable.filter(e => !isGenericEmail(e.address));
+    emails.plainText = emails.plainText.filter(e => !isGenericEmail(e.address));
     emails.clickable.forEach(email => email.page_url = pageUrl);
     emails.plainText.forEach(email => email.page_url = pageUrl);
   }
@@ -601,15 +640,15 @@ async function extractBookingCTAs(page, context, baseUrl) {
       let gtm_recommendation;
       if (destinationType === 'booking_platform') {
         const hostname = new URL(finalUrl).hostname;
-        gtm_recommendation = `GA4 Event: click_booking — Trigger: Click - Just Links, {{Click URL}} contains "${hostname}"`;
+        gtm_recommendation = `GA4 Event: click_booking | Trigger: Click - Just Links | Filter: Click URL contains "${hostname}"`;
       } else if (destinationType === 'same_site_form') {
         const path = new URL(finalUrl).pathname;
-        gtm_recommendation = `GA4 Event: click_book_cta — Trigger: Click - Just Links on this CTA. Also set up form submission tracking on "${path}"`;
+        gtm_recommendation = `GA4 Event: click_book_cta | Trigger: Click - Just Links on this CTA. Also set up form submission tracking on "${path}"`;
       } else if (destinationType === 'same_site_page') {
         const path = new URL(finalUrl).pathname;
-        gtm_recommendation = `GA4 Event: click_book_cta — Trigger: Click - Just Links, {{Click URL}} contains "${path}"`;
+        gtm_recommendation = `GA4 Event: click_book_cta | Trigger: Click - Just Links | Filter: Click URL contains "${path}"`;
       } else {
-        gtm_recommendation = `GA4 Event: click_book_cta — Trigger: Click - Just Links on booking CTA button (destination: ${finalUrl})`;
+        gtm_recommendation = `GA4 Event: click_book_cta | Trigger: Click - Just Links on booking CTA button | Destination: ${finalUrl}`;
       }
 
       // Only keep CTAs that lead directly to a conversion:
@@ -648,7 +687,7 @@ async function extractBookingCTAs(page, context, baseUrl) {
         destination_type: 'error',
         platform: null,
         error: err.message,
-        gtm_recommendation: 'Could not follow link — check manually',
+        gtm_recommendation: 'Could not follow link. Please check manually.',
       });
     } finally {
       if (newPage) await newPage.close().catch(() => {});
@@ -674,9 +713,7 @@ async function extractSocialLinks(page, pageUrl) {
       'snapchat.com': 'Snapchat',
       'threads.net': 'Threads',
       'trustpilot.com': 'Trustpilot',
-      'google.com/maps': 'Google Maps',
-      'g.page': 'Google Maps',
-      'maps.google.com': 'Google Maps',
+      // Google Maps intentionally excluded — tracked separately via extractLocationLinks
     };
 
     const found = [];
@@ -711,6 +748,195 @@ async function extractSocialLinks(page, pageUrl) {
   }
 
   return socialLinks || [];
+}
+
+// ---------------------------------------------------------------------------
+// Google Maps location links — each unique location gets its own entry so
+// individual GTM triggers can be created per location.
+// ---------------------------------------------------------------------------
+async function extractLocationLinks(page, pageUrl) {
+  const MAPS_PATTERNS = [
+    'google.com/maps',
+    'maps.google.com',
+    'g.page',
+    'goo.gl/maps',
+    'maps.app.goo.gl',
+  ];
+
+  const locations = await safeEval(page, (patterns) => {
+    const found = [];
+    const seenKeys = new Set();
+
+    document.querySelectorAll('a[href]').forEach(a => {
+      const href = (a.getAttribute('href') || '').trim();
+      if (!href.startsWith('http')) return;
+      if (!patterns.some(p => href.includes(p))) return;
+
+      // Deduplicate by the URL without query fragments
+      const key = href.split('#')[0];
+      if (seenKeys.has(key)) return;
+      seenKeys.add(key);
+
+      // Try to extract a human-readable place name from the URL path
+      // e.g. /maps/place/Eiffel+Tower/@48.8584...
+      let locationName = '';
+      const placeMatch = href.match(/\/maps\/place\/([^/@?&]+)/);
+      if (placeMatch) {
+        try { locationName = decodeURIComponent(placeMatch[1].replace(/\+/g, ' ')); } catch {}
+      }
+      // Fall back to the link's visible text or aria-label
+      if (!locationName) {
+        locationName = (a.textContent || '').replace(/\s+/g, ' ').trim() ||
+                       a.getAttribute('aria-label') || '';
+      }
+
+      // Extract lat/lng coords if present (@lat,lng,zoom)
+      let coords = null;
+      const coordsMatch = href.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
+      if (coordsMatch) coords = `${coordsMatch[1]},${coordsMatch[2]}`;
+
+      // Detect place_id=ChIJ... or cid=... for a stable identifier
+      let placeId = null;
+      const placeIdMatch = href.match(/[?&]place_id=([^&]+)/);
+      if (placeIdMatch) placeId = placeIdMatch[1];
+      const cidMatch = href.match(/[?&]cid=([^&]+)/);
+      if (cidMatch && !placeId) placeId = `cid:${cidMatch[1]}`;
+
+      found.push({
+        href,
+        location_name: locationName || 'Google Maps location',
+        coords,
+        place_id: placeId,
+        display_text: (a.textContent || '').replace(/\s+/g, ' ').trim() || a.getAttribute('aria-label') || '',
+        opens_new_tab: a.getAttribute('target') === '_blank',
+      });
+    });
+
+    return found;
+  }, MAPS_PATTERNS);
+
+  if (locations) {
+    locations.forEach(l => (l.page_url = pageUrl));
+  }
+
+  return locations || [];
+}
+
+// ---------------------------------------------------------------------------
+// Service page discovery — finds up to 2 service/treatment pages from the nav.
+// ---------------------------------------------------------------------------
+async function findServicePages(page, baseUrl) {
+  const SERVICE_URL_PATTERN  = /\/(services?|treatments?|therapies|therapists?|what-we-do|solutions|programs?|packages?|specialties|procedures|expertise|offerings|portfolio)(\/|$|\?|#)/i;
+  const SERVICE_TEXT_PATTERN = /^(services?|treatments?|therapies|therapy|what we do|solutions|programs?|packages?|specialties|our\s+work|offerings|how we help|expertise)\s*$/i;
+
+  const links = await safeEval(page, () =>
+    Array.from(document.querySelectorAll(
+      'nav a[href], header a[href], [class*="nav"] a[href], [class*="menu"] a[href], [role="navigation"] a[href]'
+    )).map(a => ({
+      href: a.href,
+      text: (a.textContent || '').replace(/\s+/g, ' ').trim(),
+    }))
+  ) || [];
+
+  let baseOrigin;
+  try { baseOrigin = new URL(baseUrl).origin; } catch { return []; }
+
+  const serviceUrls = [];
+  const seen = new Set();
+  seen.add(baseUrl);
+
+  for (const link of links) {
+    try {
+      const u = new URL(link.href);
+      if (u.origin !== baseOrigin) continue;
+      const canonical = u.origin + u.pathname;
+      if (seen.has(canonical)) continue;
+
+      if (SERVICE_URL_PATTERN.test(u.pathname) || SERVICE_TEXT_PATTERN.test(link.text)) {
+        seen.add(canonical);
+        serviceUrls.push(u.href);
+        if (serviceUrls.length >= 2) break;
+      }
+    } catch { /* skip malformed */ }
+  }
+
+  return serviceUrls;
+}
+
+// ---------------------------------------------------------------------------
+// Form type detection — runs on the current page to identify iframe-embedded
+// forms and multi-stage form wizards, used for the SayHello viability check.
+// ---------------------------------------------------------------------------
+async function detectPageFormFeatures(page) {
+  return await safeEval(page, () => {
+    // ── Multi-stage form indicators ──────────────────────────────────────────
+    const MULTI_STAGE_SELECTORS = [
+      '[class*="multi-step"]', '[class*="multistep"]', '[class*="form-step"]',
+      '[class*="form-wizard"]', '[class*="wizard"]', '[class*="step-nav"]',
+      '[class*="progress-step"]', '[class*="steps-container"]',
+      '[data-step]', '[data-page]', '[data-form-step]', '[data-wizard]',
+    ];
+    const hasMultiStageClass = MULTI_STAGE_SELECTORS.some(sel => !!document.querySelector(sel));
+
+    // "Next" or "Back" buttons inside a form are a strong multi-stage signal
+    const hasNextBack = Array.from(
+      document.querySelectorAll('form button, form input[type="button"], form input[type="submit"]')
+    ).some(b => /\b(next\s*step|back|previous|continue\s*to)\b/i.test(b.textContent || b.value || ''));
+
+    const isMultiStage = hasMultiStageClass || hasNextBack;
+
+    // ── Iframe form providers ────────────────────────────────────────────────
+    const FORM_IFRAME_HOSTS = [
+      'typeform.com', 'jotform.com', 'wufoo.com', 'formstack.com',
+      'paperform.co', '123formbuilder.com', 'formsite.com',
+      'hsforms.com', 'hbspt', 'forms.hubspot.com',
+    ];
+    const iframeProviders = [];
+    document.querySelectorAll('iframe[src]').forEach(iframe => {
+      const src = (iframe.getAttribute('src') || '').toLowerCase();
+      FORM_IFRAME_HOSTS.forEach(host => {
+        if (src.includes(host) && !iframeProviders.includes(host)) {
+          iframeProviders.push(host);
+        }
+      });
+    });
+
+    return {
+      is_multi_stage:    isMultiStage,
+      has_iframe_forms:  iframeProviders.length > 0,
+      iframe_providers:  iframeProviders,
+    };
+  }) || { is_multi_stage: false, has_iframe_forms: false, iframe_providers: [] };
+}
+
+// ---------------------------------------------------------------------------
+// Geographic signals — scanned from the page for the SayHello viability check.
+// ---------------------------------------------------------------------------
+async function extractGeoSignals(page) {
+  return await safeEval(page, () => {
+    const text = (document.body ? document.body.innerText : '').substring(0, 12000);
+
+    let hreflangUK = false;
+    let hreflangNA = false;
+    document.querySelectorAll('link[hreflang], [hreflang]').forEach(el => {
+      const lang = (el.getAttribute('hreflang') || '').toLowerCase();
+      if (lang.includes('gb') || lang.includes('uk')) hreflangUK = true;
+      if (lang.includes('us') || lang.includes('ca')) hreflangNA = true;
+    });
+
+    // Currency symbols
+    const hasGBP    = /£/.test(text);
+    const hasUSD    = /\$\d/.test(text);
+
+    // UK postcode (rough: 1-2 letters + 1-2 digits + space + digit + 2 letters)
+    const hasUKPostcode = /\b[A-Z]{1,2}\d{1,2}[A-Z]?\s?\d[A-Z]{2}\b/.test(text);
+
+    // Country/city mentions
+    const ukMention = /\b(United Kingdom|England|Scotland|Wales|Northern Ireland|Great Britain|London|Manchester|Birmingham|Edinburgh|Dublin)\b/i.test(text);
+    const naMention = /\b(United States|USA|Canada|New York|Los Angeles|Chicago|Toronto|Vancouver|San Francisco)\b/i.test(text);
+
+    return { hreflangUK, hreflangNA, hasGBP, hasUSD, hasUKPostcode, ukMention, naMention };
+  }) || {};
 }
 
 async function extractAboveFoldCTAs(page) {
@@ -1090,43 +1316,52 @@ async function generateGTMSummary(pageData) {
     (page.social_links || []).forEach(s => socialPlatformsSeen.add(s.platform));
   });
 
+  // Deduplicated Google Maps locations across all pages (by href)
+  const locationMap = new Map();
+  pageData.forEach(page => {
+    (page.location_links || []).forEach(loc => {
+      if (!locationMap.has(loc.href)) locationMap.set(loc.href, loc);
+    });
+  });
+  const uniqueLocations = [...locationMap.values()];
+
   // Phone tracking
   if (totalClickablePhones > 0) {
-    tagsToCreate.push(`GA4 Event: click_call — Trigger: Click - Just Links, {{Click URL}} contains tel:`);
+    tagsToCreate.push(`GA4 Event: click_call | Trigger: Click - Just Links | Filter: Click URL contains "tel:"`);
   }
   if (totalPlainTextPhones > 0) {
-    fixesNeeded.push(`${totalPlainTextPhones} phone number(s) are plain text — wrap in <a href='tel:...'> to enable tracking`);
+    fixesNeeded.push(`${totalPlainTextPhones} phone number(s) are plain text. Wrap in <a href="tel:..."> to make them clickable and trackable.`);
   }
 
   // Email tracking
   if (totalClickableEmails > 0) {
-    tagsToCreate.push(`GA4 Event: click_email — Trigger: Click - Just Links, {{Click URL}} contains mailto:`);
+    tagsToCreate.push(`GA4 Event: click_email | Trigger: Click - Just Links | Filter: Click URL contains "mailto:"`);
   }
   if (totalPlainTextEmails > 0) {
-    fixesNeeded.push(`${totalPlainTextEmails} email address(es) are plain text — wrap in <a href='mailto:...'> to enable tracking`);
+    fixesNeeded.push(`${totalPlainTextEmails} email address(es) are plain text. Wrap in <a href="mailto:..."> to make them trackable.`);
   }
 
   // WhatsApp tracking
   if (totalWhatsAppLinks > 0) {
-    tagsToCreate.push(`GA4 Event: click_whatsapp — Trigger: Click - Just Links, {{Click URL}} contains wa.me OR whatsapp.com`);
+    tagsToCreate.push(`GA4 Event: click_whatsapp | Trigger: Click - Just Links | Filter: Click URL contains "wa.me" or "whatsapp.com"`);
   }
 
   // Booking links tracking
   if (totalBookingLinks > 0) {
     const platforms = [...new Set(pageData.flatMap(p => p.booking_links.map(b => b.domain)))];
     platforms.forEach(platform => {
-      tagsToCreate.push(`GA4 Event: click_booking_${platform.replace('.', '_')} — Trigger: Click - Just Links, {{Click URL}} contains ${platform}`);
+      tagsToCreate.push(`GA4 Event: click_booking_${platform.replace('.', '_')} | Trigger: Click - Just Links | Filter: Click URL contains "${platform}"`);
     });
   }
 
   // Form tracking
   if (totalForms > 0) {
-    tagsToCreate.push(`GA4 Event: form_submit_contact — Trigger: Form submission on contact forms`);
+    tagsToCreate.push(`GA4 Event: form_submit_contact | Trigger: Form Submission on contact forms`);
   }
 
   // Newsletter tracking
   if (totalNewsletterForms > 0) {
-    tagsToCreate.push(`GA4 Event: form_submit_newsletter — Trigger: Form submission on newsletter forms`);
+    tagsToCreate.push(`GA4 Event: form_submit_newsletter | Trigger: Form Submission on newsletter forms`);
   }
 
   // Booking CTA tracking
@@ -1136,17 +1371,27 @@ async function generateGTMSummary(pageData) {
     const nonPlatformCTAs = allBookingCTAs.filter(c => c.destination_type !== 'booking_platform' && c.destination_type !== 'error');
     const platformNames = [...new Set(platformCTAs.map(c => c.platform).filter(Boolean))];
     platformNames.forEach(p => {
-      tagsToCreate.push(`GA4 Event: click_booking_cta — Destination: ${p}. Trigger: Click - Just Links on "${p}" CTA buttons`);
+      tagsToCreate.push(`GA4 Event: click_booking_cta | Destination: ${p} | Trigger: Click - Just Links on "${p}" CTA buttons`);
     });
     if (nonPlatformCTAs.length > 0) {
-      tagsToCreate.push(`GA4 Event: click_book_cta — Trigger: Click - Just Links on booking CTA buttons (see booking_ctas in audit for per-link GTM recommendations)`);
+      tagsToCreate.push(`GA4 Event: click_book_cta | Trigger: Click - Just Links on booking CTA buttons (see booking_ctas in audit for per-link GTM details)`);
     }
   }
 
   // Social link tracking
   if (socialPlatformsSeen.size > 0) {
     [...socialPlatformsSeen].forEach(platform => {
-      tagsToCreate.push(`GA4 Event: click_social_${platform.toLowerCase().replace(/[^a-z0-9]/g, '_')} — Trigger: Click - Just Links, {{Click URL}} contains ${platform}`);
+      tagsToCreate.push(`GA4 Event: click_social_${platform.toLowerCase().replace(/[^a-z0-9]/g, '_')} | Trigger: Click - Just Links | Filter: Click URL contains "${platform}"`);
+    });
+  }
+
+  // Google Maps location tracking - one trigger and tag per unique location
+  if (uniqueLocations.length > 0) {
+    uniqueLocations.forEach(loc => {
+      const safeName = loc.location_name.replace(/[^a-zA-Z0-9\s]/g, '').trim().replace(/\s+/g, '_').toLowerCase();
+      tagsToCreate.push(
+        `GA4 Event: click_location_${safeName} | Trigger: Click - Just Links | Filter: Click URL contains "${loc.href}" | Location: "${loc.location_name}"`
+      );
     });
   }
 
@@ -1154,11 +1399,16 @@ async function generateGTMSummary(pageData) {
   const liveChatServices = pageData[0]?.live_chat || [];
   liveChatServices.forEach(service => {
     if (['Intercom', 'Drift', 'HubSpot Chat'].includes(service.name)) {
-      warnings.push(`${service.name} live chat detected — already has own analytics`);
+      warnings.push(`${service.name} live chat detected. This platform includes its own analytics so additional GA4 event tracking is not required.`);
     }
   });
 
-  return { tags_to_create: tagsToCreate, fixes_needed: fixesNeeded, warnings };
+  return {
+    tags_to_create:   tagsToCreate,
+    fixes_needed:     fixesNeeded,
+    warnings,
+    location_links:   uniqueLocations,
+  };
 }
 
 function generateCTAQualityReport(pagesData) {
@@ -1182,25 +1432,44 @@ function generateCTAQualityReport(pagesData) {
   const totalPlainTextPhones  = uniquePlainTextDigits.size;
   const phonesAboveFold = pagesData.some(p => (p.above_fold_ctas?.phone_links?.length ?? 0) > 0);
 
+  // Identify which clickable phone numbers are also the WhatsApp number
+  // (same subscriber digits) — these are dual-purpose CTAs, not separate contacts.
+  const waPhoneCoresAll = new Set(
+    pagesData.flatMap(p => (p.whatsapp?.links || [])
+      .map(w => normalisePhoneCore(w.number || ''))
+      .filter(Boolean)
+    )
+  );
+  const sharedPhoneNumbers = [...uniqueClickableNumbers].filter(n =>
+    waPhoneCoresAll.has(normalisePhoneCore(n))
+  );
+  const independentClickable = totalClickablePhones - sharedPhoneNumbers.length;
+
   let phoneVerdict = 'none';
   if (totalClickablePhones > 0 && totalPlainTextPhones === 0) {
     phoneVerdict = 'good';
-    strengths.push('All phone numbers are clickable — trackable and tappable on mobile');
+    strengths.push('All phone numbers are clickable. They are trackable in GA4 and tappable on mobile.');
+    if (sharedPhoneNumbers.length > 0) {
+      strengths.push(`${sharedPhoneNumbers.length} phone number(s) double as a WhatsApp contact. These are dual-purpose CTAs.`);
+    }
   } else if (totalClickablePhones > 0 && totalPlainTextPhones > 0) {
     phoneVerdict = 'partial';
-    issues.push(`${totalPlainTextPhones} plain-text phone number(s) alongside ${totalClickablePhones} clickable — plain-text ones are not trackable or tappable on mobile`);
-    recommendations.push('Wrap remaining plain-text phone numbers in <a href="tel:..."> tags');
+    issues.push(`${totalPlainTextPhones} phone number(s) are displayed as plain text alongside ${totalClickablePhones} clickable number(s). Plain-text numbers cannot be tracked or tapped on mobile.`);
+    recommendations.push('Wrap remaining plain-text phone numbers in <a href="tel:..."> tags.');
+    if (sharedPhoneNumbers.length > 0) {
+      strengths.push(`${sharedPhoneNumbers.length} phone number(s) double as a WhatsApp contact. These are dual-purpose CTAs.`);
+    }
   } else if (totalPlainTextPhones > 0) {
     phoneVerdict = 'poor';
-    issues.push(`${totalPlainTextPhones} phone number(s) are plain text — not clickable on mobile and not trackable in GA4`);
-    recommendations.push('Wrap all phone numbers in <a href="tel:..."> tags');
+    issues.push(`${totalPlainTextPhones} phone number(s) are plain text. They cannot be clicked on mobile and cannot be tracked in GA4.`);
+    recommendations.push('Wrap all phone numbers in <a href="tel:..."> tags.');
   }
 
   if (phonesAboveFold) {
-    strengths.push('Phone number is visible in the first fold — immediately accessible to visitors');
+    strengths.push('A phone number is visible above the fold. Visitors can see it without scrolling.');
   } else if (totalClickablePhones > 0 || totalPlainTextPhones > 0) {
-    issues.push('Phone number is not visible above the fold — users must scroll to find it');
-    recommendations.push('Move phone number to the header or hero section so it is immediately visible');
+    issues.push('No phone number is visible above the fold. Visitors must scroll down to find contact details.');
+    recommendations.push('Move the phone number to the header or hero section so it is immediately visible on arrival.');
   }
 
   // --- Email accessibility ---
@@ -1210,15 +1479,15 @@ function generateCTAQualityReport(pagesData) {
   let emailVerdict = 'none';
   if (totalClickableEmails > 0 && totalPlainTextEmails === 0) {
     emailVerdict = 'good';
-    strengths.push('Email addresses are clickable mailto: links — trackable in GA4');
+    strengths.push('All email addresses are clickable mailto: links. They are trackable in GA4.');
   } else if (totalClickableEmails > 0 && totalPlainTextEmails > 0) {
     emailVerdict = 'partial';
-    issues.push(`${totalPlainTextEmails} plain-text email address(es) found alongside clickable ones — plain-text ones are not trackable`);
-    recommendations.push('Wrap plain-text email addresses in <a href="mailto:..."> tags');
+    issues.push(`${totalPlainTextEmails} email address(es) are displayed as plain text alongside clickable ones. Plain-text emails cannot be tracked.`);
+    recommendations.push('Wrap plain-text email addresses in <a href="mailto:..."> tags.');
   } else if (totalPlainTextEmails > 0) {
     emailVerdict = 'poor';
-    issues.push(`${totalPlainTextEmails} email address(es) are plain text — not clickable or trackable`);
-    recommendations.push('Wrap all email addresses in <a href="mailto:..."> tags');
+    issues.push(`${totalPlainTextEmails} email address(es) are plain text. They are not clickable or trackable in GA4.`);
+    recommendations.push('Wrap all email addresses in <a href="mailto:..."> tags.');
   }
 
   // --- Above the fold ---
@@ -1273,10 +1542,10 @@ function generateCTAQualityReport(pagesData) {
     : 0;
 
   if (aboveFoldCount > 0) {
-    strengths.push(`${aboveFoldCount} CTA(s) visible above the fold on the homepage — visitors see them immediately`);
+    strengths.push(`${aboveFoldCount} CTA(s) are visible above the fold on the homepage. Visitors see them without scrolling.`);
   } else {
-    issues.push('No CTAs (phone, email, booking button) are visible above the fold on the homepage');
-    recommendations.push('Add a prominent call-to-action (e.g. "Book Now" button or phone number) in the hero section');
+    issues.push('No CTAs (phone number, email, or booking button) are visible above the fold on the homepage.');
+    recommendations.push('Add a prominent call-to-action such as a "Book Now" button or phone number in the hero section.');
   }
 
   // --- Form friction ---
@@ -1289,15 +1558,15 @@ function generateCTAQualityReport(pagesData) {
   if (allForms.length > 0) {
     if (highFrictionForms > 0) {
       formFrictionVerdict = 'high';
-      issues.push(`${highFrictionForms} form(s) have more than 6 fields — high friction, likely reducing conversions`);
-      recommendations.push('Reduce contact forms to 4 fields or fewer (name, phone or email, message, submit)');
+      issues.push(`${highFrictionForms} form(s) have more than 6 fields. This is high friction and is likely to reduce conversions.`);
+      recommendations.push('Reduce contact forms to 4 fields or fewer: name, phone or email, message, and a submit button.');
     } else if (avgFieldCount > 4) {
       formFrictionVerdict = 'medium';
-      issues.push(`Contact forms average ${avgFieldCount} fields — moderate friction for users`);
-      recommendations.push('Consider trimming form fields to improve conversion rate');
+      issues.push(`Contact forms average ${avgFieldCount} fields. This is moderate friction for users.`);
+      recommendations.push('Consider trimming form fields to improve conversion rate.');
     } else {
       formFrictionVerdict = 'low';
-      strengths.push(`Contact forms are concise (avg ${avgFieldCount} fields) — low friction for users`);
+      strengths.push(`Contact forms are concise with an average of ${avgFieldCount} fields. This is low friction for users.`);
     }
   }
 
@@ -1316,22 +1585,22 @@ function generateCTAQualityReport(pagesData) {
     : null;
 
   if (allBookingCTAs.length === 0) {
-    issues.push('No booking CTAs detected on the site — visitors may not know how to book');
-    recommendations.push('Add a visible "Book Now" or "Schedule" button linking directly to your booking system');
+    issues.push('No booking CTAs were detected on the site. Visitors may not know how to book.');
+    recommendations.push('Add a visible "Book Now" or "Schedule" button that links directly to your booking system.');
   } else if (directToPlatform > 0) {
-    strengths.push(`${directToPlatform} booking CTA(s) link directly to a booking platform — minimal friction`);
+    strengths.push(`${directToPlatform} booking CTA(s) link directly to a booking platform. This is minimal friction for the user.`);
   }
 
   if (minClicksToBook !== null && minClicksToBook > 1) {
-    issues.push(`Booking requires at least ${minClicksToBook} clicks from the page — consider adding a direct booking CTA higher up`);
-    recommendations.push('Add a direct "Book Now" link to your booking platform in the header or hero section');
+    issues.push(`Booking requires at least ${minClicksToBook} clicks from the page. Consider adding a direct booking CTA higher up the page.`);
+    recommendations.push('Add a direct "Book Now" link to your booking platform in the header or hero section.');
   } else if (minClicksToBook === 1) {
-    strengths.push('Booking is reachable in 1 click from at least one page CTA');
+    strengths.push('Booking is reachable in 1 click from at least one CTA on the page.');
   }
 
   if (highHopCTAs.length > 0) {
-    issues.push(`${highHopCTAs.length} booking CTA(s) pass through multiple redirects before reaching the destination — adds load time and drop-off risk`);
-    recommendations.push('Update booking CTA links to point directly to the final booking URL to reduce redirects');
+    issues.push(`${highHopCTAs.length} booking CTA(s) pass through multiple redirects before reaching the destination. This adds load time and increases drop-off risk.`);
+    recommendations.push('Update booking CTA links to point directly to the final booking URL to reduce the number of redirects.');
   }
 
   // --- Overall score ---
@@ -1353,10 +1622,12 @@ function generateCTAQualityReport(pagesData) {
     overall_score: score,
     grade,
     phone_quality: {
-      unique_clickable:  totalClickablePhones,
-      unique_plain_text: totalPlainTextPhones,
-      above_fold:        phonesAboveFold,
-      verdict:           phoneVerdict,
+      unique_clickable:       totalClickablePhones,
+      unique_plain_text:      totalPlainTextPhones,
+      independent_clickable:  independentClickable,
+      shared_with_whatsapp:   sharedPhoneNumbers,
+      above_fold:             phonesAboveFold,
+      verdict:                phoneVerdict,
     },
     email_quality: {
       clickable_count:  totalClickableEmails,
@@ -1390,6 +1661,181 @@ function generateCTAQualityReport(pagesData) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// SayHello viability check
+// Determines whether a site is a viable SayHello candidate based on four
+// binary pass/fail conditions — all four must pass for the site to be viable.
+// ---------------------------------------------------------------------------
+function generateSayHelloViability(pagesData, siteUrl) {
+  // ── 1. Multi-stage forms — must be FALSE (no multi-stage) ─────────────────
+  const multiStagePage = pagesData.find(p => p.form_features?.is_multi_stage);
+  const hasMultiStageForms = !!multiStagePage;
+
+  // ── 2. Forms must be native HTML, not iframes ─────────────────────────────
+  const iframePage = pagesData.find(p =>
+    p.form_features?.has_iframe_forms ||
+    (p.booking_links || []).some(b => b.type === 'embedded_iframe')
+  );
+  const hasIframeForms = !!iframePage;
+  const iframeProviders = [
+    ...new Set(
+      pagesData.flatMap(p => [
+        ...(p.form_features?.iframe_providers || []),
+        ...(p.booking_links || []).filter(b => b.type === 'embedded_iframe').map(b => b.platform || b.domain),
+      ])
+    ),
+  ];
+
+  // ── 3. Phone numbers — ≤4 unique and no 08xx / 03xx numbers ──────────────
+  const allClickableNums = new Set(
+    pagesData.flatMap(p => (p.phones?.clickable || []).map(ph => ph.number))
+  );
+  const allPlainDigits = new Set(
+    pagesData.flatMap(p => (p.phones?.plainText || []).map(ph => ph.digits))
+  );
+  // Don't double-count plain-text instances of already-clickable numbers
+  allClickableNums.forEach(n => allPlainDigits.delete(n));
+  const uniquePhoneCount = allClickableNums.size + allPlainDigits.size;
+
+  // Detect 08xx or 03xx (premium rate / non-geographic / public-service numbers).
+  // Normalise to local UK format first (strip +44 / 0044 → leading 0).
+  const problematicPhones = [
+    ...pagesData.flatMap(p => [
+      ...(p.phones?.clickable  || []).map(ph => ph.number),
+      ...(p.phones?.plainText  || []).map(ph => ph.digits),
+    ]),
+  ].filter(n => {
+    const digits = (n || '').replace(/\D/g, '');
+    const local  = digits.startsWith('44') ? '0' + digits.slice(2)
+                 : digits.startsWith('0')  ? digits
+                 : digits;
+    return /^0[38]/.test(local);
+  });
+
+  const phoneCountOk       = uniquePhoneCount <= 4;
+  const noProblematicNums  = problematicPhones.length === 0;
+  const phonesOk           = phoneCountOk && noProblematicNums;
+
+  // ── 4. Geography — GB / Northern Ireland or North America ─────────────────
+  let geoScore = { uk: 0, na: 0 };
+
+  // Domain TLD signals (highest weight)
+  try {
+    const hostname = new URL(siteUrl).hostname.toLowerCase();
+    if (/\.(co\.uk|org\.uk|me\.uk|net\.uk|uk)$/.test(hostname)) geoScore.uk += 5;
+    if (/\.ca$/.test(hostname)) geoScore.na += 5;
+    if (/\.(us)$/.test(hostname)) geoScore.na += 5;
+  } catch {}
+
+  // Aggregate page-level geo signals
+  pagesData.forEach(p => {
+    const s = p.geo_signals || {};
+    if (s.hreflangUK)       geoScore.uk += 3;
+    if (s.hreflangNA)       geoScore.na += 3;
+    if (s.hasGBP)           geoScore.uk += 2;
+    if (s.hasUSD)           geoScore.na += 1;
+    if (s.hasUKPostcode)    geoScore.uk += 3;
+    if (s.ukMention)        geoScore.uk += 2;
+    if (s.naMention)        geoScore.na += 2;
+  });
+
+  // Phone number format signals
+  pagesData.flatMap(p => [
+    ...(p.phones?.clickable  || []).map(ph => ph.number),
+    ...(p.phones?.plainText  || []).map(ph => ph.digits),
+  ]).forEach(n => {
+    const d = (n || '').replace(/\D/g, '');
+    if (d.startsWith('44') || (d.startsWith('0') && d.length >= 10 && d.length <= 11)) geoScore.uk += 1;
+    if (d.startsWith('1') && d.length === 11) geoScore.na += 1;
+  });
+
+  const isGB = geoScore.uk >= 3;
+  const isNA = geoScore.na >= 3;
+  const geoOk = isGB || isNA;
+
+  // ── Assemble result ───────────────────────────────────────────────────────
+  const checks = {
+    single_stage_forms: {
+      pass:   !hasMultiStageForms,
+      label:  'No multi-stage forms',
+      detail: hasMultiStageForms
+        ? `Multi-stage form wizard detected on: ${multiStagePage.url}`
+        : 'All forms appear to be single-stage',
+    },
+    native_forms: {
+      pass:   !hasIframeForms,
+      label:  'Forms are native HTML (not iframes)',
+      detail: hasIframeForms
+        ? `Iframe-based form(s) detected: ${iframeProviders.join(', ')} — on: ${iframePage.url}`
+        : 'No iframe-embedded form providers found',
+    },
+    phone_numbers_ok: {
+      pass:   phonesOk,
+      label:  '≤4 unique phone numbers and no 08xx/03xx numbers',
+      detail: !phoneCountOk
+        ? `${uniquePhoneCount} unique phone numbers found (max 4 allowed)`
+        : !noProblematicNums
+        ? `Found 08xx/03xx number(s): ${[...new Set(problematicPhones)].join(', ')}`
+        : `${uniquePhoneCount} unique phone number(s) — all OK`,
+    },
+    geography_ok: {
+      pass:   geoOk,
+      label:  'Based in GB, Northern Ireland, or North America',
+      detail: geoOk
+        ? isGB ? `Appears to be GB/Northern Ireland-based (confidence: ${geoScore.uk})`
+               : `Appears to be North America-based (confidence: ${geoScore.na})`
+        : `Could not confirm GB or North American location (UK score: ${geoScore.uk}, NA score: ${geoScore.na})`,
+    },
+  };
+
+  const allPass = Object.values(checks).every(c => c.pass);
+  const failReasons = Object.values(checks).filter(c => !c.pass).map(c => c.detail);
+
+  return {
+    viable: allPass,
+    verdict: allPass ? 'VIABLE: Meets all SayHello criteria' : `NOT VIABLE: ${failReasons.length} condition(s) failed`,
+    checks,
+    fail_reasons: failReasons,
+  };
+}
+
+// Helper: extract all data from a single already-loaded page.
+// Shared between homepage, contact, and service page crawls.
+async function extractPageData(page, pageUrl, label, context) {
+  const phones  = await extractPhones(page, pageUrl);
+  const whatsapp = await extractWhatsApp(page, pageUrl);
+
+  // Cross-reference: mark phone numbers that are also used in a WhatsApp link.
+  // Normalise both sides to a stripped subscriber core for reliable matching.
+  const waPhoneCores = new Set(
+    (whatsapp.links || [])
+      .map(w => normalisePhoneCore(w.number || ''))
+      .filter(Boolean)
+  );
+  [...(phones.clickable || []), ...(phones.plainText || [])].forEach(ph => {
+    const core = normalisePhoneCore(ph.number || ph.digits || '');
+    ph.also_on_whatsapp = waPhoneCores.has(core) && core.length >= 9;
+  });
+
+  return {
+    url:             pageUrl,
+    label,
+    phones,
+    emails:          await extractEmails(page, pageUrl),
+    whatsapp,
+    location_links:  await extractLocationLinks(page, pageUrl),
+    booking_links:   await extractBookingLinks(page, pageUrl),
+    booking_ctas:    await extractBookingCTAs(page, context, pageUrl),
+    social_links:    await extractSocialLinks(page, pageUrl),
+    newsletter:      await extractNewsletter(page, pageUrl),
+    forms:           await extractForms(page, pageUrl),
+    form_features:   await detectPageFormFeatures(page),
+    live_chat:       await extractLiveChat(page),
+    above_fold_ctas: await extractAboveFoldCTAs(page),
+    geo_signals:     await extractGeoSignals(page),
+  };
+}
+
 async function ctaAuditSite(url) {
   const startTime = Date.now();
 
@@ -1400,9 +1846,7 @@ async function ctaAuditSite(url) {
     });
 
     await context.route('**/*', async route => {
-      const request = route.request();
-      const resourceType = request.resourceType();
-
+      const resourceType = route.request().resourceType();
       if (['image', 'media', 'font'].includes(resourceType)) {
         await route.abort();
       } else {
@@ -1414,74 +1858,60 @@ async function ctaAuditSite(url) {
     const pagesCrawled = [];
     const pagesData = [];
 
-    // Load homepage
+    // ── Homepage ──────────────────────────────────────────────────────────────
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
     await page.waitForLoadState('load', { timeout: 5000 }).catch(() => {});
-
     await acceptCookieConsent(page);
-
     pagesCrawled.push(url);
 
-    // Extract data from homepage
-    const homepageData = {
-      url,
-      label: 'homepage',
-      phones: await extractPhones(page, url),
-      emails: await extractEmails(page, url),
-      whatsapp: await extractWhatsApp(page, url),
-      booking_links: await extractBookingLinks(page, url),
-      booking_ctas: await extractBookingCTAs(page, context, url),
-      social_links: await extractSocialLinks(page, url),
-      newsletter: await extractNewsletter(page, url),
-      forms: await extractForms(page, url),
-      live_chat: await extractLiveChat(page),
-      above_fold_ctas: await extractAboveFoldCTAs(page),
-    };
+    // Discover contact + service pages while we're on the homepage
+    const [contactPageUrl, servicePageUrls] = await Promise.all([
+      findContactPageUrl(page, url),
+      findServicePages(page, url),
+    ]);
 
-    pagesData.push(homepageData);
+    pagesData.push(await extractPageData(page, url, 'homepage', context));
 
-    // Find and crawl contact page
-    const contactPageUrl = await findContactPageUrl(page, url);
+    // ── Contact page ──────────────────────────────────────────────────────────
     if (contactPageUrl && contactPageUrl !== url) {
       try {
         await page.goto(contactPageUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
         await page.waitForLoadState('load', { timeout: 5000 }).catch(() => {});
-
         pagesCrawled.push(contactPageUrl);
-
-        const contactPageData = {
-          url: contactPageUrl,
-          label: 'contact',
-          phones: await extractPhones(page, contactPageUrl),
-          emails: await extractEmails(page, contactPageUrl),
-          whatsapp: await extractWhatsApp(page, contactPageUrl),
-          booking_links: await extractBookingLinks(page, contactPageUrl),
-          booking_ctas: await extractBookingCTAs(page, context, contactPageUrl),
-          social_links: await extractSocialLinks(page, contactPageUrl),
-          newsletter: await extractNewsletter(page, contactPageUrl),
-          forms: await extractForms(page, contactPageUrl),
-          live_chat: await extractLiveChat(page),
-          above_fold_ctas: await extractAboveFoldCTAs(page),
-        };
-
-        pagesData.push(contactPageData);
+        pagesData.push(await extractPageData(page, contactPageUrl, 'contact', context));
       } catch (e) {
         console.error('Failed to crawl contact page:', e.message);
       }
     }
 
+    // ── Service pages (up to 2) ───────────────────────────────────────────────
+    for (const serviceUrl of servicePageUrls) {
+      if (pagesCrawled.includes(serviceUrl)) continue;
+      try {
+        await page.goto(serviceUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+        await page.waitForLoadState('load', { timeout: 5000 }).catch(() => {});
+        pagesCrawled.push(serviceUrl);
+        pagesData.push(await extractPageData(page, serviceUrl, 'service', context));
+      } catch (e) {
+        console.error(`Failed to crawl service page ${serviceUrl}:`, e.message);
+      }
+    }
+
     await context.close();
 
-    const gtmSummary = await generateGTMSummary(pagesData);
+    const gtmSummary  = await generateGTMSummary(pagesData);
+    const ctaQuality  = generateCTAQualityReport(pagesData);
+    const sayHello    = generateSayHelloViability(pagesData, url);
 
     return {
-      website_url: url,
-      ran_at: new Date().toISOString(),
-      pages_crawled: pagesCrawled,
-      pages: pagesData,
-      gtm_summary: gtmSummary,
-      cta_quality: generateCTAQualityReport(pagesData),
-      duration_ms: Date.now() - startTime
+      website_url:      url,
+      ran_at:           new Date().toISOString(),
+      pages_crawled:    pagesCrawled,
+      pages:            pagesData,
+      gtm_summary:      gtmSummary,
+      cta_quality:      ctaQuality,
+      sayhello_viability: sayHello,
+      duration_ms:      Date.now() - startTime,
     };
 
   } catch (error) {

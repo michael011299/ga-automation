@@ -2057,6 +2057,7 @@ app.post("/run", async (req, res) => {
       "generate_gtm_payload",       // API-only: return ordered GTM API call sequence ready to execute
       "execute_gtm_payload",        // API-only: accept raw access_token + execute all GTM calls internally
       "generate_gtm_container",     // API-only: generate downloadable GTM container export JSON from audit
+      "build_audit_report",         // API-only: generate Google Docs batchUpdate requests from audit result
     ].includes(action)
   ) {
     return res.status(400).json({ error: "Unknown action" });
@@ -2434,6 +2435,78 @@ app.post("/run", async (req, res) => {
 
     } catch (err) {
       console.error("❌ execute_gtm_payload error:", err.message);
+      return res.json({ status: "error", error: err.message });
+    }
+  }
+
+  // ── build_audit_report: API-only — return Google Docs batchUpdate requests ──
+  // Generates a fully formatted audit report ready to insert into a Google Doc.
+  // Accepts either audit (pre-computed) or website_url (runs fresh audit).
+  // Optional: client_name (display name in the header), document_id (if you
+  //           want the server to write the doc directly via the Docs API).
+  if (action === "build_audit_report") {
+    const {
+      audit,
+      website_url:  auditUrl,
+      client_name:  clientName,
+      document_id:  documentId,
+      access_token: accessToken,
+    } = req.body;
+
+    if (!audit && !auditUrl) {
+      return res.status(400).json({ status: "error", error: "Provide either 'audit' (from POST /health/audit) or 'website_url' to run a fresh audit" });
+    }
+
+    try {
+      let auditResult = audit;
+      if (!auditResult) {
+        const { ctaAuditSite } = require("./cta-audit.runners");
+        console.log(`build_audit_report: running CTA audit for ${auditUrl}...`);
+        auditResult = await ctaAuditSite(auditUrl);
+        console.log(`Audit complete — ${auditResult.pages_crawled?.length ?? 0} pages crawled`);
+      }
+
+      const { buildAuditReport } = require("./audit-report-builder");
+      const report = buildAuditReport(auditResult, clientName);
+
+      // If a document_id + access_token are provided, write the doc directly.
+      if (documentId && accessToken) {
+        const docsRes = await fetch(
+          `https://docs.googleapis.com/v1/documents/${documentId}:batchUpdate`,
+          {
+            method:  "POST",
+            headers: {
+              "Authorization": `Bearer ${accessToken}`,
+              "Content-Type":  "application/json",
+            },
+            body: JSON.stringify({ requests: report.requests }),
+          }
+        );
+        const docsBody = await docsRes.json();
+        if (!docsRes.ok) {
+          return res.json({ status: "error", error: docsBody.error?.message || "Google Docs API error", docs_response: docsBody });
+        }
+        console.log(`build_audit_report: wrote ${report.requests.length} requests to doc ${documentId}`);
+        return res.json({
+          status:           "success",
+          document_id:      documentId,
+          document_title:   report.title,
+          requests_applied: report.requests.length,
+          docs_response:    docsBody,
+        });
+      }
+
+      // Otherwise return the requests payload for the caller (n8n) to apply.
+      console.log(`build_audit_report: returning ${report.requests.length} requests`);
+      return res.json({
+        status:         "success",
+        document_title: report.title,
+        requests:       report.requests,
+        request_count:  report.requests.length,
+        usage_hint:     "POST the 'requests' array to https://docs.googleapis.com/v1/documents/{documentId}:batchUpdate",
+      });
+    } catch (err) {
+      console.error("build_audit_report error:", err.message);
       return res.json({ status: "error", error: err.message });
     }
   }
