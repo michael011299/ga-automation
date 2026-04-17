@@ -2054,6 +2054,7 @@ app.post("/run", async (req, res) => {
       "setup_gtm_tags",             // API-only: create workspace, click vars, triggers, tags
       "register_ga4_conversions",   // API-only: register conversion events on GA4 property
       "build_gtm_from_audit",       // API-only: run CTA audit then build GTM container from results
+      "generate_gtm_payload",       // API-only: return ordered GTM API call sequence ready to execute
     ].includes(action)
   ) {
     return res.status(400).json({ error: "Unknown action" });
@@ -2259,6 +2260,44 @@ app.post("/run", async (req, res) => {
       return res.json({ status: "success", property_id });
     } catch (err) {
       console.error("❌ register_ga4_conversions error:", err.message);
+      return res.json({ status: "error", error: err.message });
+    }
+  }
+
+  // ── generate_gtm_payload: API-only — return ordered GTM API call sequence ──
+  // Returns the complete list of sequential GTM API calls (with bodies) that
+  // the caller must execute in order to build the workspace.
+  // Accepts either audit (pre-computed) or website_url (runs fresh audit).
+  if (action === "generate_gtm_payload") {
+    const { numeric_account_id, numeric_container_id, measurement_id, audit, website_url: auditUrl } = req.body;
+
+    if (!numeric_account_id || !numeric_container_id)
+      return res.status(400).json({ status: "error", error: "Missing numeric_account_id or numeric_container_id" });
+    if (!measurement_id)
+      return res.status(400).json({ status: "error", error: "Missing measurement_id" });
+    if (!audit && !auditUrl)
+      return res.status(400).json({ status: "error", error: "Provide either 'audit' (from POST /health/audit) or 'website_url'" });
+
+    try {
+      let auditResult = audit;
+      if (!auditResult) {
+        const { ctaAuditSite } = require("./cta-audit.runners");
+        console.log(`🔍 generate_gtm_payload: running CTA audit for ${auditUrl}...`);
+        auditResult = await ctaAuditSite(auditUrl);
+      }
+
+      const { generateGTMPayload } = require("./gtm-payload-generator");
+      const payload = generateGTMPayload(
+        auditResult,
+        measurement_id,
+        String(numeric_account_id),
+        String(numeric_container_id),
+      );
+
+      console.log(`✅ generate_gtm_payload: ${payload.total_steps} steps, ${payload.tags_count} tags, ${payload.triggers_count} triggers`);
+      return res.json({ status: "success", ...payload });
+    } catch (err) {
+      console.error("❌ generate_gtm_payload error:", err.message);
       return res.json({ status: "error", error: err.message });
     }
   }
