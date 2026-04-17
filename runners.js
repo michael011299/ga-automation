@@ -2311,6 +2311,7 @@ app.post("/run", async (req, res) => {
   if (action === "execute_gtm_payload") {
     const {
       access_token,
+      refresh_token,
       numeric_account_id,
       numeric_container_id,
       measurement_id,
@@ -2318,7 +2319,8 @@ app.post("/run", async (req, res) => {
       website_url: auditUrl,
     } = req.body;
 
-    if (!access_token)             return res.status(400).json({ status: "error", error: "Missing access_token (Google OAuth2 access token)" });
+    if (!access_token && !refresh_token)
+      return res.status(400).json({ status: "error", error: "Provide either access_token (short-lived) or refresh_token (recommended — never expires)" });
     if (!numeric_account_id)       return res.status(400).json({ status: "error", error: "Missing numeric_account_id" });
     if (!numeric_container_id)     return res.status(400).json({ status: "error", error: "Missing numeric_container_id" });
     if (!measurement_id)           return res.status(400).json({ status: "error", error: "Missing measurement_id" });
@@ -2327,6 +2329,14 @@ app.post("/run", async (req, res) => {
     try {
       const axios = require("axios");
       const { generateGTMPayload } = require("./gtm-payload-generator");
+
+      // If a refresh_token was supplied, exchange it for a fresh access token now
+      let resolvedAccessToken = access_token;
+      if (refresh_token) {
+        const { getAccessToken } = require("./src/lib/google-oauth");
+        resolvedAccessToken = await getAccessToken(refresh_token);
+        console.log("✅ execute_gtm_payload: exchanged refresh_token for access_token");
+      }
 
       // Optionally run a fresh audit
       let auditResult = audit;
@@ -2369,7 +2379,7 @@ app.post("/run", async (req, res) => {
             method:  step.method,
             url,
             headers: {
-              "Authorization": `Bearer ${access_token}`,
+              "Authorization": `Bearer ${resolvedAccessToken}`,
               "Content-Type":  "application/json",
             },
             data: body || undefined,
