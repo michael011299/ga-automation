@@ -27,6 +27,41 @@ const SUCCESS_SELECTORS = [
   '[class*="confirmation"]',
   '[role="alert"]',
   ".alert-success",
+  // Additional common selectors
+  ".success",
+  ".message-success",
+  ".form-message.success",
+  ".notification.success",
+  ".alert.success",
+  ".status.success",
+  ".response.success",
+  ".feedback.success",
+  ".result.success",
+  '[class*="sent"]',
+  '[class*="submitted"]',
+  '[class*="complete"]',
+  ".cf7-mail-sent",
+  ".elementor-message-success",
+  ".wpforms-confirmation",
+  ".forminator-success",
+  ".ninja-forms-success",
+  ".gravityform-success",
+  ".contact-form-7-success",
+  ".success-msg",
+  ".success-text",
+  ".success-alert",
+  ".success-notification",
+  ".success-banner",
+  ".success-modal",
+  ".success-popup",
+  ".success-toast",
+  ".toast.success",
+  ".flash.success",
+  ".notice.success",
+  ".info.success",
+  '[data-status="success"]',
+  '[data-type="success"]',
+  '[data-message-type="success"]',
 ];
 
 const BOOKING_PLATFORMS = {
@@ -776,7 +811,83 @@ async function extractSocialLinks(page, pageUrl) {
 // individual GTM triggers can be created per location.
 // ---------------------------------------------------------------------------
 async function extractLocationLinks(page, pageUrl) {
-  const MAPS_PATTERNS = ["google.com/maps", "maps.google.com", "g.page", "goo.gl/maps", "maps.app.goo.gl"];
+  const MAPS_PATTERNS = [
+    "google.com/maps",
+    "maps.google.com",
+    "g.page",
+    "goo.gl/maps",
+    "maps.app.goo.gl",
+    "maps.google",
+    "google.com/map",
+    "maps.google.co.uk",
+    "maps.google.ca",
+    "maps.google.com.au",
+    "maps.google.de",
+    "maps.google.fr",
+    "maps.google.es",
+    "maps.google.it",
+    "maps.google.nl",
+    "maps.google.be",
+    "maps.google.ch",
+    "maps.google.at",
+    "maps.google.se",
+    "maps.google.no",
+    "maps.google.dk",
+    "maps.google.fi",
+    "maps.google.pt",
+    "maps.google.pl",
+    "maps.google.cz",
+    "maps.google.sk",
+    "maps.google.hu",
+    "maps.google.ro",
+    "maps.google.bg",
+    "maps.google.hr",
+    "maps.google.si",
+    "maps.google.ba",
+    "maps.google.me",
+    "maps.google.rs",
+    "maps.google.mk",
+    "maps.google.al",
+    "maps.google.gr",
+    "maps.google.tr",
+    "maps.google.ru",
+    "maps.google.ua",
+    "maps.google.by",
+    "maps.google.kz",
+    "maps.google.uz",
+    "maps.google.tm",
+    "maps.google.tj",
+    "maps.google.kg",
+    "maps.google.az",
+    "maps.google.ge",
+    "maps.google.am",
+    "maps.google.com.tr",
+    "maps.google.com.eg",
+    "maps.google.com.sa",
+    "maps.google.com.ae",
+    "maps.google.co.in",
+    "maps.google.co.jp",
+    "maps.google.co.kr",
+    "maps.google.com.sg",
+    "maps.google.com.hk",
+    "maps.google.com.tw",
+    "maps.google.com.vn",
+    "maps.google.com.my",
+    "maps.google.com.ph",
+    "maps.google.com.th",
+    "maps.google.com.id",
+    "maps.google.com.mx",
+    "maps.google.com.ar",
+    "maps.google.com.br",
+    "maps.google.com.co",
+    "maps.google.com.pe",
+    "maps.google.com.cl",
+    "maps.google.com.ve",
+    "maps.google.com.ec",
+    "maps.google.com.py",
+    "maps.google.com.uy",
+    "maps.google.com.bo",
+  ];
 
   const locations = await safeEval(
     page,
@@ -803,9 +914,38 @@ async function extractLocationLinks(page, pageUrl) {
             locationName = decodeURIComponent(placeMatch[1].replace(/\+/g, " "));
           } catch {}
         }
+
+        // Also try /maps/search/ and /maps/dir/ URLs
+        if (!locationName) {
+          const searchMatch = href.match(/\/maps\/(search|dir)\/([^/@?&]+)/);
+          if (searchMatch) {
+            try {
+              locationName = decodeURIComponent(searchMatch[2].replace(/\+/g, " "));
+            } catch {}
+          }
+        }
+
+        // Try g.page URLs
+        if (!locationName && href.includes("g.page")) {
+          const gpageMatch = href.match(/g\.page\/([^/?]+)/);
+          if (gpageMatch) {
+            locationName = gpageMatch[1].replace(/[-_]/g, " ");
+          }
+        }
+
         // Fall back to the link's visible text or aria-label
         if (!locationName) {
-          locationName = (a.textContent || "").replace(/\s+/g, " ").trim() || a.getAttribute("aria-label") || "";
+          locationName =
+            (a.textContent || "").replace(/\s+/g, " ").trim() ||
+            a.getAttribute("aria-label") ||
+            a.getAttribute("title") ||
+            "Google Maps location";
+        }
+
+        // Clean up location name
+        locationName = locationName.replace(/\s+/g, " ").trim();
+        if (locationName.length > 100) {
+          locationName = locationName.substring(0, 97) + "...";
         }
 
         // Extract lat/lng coords if present (@lat,lng,zoom)
@@ -813,12 +953,14 @@ async function extractLocationLinks(page, pageUrl) {
         const coordsMatch = href.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
         if (coordsMatch) coords = `${coordsMatch[1]},${coordsMatch[2]}`;
 
-        // Detect place_id=ChIJ... or cid=... for a stable identifier
+        // Detect place_id=ChIJ... or cid=... or q=... for a stable identifier
         let placeId = null;
         const placeIdMatch = href.match(/[?&]place_id=([^&]+)/);
         if (placeIdMatch) placeId = placeIdMatch[1];
         const cidMatch = href.match(/[?&]cid=([^&]+)/);
         if (cidMatch && !placeId) placeId = `cid:${cidMatch[1]}`;
+        const queryIdMatch = href.match(/[?&]q=([^&]+)/);
+        if (queryIdMatch && !placeId) placeId = `query:${decodeURIComponent(queryIdMatch[1])}`;
 
         found.push({
           href,
@@ -918,7 +1060,7 @@ async function findServiceSubPages(page, currentUrl, baseOrigin, alreadySeen) {
       Array.from(document.querySelectorAll("a[href]")).map((a) => ({
         href: a.href,
         text: (a.textContent || "").replace(/\s+/g, " ").trim(),
-      }))
+      })),
     )) || [];
 
   const subPages = [];
@@ -936,7 +1078,8 @@ async function findServiceSubPages(page, currentUrl, baseOrigin, alreadySeen) {
       let isServiceSubPage = false;
       if (cleanPath.startsWith(currentPath + "/")) {
         const remainder = cleanPath.slice(currentPath.length + 1);
-        if (!remainder.includes("/")) { // not a grandchild
+        if (!remainder.includes("/")) {
+          // not a grandchild
           isServiceSubPage = true;
         }
       }
@@ -1167,66 +1310,122 @@ async function extractForms(page, pageUrl) {
 
       forms.forEach((form, index) => {
         const fields = [];
-        const inputs = form.querySelectorAll("input, textarea, select");
+        // Only count inputs that are typically considered "form fields" for contact/lead forms
+        // Exclude radio buttons, checkboxes, file uploads, date/time pickers, etc.
+        const inputs = form.querySelectorAll(
+          "input[type='text'], input[type='email'], input[type='tel'], input[type='url'], input[type='password'], input:not([type]), textarea, select",
+        );
+
         let hasEmailField = false;
         let hasPhoneField = false;
         let hasMessageField = false;
+        let hasNameField = false;
         let score = 0;
 
         inputs.forEach((input) => {
           const type = input.type || "text";
           const name = input.name || input.id || "";
           const placeholder = input.placeholder || "";
-          const required = input.hasAttribute("required");
+          const label = input.getAttribute("aria-label") || input.getAttribute("data-label") || "";
+          const required = input.hasAttribute("required") || input.getAttribute("aria-required") === "true";
 
-          fields.push({ type, name, placeholder, required });
+          // Skip if input is not visible or is a system field
+          const style = window.getComputedStyle(input);
+          if (style.display === "none" || style.visibility === "hidden" || input.disabled) {
+            return;
+          }
 
-          // Scoring for lead forms
-          const fieldText = (name + placeholder).toLowerCase();
-          if (fieldText.includes("email")) {
+          fields.push({ type, name, placeholder, label, required });
+
+          // Improved scoring for lead forms - check name, placeholder, label, and aria-label
+          const fieldText = (name + " " + placeholder + " " + label).toLowerCase();
+
+          if (fieldText.includes("email") || type === "email") {
             hasEmailField = true;
+            score += 3; // Email is a strong lead indicator
+          }
+          if (
+            fieldText.includes("phone") ||
+            fieldText.includes("tel") ||
+            fieldText.includes("mobile") ||
+            fieldText.includes("cell") ||
+            type === "tel"
+          ) {
+            hasPhoneField = true;
             score += 2;
           }
-          if (fieldText.includes("phone") || fieldText.includes("tel")) {
-            hasPhoneField = true;
-            score += 1;
-          }
-          if (fieldText.includes("message") || fieldText.includes("comment") || fieldText.includes("enquiry")) {
+          if (
+            fieldText.includes("message") ||
+            fieldText.includes("comment") ||
+            fieldText.includes("enquiry") ||
+            fieldText.includes("inquiry") ||
+            fieldText.includes("notes") ||
+            type === "textarea"
+          ) {
             hasMessageField = true;
+            score += 2;
+          }
+          if (
+            fieldText.includes("name") ||
+            fieldText.includes("first") ||
+            fieldText.includes("last") ||
+            fieldText.includes("full")
+          ) {
+            hasNameField = true;
             score += 1;
           }
-          if (fieldText.includes("name")) score += 1;
-          if (fieldText.includes("company") || fieldText.includes("business")) score += 1;
+          if (fieldText.includes("company") || fieldText.includes("business") || fieldText.includes("organization")) {
+            score += 1;
+          }
+          if (fieldText.includes("website") || fieldText.includes("url")) {
+            score += 1;
+          }
         });
 
-        // Only include forms with score >= 2 (likely lead forms)
-        if (score >= 2) {
-          const submitButton = form.querySelector('button[type="submit"], input[type="submit"], button:not([type])');
+        // Only include forms that look like lead/contact forms (score >= 3)
+        // This filters out search forms, login forms, etc.
+        if (score >= 3 && fields.length > 0) {
+          const submitButton = form.querySelector(
+            'button[type="submit"], input[type="submit"], button:not([type]):not([type="button"]), [role="button"]',
+          );
           const submitButtonText = submitButton
-            ? submitButton.textContent.trim() || submitButton.value || "Submit"
+            ? (
+                submitButton.textContent ||
+                submitButton.value ||
+                submitButton.getAttribute("aria-label") ||
+                ""
+              ).trim() || "Submit"
             : "Submit";
 
           // Check for third-party forms
           const formAction = form.action || "";
+          const formClass = form.className || "";
+          const formId = form.id || "";
           const thirdParty =
-            /hubspot|typeform|gravity|jotform|mailchimp|convertkit/i.test(formAction) ||
-            /hubspot|typeform|gravity|jotform/i.test(form.className) ||
-            !!form.querySelector('[class*="hubspot"], [class*="typeform"], [class*="gravity"], [class*="jotform"]');
+            /hubspot|typeform|gravity|jotform|mailchimp|convertkit|activecampaign|constantcontact/i.test(formAction) ||
+            /hubspot|typeform|gravity|jotform|mailchimp|convertkit|activecampaign|constantcontact/i.test(formClass) ||
+            /hubspot|typeform|gravity|jotform|mailchimp|convertkit|activecampaign|constantcontact/i.test(formId) ||
+            !!form.querySelector(
+              '[class*="hubspot"], [class*="typeform"], [class*="gravity"], [class*="jotform"], [class*="mailchimp"], [class*="convertkit"]',
+            );
 
-          const fieldCount = inputs.length;
-          const requiredCount = [...inputs].filter((i) => i.hasAttribute("required")).length;
+          const fieldCount = fields.length;
+          const requiredCount = fields.filter((f) => f.required).length;
+
           formData.push({
             page_url: pageUrl,
             form_index: index,
             fields,
             field_count: fieldCount,
             required_field_count: requiredCount,
-            friction_level: fieldCount <= 3 ? "low" : fieldCount <= 6 ? "medium" : "high",
+            friction_level: fieldCount <= 2 ? "low" : fieldCount <= 4 ? "medium" : "high",
             submit_button_text: submitButtonText,
             has_email_field: hasEmailField,
             has_phone_field: hasPhoneField,
             has_message_field: hasMessageField,
+            has_name_field: hasNameField,
             third_party: thirdParty,
+            score, // Include score for debugging
           });
         }
       });
@@ -1293,11 +1492,13 @@ async function testFormSubmission(page, formData) {
   const currentUrl = page.url();
 
   // Submit form
-  const submitButton = form.locator('button[type="submit"], input[type="submit"], button:not([type])').first();
+  const submitButton = form
+    .locator('button[type="submit"], input[type="submit"], button:not([type]):not([type="button"]), [role="button"]')
+    .first();
   await submitButton.click();
 
-  // Wait a moment for submission to process
-  await page.waitForTimeout(2000);
+  // Wait a moment for submission to process (longer wait for slower forms)
+  await page.waitForTimeout(3000);
 
   // Check if URL changed (redirect)
   const newUrl = page.url();
@@ -1307,18 +1508,20 @@ async function testFormSubmission(page, formData) {
     return;
   }
 
-  // Check for success message
+  // Check for success message with extended selectors
   for (const selector of SUCCESS_SELECTORS) {
     try {
       const element = page.locator(selector);
-      if (await element.isVisible({ timeout: 1000 })) {
+      if (await element.isVisible({ timeout: 2000 })) {
         const messageText = await element.textContent();
         const elementId = await element.getAttribute("id");
+        const elementClass = await element.getAttribute("class");
         formData.submission_behaviour = {
           type: "inline_message",
           selector,
           message_text: messageText?.trim(),
           element_id: elementId,
+          element_class: elementClass,
         };
         formData.gtm_recommendation = `Success message detected with selector "${selector}" - Create GA4 Event tag triggered by Element Visibility on this selector`;
         return;
@@ -1326,6 +1529,20 @@ async function testFormSubmission(page, formData) {
     } catch (e) {
       // Continue checking other selectors
     }
+  }
+
+  // Check for URL fragments that might indicate success (#success, #thank-you, etc.)
+  const currentHash = page.url().split("#")[1];
+  if (
+    currentHash &&
+    (currentHash.includes("success") ||
+      currentHash.includes("thank") ||
+      currentHash.includes("sent") ||
+      currentHash.includes("complete"))
+  ) {
+    formData.submission_behaviour = { type: "url_fragment", fragment: currentHash };
+    formData.gtm_recommendation = `Success URL fragment detected: #${currentHash} - Create GA4 Event tag triggered by Page View with URL fragment condition`;
+    return;
   }
 
   // No clear success indicator found
