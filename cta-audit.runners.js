@@ -1222,10 +1222,54 @@ function generateCTAQualityReport(pagesData) {
   }
 
   // --- Above the fold ---
-  const homepageAboveFold = pagesData.find(p => p.label === 'homepage')?.above_fold_ctas;
-  const aboveFoldCount = homepageAboveFold
-    ? (homepageAboveFold.phone_links.length + homepageAboveFold.email_links.length +
-       homepageAboveFold.whatsapp_links.length + homepageAboveFold.cta_buttons.length)
+  // Build a deduplicated per-page breakdown. CTA buttons are deduplicated by
+  // href+text within each page to collapse floating/sticky nav duplicates.
+  const aboveFoldByPage = pagesData.map(p => {
+    const af = p.above_fold_ctas || { phone_links: [], email_links: [], whatsapp_links: [], cta_buttons: [] };
+
+    const seenBtns = new Set();
+    const uniqueCtaButtons = (af.cta_buttons || []).filter(b => {
+      const key = `${b.href}|${b.text}`;
+      if (seenBtns.has(key)) return false;
+      seenBtns.add(key);
+      return true;
+    });
+
+    const seenPhones = new Set();
+    const uniquePhoneLinks = (af.phone_links || []).filter(ph => {
+      const key = ph.href;
+      if (seenPhones.has(key)) return false;
+      seenPhones.add(key);
+      return true;
+    });
+
+    const seenWa = new Set();
+    const uniqueWaLinks = (af.whatsapp_links || []).filter(w => {
+      const key = w.href;
+      if (seenWa.has(key)) return false;
+      seenWa.add(key);
+      return true;
+    });
+
+    return {
+      page:           p.url,
+      label:          p.label,
+      has_phone:      uniquePhoneLinks.length > 0,
+      has_email:      (af.email_links || []).length > 0,
+      has_whatsapp:   uniqueWaLinks.length > 0,
+      has_cta_button: uniqueCtaButtons.length > 0,
+      phone_links:    uniquePhoneLinks,
+      email_links:    af.email_links || [],
+      whatsapp_links: uniqueWaLinks,
+      cta_buttons:    uniqueCtaButtons,
+    };
+  });
+
+  // Homepage-level count used for scoring and issue messages
+  const homepageFold  = aboveFoldByPage.find(p => p.label === 'homepage');
+  const aboveFoldCount = homepageFold
+    ? (homepageFold.phone_links.length + homepageFold.email_links.length +
+       homepageFold.whatsapp_links.length + homepageFold.cta_buttons.length)
     : 0;
 
   if (aboveFoldCount > 0) {
@@ -1320,11 +1364,11 @@ function generateCTAQualityReport(pagesData) {
       verdict:          emailVerdict,
     },
     above_fold: {
-      has_phone:      (homepageAboveFold?.phone_links?.length ?? 0) > 0,
-      has_email:      (homepageAboveFold?.email_links?.length ?? 0) > 0,
-      has_whatsapp:   (homepageAboveFold?.whatsapp_links?.length ?? 0) > 0,
-      has_cta_button: (homepageAboveFold?.cta_buttons?.length ?? 0) > 0,
-      elements:       homepageAboveFold ?? {},
+      has_phone:      aboveFoldByPage.some(p => p.has_phone),
+      has_email:      aboveFoldByPage.some(p => p.has_email),
+      has_whatsapp:   aboveFoldByPage.some(p => p.has_whatsapp),
+      has_cta_button: aboveFoldByPage.some(p => p.has_cta_button),
+      by_page:        aboveFoldByPage,
     },
     form_friction: {
       forms_found:         allForms.length,
