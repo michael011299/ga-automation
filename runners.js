@@ -2624,6 +2624,55 @@ app.post("/run", async (req, res) => {
     }
   }
 
+  // ── generate_gtm_export: Generate GTM container JSON export from audit ────
+  // Accepts either:
+  //   audit        — pre-computed result from POST /health/audit (skip re-crawl)
+  //   website_url  — run a fresh audit first, then generate export
+  //
+  // Required: numeric_account_id, numeric_container_id, measurement_id
+  // Optional: container_name (defaults to "AP Tracking Setup")
+  if (action === "generate_gtm_export") {
+    const { numeric_account_id, numeric_container_id, measurement_id, audit, website_url: auditUrl, container_name } = req.body;
+
+    if (!numeric_account_id)   return res.status(400).json({ status: "error", error: "Missing numeric_account_id" });
+    if (!numeric_container_id) return res.status(400).json({ status: "error", error: "Missing numeric_container_id" });
+    if (!measurement_id)       return res.status(400).json({ status: "error", error: "Missing measurement_id" });
+    if (!audit && !auditUrl)   return res.status(400).json({ status: "error", error: "Provide either 'audit' (from POST /health/audit) or 'website_url' to run a fresh audit" });
+
+    try {
+      const { generateGTMContainerExport } = require("./gtm-container-generator");
+
+      // Optionally run a fresh audit if caller didn't provide one
+      let auditResult = audit;
+      if (!auditResult) {
+        const { ctaAuditSite } = require("./cta-audit.runners");
+        console.log(`🔍 generate_gtm_export: running CTA audit for ${auditUrl}...`);
+        auditResult = await ctaAuditSite(auditUrl);
+        console.log(`✅ Audit complete — ${auditResult.pages_crawled?.length} pages crawled`);
+      }
+
+      const result = generateGTMContainerExport(
+        auditResult,
+        measurement_id,
+        container_name || "AP Tracking Setup",
+        String(numeric_account_id),
+        String(numeric_container_id)
+      );
+
+      console.log(`✅ generate_gtm_export complete — ${result.summary.tags_count} tags, ${result.summary.triggers_count} triggers`);
+      return res.json({
+        status:         "success",
+        export:         result.export,
+        summary:        result.summary,
+        audit_summary:  auditResult.gtm_summary,
+        pages_crawled:  auditResult.pages_crawled,
+      });
+    } catch (err) {
+      console.error("❌ generate_gtm_export error:", err.message);
+      return res.json({ status: "error", error: err.message });
+    }
+  }
+
   // ── handle_new_case: orchestrator manages its own browser sessions ─────────
   // This action does NOT go through the shared browser setup below.
   // It hands off to src/orchestrator/entry.js which opens/closes browsers

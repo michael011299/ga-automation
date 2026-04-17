@@ -1,4 +1,4 @@
-const { chromium } = require('playwright');
+const { chromium } = require("playwright");
 
 let browser = null;
 
@@ -14,86 +14,106 @@ const TEST_VALUES = {
 };
 
 const SUCCESS_SELECTORS = [
-  '.wpcf7-response-output',
-  '.wpcf7-mail-sent-ok',
-  '.gform_confirmation_message',
-  '.contact-form-success',
-  '.form-success',
-  '.success-message',
-  '.thank-you',
-  '.thankyou',
+  ".wpcf7-response-output",
+  ".wpcf7-mail-sent-ok",
+  ".gform_confirmation_message",
+  ".contact-form-success",
+  ".form-success",
+  ".success-message",
+  ".thank-you",
+  ".thankyou",
   '[class*="success"]',
   '[class*="thank"]',
   '[class*="confirmation"]',
   '[role="alert"]',
-  '.alert-success'
+  ".alert-success",
 ];
 
 const BOOKING_PLATFORMS = {
-  'calendly.com': 'Calendly',
-  'acuityscheduling.com': 'Acuity Scheduling',
-  'simplybook.me': 'SimplyBook.me',
-  'booksy.com': 'Booksy',
-  'mindbodyonline.com': 'Mindbody',
-  'squareup.com': 'Square Appointments',
-  'setmore.com': 'Setmore',
-  'youcanbook.me': 'YouCanBook.me',
-  'fresha.com': 'Fresha',
-  'cliniko.com': 'Cliniko',
-  'janeapp.com': 'Jane App',
-  'treatwell.co.uk': 'Treatwell',
-  'treatwell.com': 'Treatwell',
-  'vagaro.com': 'Vagaro'
+  "calendly.com": "Calendly",
+  "acuityscheduling.com": "Acuity Scheduling",
+  "simplybook.me": "SimplyBook.me",
+  "booksy.com": "Booksy",
+  "mindbodyonline.com": "Mindbody",
+  "squareup.com": "Square Appointments",
+  "setmore.com": "Setmore",
+  "youcanbook.me": "YouCanBook.me",
+  "fresha.com": "Fresha",
+  "cliniko.com": "Cliniko",
+  "janeapp.com": "Jane App",
+  "treatwell.co.uk": "Treatwell",
+  "treatwell.com": "Treatwell",
+  "vagaro.com": "Vagaro",
 };
 
 const NEWSLETTER_PLATFORMS = {
-  'mailchimp.com': 'Mailchimp',
-  'klaviyo.com': 'Klaviyo',
-  'constantcontact.com': 'Constant Contact',
-  'convertkit.com': 'ConvertKit',
-  'activecampaign.com': 'ActiveCampaign',
-  'mailerlite.com': 'MailerLite',
-  'brevo.com': 'Brevo',
-  'getresponse.com': 'GetResponse',
-  'hubspot.com': 'HubSpot'
+  "mailchimp.com": "Mailchimp",
+  "klaviyo.com": "Klaviyo",
+  "constantcontact.com": "Constant Contact",
+  "convertkit.com": "ConvertKit",
+  "activecampaign.com": "ActiveCampaign",
+  "mailerlite.com": "MailerLite",
+  "brevo.com": "Brevo",
+  "getresponse.com": "GetResponse",
+  "hubspot.com": "HubSpot",
 };
 
 const SOCIAL_PLATFORMS = {
-  'facebook.com': 'Facebook',
-  'fb.com': 'Facebook',
-  'instagram.com': 'Instagram',
-  'twitter.com': 'X (Twitter)',
-  'x.com': 'X (Twitter)',
-  'linkedin.com': 'LinkedIn',
-  'youtube.com': 'YouTube',
-  'youtu.be': 'YouTube',
-  'tiktok.com': 'TikTok',
-  'pinterest.com': 'Pinterest',
-  'snapchat.com': 'Snapchat',
-  'threads.net': 'Threads',
-  'trustpilot.com': 'Trustpilot',
+  "facebook.com": "Facebook",
+  "fb.com": "Facebook",
+  "instagram.com": "Instagram",
+  "twitter.com": "X (Twitter)",
+  "x.com": "X (Twitter)",
+  "linkedin.com": "LinkedIn",
+  "youtube.com": "YouTube",
+  "youtu.be": "YouTube",
+  "tiktok.com": "TikTok",
+  "pinterest.com": "Pinterest",
+  "snapchat.com": "Snapchat",
+  "threads.net": "Threads",
+  "trustpilot.com": "Trustpilot",
   // Google Maps removed — handled separately via extractLocationLinks
 };
 
 // Free consumer email providers — any address at these domains is filtered out
 // (real businesses should use their own domain email)
 const GENERIC_EMAIL_PROVIDERS = new Set([
-  'gmail.com', 'googlemail.com',
-  'yahoo.com', 'yahoo.co.uk', 'yahoo.fr', 'yahoo.de', 'yahoo.es', 'yahoo.com.au',
-  'hotmail.com', 'hotmail.co.uk', 'hotmail.fr',
-  'outlook.com', 'outlook.co.uk',
-  'live.com', 'live.co.uk', 'live.ca',
-  'msn.com', 'icloud.com', 'me.com', 'mac.com',
-  'aol.com', 'protonmail.com', 'proton.me',
-  'mail.com', 'inbox.com', 'yandex.com', 'yandex.ru',
+  "gmail.com",
+  "googlemail.com",
+  "yahoo.com",
+  "yahoo.co.uk",
+  "yahoo.fr",
+  "yahoo.de",
+  "yahoo.es",
+  "yahoo.com.au",
+  "hotmail.com",
+  "hotmail.co.uk",
+  "hotmail.fr",
+  "outlook.com",
+  "outlook.co.uk",
+  "live.com",
+  "live.co.uk",
+  "live.ca",
+  "msn.com",
+  "icloud.com",
+  "me.com",
+  "mac.com",
+  "aol.com",
+  "protonmail.com",
+  "proton.me",
+  "mail.com",
+  "inbox.com",
+  "yandex.com",
+  "yandex.ru",
 ]);
 
 // Automated/system local-parts — filtered regardless of domain
-const GENERIC_EMAIL_LOCAL = /^(noreply|no[-_.]reply|donotreply|do[-_.]not[-_.]reply|bounce|bounces?|mailer[-_]daemon|postmaster|webmaster|hostmaster|daemon|automated|unsubscribe|subscribe|notification|notifications|alerts?|info-noreply|support-noreply|admin-noreply)$/i;
+const GENERIC_EMAIL_LOCAL =
+  /^(noreply|no[-_.]reply|donotreply|do[-_.]not[-_.]reply|bounce|bounces?|mailer[-_]daemon|postmaster|webmaster|hostmaster|daemon|automated|unsubscribe|subscribe|notification|notifications|alerts?|info-noreply|support-noreply|admin-noreply)$/i;
 
 function isGenericEmail(address) {
-  if (!address || !address.includes('@')) return false;
-  const [local, domain] = address.toLowerCase().split('@');
+  if (!address || !address.includes("@")) return false;
+  const [local, domain] = address.toLowerCase().split("@");
   if (!domain) return false;
   if (GENERIC_EMAIL_PROVIDERS.has(domain)) return true;
   if (GENERIC_EMAIL_LOCAL.test(local)) return true;
@@ -101,16 +121,16 @@ function isGenericEmail(address) {
 }
 
 const LIVE_CHAT_DETECTORS = [
-  { name: 'Intercom', global: 'Intercom' },
-  { name: 'Drift', global: 'drift' },
-  { name: 'Crisp', global: '$crisp' },
-  { name: 'Tidio', global: 'tidioChatApi' },
-  { name: 'LiveChat', global: 'LC_API' },
-  { name: 'Zendesk', global: 'zE' },
-  { name: 'HubSpot Chat', global: 'HubSpotConversations' },
-  { name: 'Tawk.to', global: 'Tawk_API' },
-  { name: 'Facebook Pixel', global: 'fbq' },
-  { name: 'TikTok Pixel', global: 'ttq' }
+  { name: "Intercom", global: "Intercom" },
+  { name: "Drift", global: "drift" },
+  { name: "Crisp", global: "$crisp" },
+  { name: "Tidio", global: "tidioChatApi" },
+  { name: "LiveChat", global: "LC_API" },
+  { name: "Zendesk", global: "zE" },
+  { name: "HubSpot Chat", global: "HubSpotConversations" },
+  { name: "Tawk.to", global: "Tawk_API" },
+  { name: "Facebook Pixel", global: "fbq" },
+  { name: "TikTok Pixel", global: "ttq" },
 ];
 
 async function safeEval(page, script) {
@@ -127,10 +147,10 @@ async function safeEval(page, script) {
 //   07911123456  → 7911123456  (UK local, strip leading 0)
 //   17145551234  → 7145551234  (North American +1)
 function normalisePhoneCore(digits) {
-  const d = (digits || '').replace(/\D/g, '');
-  if (d.startsWith('44') && d.length >= 11) return d.slice(2);
-  if (d.startsWith('1')  && d.length === 11) return d.slice(1);
-  if (d.startsWith('0')  && d.length >= 10)  return d.slice(1);
+  const d = (digits || "").replace(/\D/g, "");
+  if (d.startsWith("44") && d.length >= 11) return d.slice(2);
+  if (d.startsWith("1") && d.length === 11) return d.slice(1);
+  if (d.startsWith("0") && d.length >= 10) return d.slice(1);
   return d;
 }
 
@@ -139,17 +159,17 @@ async function getBrowser() {
     browser = await chromium.launch({
       headless: true,
       args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-blink-features=AutomationControlled',
-        '--disable-dev-shm-usage',
-        '--disable-gpu',
-        '--disable-gpu-compositing',
-        '--mute-audio'
-      ]
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-blink-features=AutomationControlled",
+        "--disable-dev-shm-usage",
+        "--disable-gpu",
+        "--disable-gpu-compositing",
+        "--mute-audio",
+      ],
     });
 
-    browser.on('disconnected', () => {
+    browser.on("disconnected", () => {
       browser = null;
     });
   }
@@ -157,18 +177,11 @@ async function getBrowser() {
 }
 
 async function acceptCookieConsent(page) {
-  const acceptPatterns = [
-    /^accept all$/i,
-    /^accept cookies$/i,
-    /^allow all$/i,
-    /^i accept$/i,
-    /^i agree$/i,
-    /^ok$/i
-  ];
+  const acceptPatterns = [/^accept all$/i, /^accept cookies$/i, /^allow all$/i, /^i accept$/i, /^i agree$/i, /^ok$/i];
 
   for (const pattern of acceptPatterns) {
     try {
-      const button = page.getByRole('button', { name: pattern });
+      const button = page.getByRole("button", { name: pattern });
       if (await button.isVisible({ timeout: 2000 })) {
         await button.click();
         await page.waitForTimeout(1000);
@@ -181,8 +194,8 @@ async function acceptCookieConsent(page) {
 }
 
 async function findContactPageUrl(page, baseUrl) {
-  const contactKeywords = ['contact', 'get-in-touch', 'enquire', 'enquiry', 'quote', 'book', 'reach-us'];
-  const commonPaths = ['/contact', '/contact-us', '/get-in-touch', '/enquiry'];
+  const contactKeywords = ["contact", "get-in-touch", "enquire", "enquiry", "quote", "book", "reach-us"];
+  const commonPaths = ["/contact", "/contact-us", "/get-in-touch", "/enquiry"];
 
   // Check common paths first
   for (const path of commonPaths) {
@@ -199,16 +212,16 @@ async function findContactPageUrl(page, baseUrl) {
 
   // Look for contact links on the page
   const links = await safeEval(page, () => {
-    return Array.from(document.querySelectorAll('a[href]')).map(a => ({
+    return Array.from(document.querySelectorAll("a[href]")).map((a) => ({
       href: a.href,
-      text: (a.textContent || '').toLowerCase().trim()
+      text: (a.textContent || "").toLowerCase().trim(),
     }));
   });
 
   if (links) {
     for (const link of links) {
       const linkText = link.text;
-      if (contactKeywords.some(keyword => linkText.includes(keyword))) {
+      if (contactKeywords.some((keyword) => linkText.includes(keyword))) {
         try {
           const url = new URL(link.href, baseUrl);
           if (url.origin === new URL(baseUrl).origin) {
@@ -229,24 +242,24 @@ async function extractPhones(page, pageUrl) {
     const clickableRaw = [];
 
     // Find clickable tel: links — skip invisible elements
-    document.querySelectorAll('a[href^="tel:"]').forEach(a => {
+    document.querySelectorAll('a[href^="tel:"]').forEach((a) => {
       const style = window.getComputedStyle(a);
-      if (style.display === 'none' || style.visibility === 'hidden') return;
-      const href = a.getAttribute('href');
-      const number = href.replace('tel:', '').replace(/\D/g, '');
+      if (style.display === "none" || style.visibility === "hidden") return;
+      const href = a.getAttribute("href");
+      const number = href.replace("tel:", "").replace(/\D/g, "");
       if (!number || number.length < 10) return;
       clickableRaw.push({
         href,
         number,
         display_text: a.textContent.trim(),
-        clickable: true
+        clickable: true,
       });
     });
 
     // Deduplicate by normalised number — keep first DOM occurrence (avoids
     // header + footer + mobile-nav copies of the same number inflating the count)
     const seenNumbers = new Set();
-    const clickable = clickableRaw.filter(p => {
+    const clickable = clickableRaw.filter((p) => {
       if (seenNumbers.has(p.number)) return false;
       seenNumbers.add(p.number);
       return true;
@@ -256,31 +269,30 @@ async function extractPhones(page, pageUrl) {
     // false positives from dates, order numbers, postcodes, etc.
     const phoneRegex = /(?:\+44|0044|0)[\s-]?\(?\d{2,5}\)?[\s-]?\d{3,4}[\s-]?\d{3,4}/g;
     const plainText = [];
-    const walker = document.createTreeWalker(
-      document.body,
-      NodeFilter.SHOW_TEXT,
-      {
-        acceptNode: (node) => {
-          const parent = node.parentElement;
-          if (!parent) return NodeFilter.FILTER_REJECT;
-          // Already covered by a tel: link
-          if (parent.closest('a[href^="tel:"]')) return NodeFilter.FILTER_REJECT;
-          // Non-visible or non-content nodes
-          if (parent.closest('script, style, noscript, [aria-hidden="true"], [hidden], input, select, option, time, data')) return NodeFilter.FILTER_REJECT;
-          const pStyle = window.getComputedStyle(parent);
-          if (pStyle.display === 'none' || pStyle.visibility === 'hidden') return NodeFilter.FILTER_REJECT;
-          return NodeFilter.FILTER_ACCEPT;
-        }
-      }
-    );
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+      acceptNode: (node) => {
+        const parent = node.parentElement;
+        if (!parent) return NodeFilter.FILTER_REJECT;
+        // Already covered by a tel: link
+        if (parent.closest('a[href^="tel:"]')) return NodeFilter.FILTER_REJECT;
+        // Non-visible or non-content nodes
+        if (
+          parent.closest('script, style, noscript, [aria-hidden="true"], [hidden], input, select, option, time, data')
+        )
+          return NodeFilter.FILTER_REJECT;
+        const pStyle = window.getComputedStyle(parent);
+        if (pStyle.display === "none" || pStyle.visibility === "hidden") return NodeFilter.FILTER_REJECT;
+        return NodeFilter.FILTER_ACCEPT;
+      },
+    });
 
     let textNode;
-    while (textNode = walker.nextNode()) {
+    while ((textNode = walker.nextNode())) {
       const text = textNode.textContent;
       const matches = text.match(phoneRegex);
       if (matches) {
-        matches.forEach(match => {
-          const digits = match.replace(/\D/g, '');
+        matches.forEach((match) => {
+          const digits = match.replace(/\D/g, "");
           if (digits.length >= 10 && digits.length <= 13) {
             // Skip if this number is already covered by a clickable tel: link
             if (seenNumbers.has(digits)) return;
@@ -294,8 +306,8 @@ async function extractPhones(page, pageUrl) {
   });
 
   if (phones) {
-    phones.clickable.forEach(phone => phone.page_url = pageUrl);
-    phones.plainText.forEach(phone => phone.page_url = pageUrl);
+    phones.clickable.forEach((phone) => (phone.page_url = pageUrl));
+    phones.plainText.forEach((phone) => (phone.page_url = pageUrl));
   }
 
   return phones || { clickable: [], plainText: [] };
@@ -307,42 +319,38 @@ async function extractEmails(page, pageUrl) {
     const plainText = [];
 
     // Find clickable mailto: links
-    document.querySelectorAll('a[href^="mailto:"]').forEach(a => {
-      const href = a.getAttribute('href');
-      const address = href.replace('mailto:', '').split('?')[0];
+    document.querySelectorAll('a[href^="mailto:"]').forEach((a) => {
+      const href = a.getAttribute("href");
+      const address = href.replace("mailto:", "").split("?")[0];
       clickable.push({
         href,
         address,
         display_text: a.textContent.trim(),
-        clickable: true
+        clickable: true,
       });
     });
 
     // Find plain text emails
     const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
-    const walker = document.createTreeWalker(
-      document.body,
-      NodeFilter.SHOW_TEXT,
-      {
-        acceptNode: (node) => {
-          const parent = node.parentElement;
-          if (!parent) return NodeFilter.FILTER_REJECT;
-          if (parent.closest('a[href^="mailto:"]')) return NodeFilter.FILTER_REJECT;
-          if (parent.closest('script, style, noscript')) return NodeFilter.FILTER_REJECT;
-          return NodeFilter.FILTER_ACCEPT;
-        }
-      }
-    );
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+      acceptNode: (node) => {
+        const parent = node.parentElement;
+        if (!parent) return NodeFilter.FILTER_REJECT;
+        if (parent.closest('a[href^="mailto:"]')) return NodeFilter.FILTER_REJECT;
+        if (parent.closest("script, style, noscript")) return NodeFilter.FILTER_REJECT;
+        return NodeFilter.FILTER_ACCEPT;
+      },
+    });
 
     let textNode;
-    while (textNode = walker.nextNode()) {
+    while ((textNode = walker.nextNode())) {
       const text = textNode.textContent;
       const matches = text.match(emailRegex);
       if (matches) {
-        matches.forEach(match => {
+        matches.forEach((match) => {
           plainText.push({
             address: match,
-            clickable: false
+            clickable: false,
           });
         });
       }
@@ -353,10 +361,10 @@ async function extractEmails(page, pageUrl) {
 
   if (emails) {
     // Remove free-provider and automated addresses — not the business's own contact info
-    emails.clickable = emails.clickable.filter(e => !isGenericEmail(e.address));
-    emails.plainText = emails.plainText.filter(e => !isGenericEmail(e.address));
-    emails.clickable.forEach(email => email.page_url = pageUrl);
-    emails.plainText.forEach(email => email.page_url = pageUrl);
+    emails.clickable = emails.clickable.filter((e) => !isGenericEmail(e.address));
+    emails.plainText = emails.plainText.filter((e) => !isGenericEmail(e.address));
+    emails.clickable.forEach((email) => (email.page_url = pageUrl));
+    emails.plainText.forEach((email) => (email.page_url = pageUrl));
   }
 
   return emails || { clickable: [], plainText: [] };
@@ -368,16 +376,15 @@ async function extractWhatsApp(page, pageUrl) {
     const seenHrefs = new Set();
 
     const numberFromStr = (str) => {
-      const m = str.match(/wa\.me\/([0-9]+)/) ||
-                str.match(/phone=([0-9]+)/) ||
-                str.match(/whatsapp:\/\/send\?phone=([0-9]+)/);
+      const m =
+        str.match(/wa\.me\/([0-9]+)/) || str.match(/phone=([0-9]+)/) || str.match(/whatsapp:\/\/send\?phone=([0-9]+)/);
       return m ? m[1] : null;
     };
 
     const typeFromStr = (str) => {
-      if (str.includes('wa.me')) return 'wa.me';
-      if (str.includes('api.whatsapp.com') || str.includes('whatsapp.com/send')) return 'api.whatsapp.com';
-      if (str.includes('whatsapp://')) return 'whatsapp://';
+      if (str.includes("wa.me")) return "wa.me";
+      if (str.includes("api.whatsapp.com") || str.includes("whatsapp.com/send")) return "api.whatsapp.com";
+      if (str.includes("whatsapp://")) return "whatsapp://";
       return null;
     };
 
@@ -385,14 +392,14 @@ async function extractWhatsApp(page, pageUrl) {
       let node = el;
       while (node && node !== document.body) {
         const pos = window.getComputedStyle(node).position;
-        if (pos === 'fixed' || pos === 'sticky') return true;
+        if (pos === "fixed" || pos === "sticky") return true;
         node = node.parentElement;
       }
       return false;
     };
 
     const pushLink = (href, el) => {
-      const key = href.replace(/\s+/g, '');
+      const key = href.replace(/\s+/g, "");
       if (seenHrefs.has(key)) return;
       seenHrefs.add(key);
       const type = typeFromStr(href);
@@ -401,26 +408,36 @@ async function extractWhatsApp(page, pageUrl) {
       links.push({
         href: key,
         type,
-        number: number || 'unknown',
-        display_text: (el.textContent || '').trim() || el.getAttribute('aria-label') || '',
+        number: number || "unknown",
+        display_text: (el.textContent || "").trim() || el.getAttribute("aria-label") || "",
         is_floating: isFixed(el),
       });
     };
 
     // 1. Standard anchor hrefs — wa.me, whatsapp.com, whatsapp:// protocol
-    document.querySelectorAll(
-      'a[href*="wa.me"], a[href*="whatsapp.com"], a[href*="api.whatsapp.com"], a[href*="whatsapp://"]'
-    ).forEach(a => pushLink(a.getAttribute('href') || '', a));
+    document
+      .querySelectorAll(
+        'a[href*="wa.me"], a[href*="whatsapp.com"], a[href*="api.whatsapp.com"], a[href*="whatsapp://"]',
+      )
+      .forEach((a) => pushLink(a.getAttribute("href") || "", a));
 
     // 2. Non-anchor elements — div/button/span with onclick, data-href, or data-url
     //    containing a WhatsApp URL (common in floating button plugins)
-    document.querySelectorAll('[onclick*="wa.me"], [onclick*="whatsapp"], [data-href*="wa.me"], [data-href*="whatsapp"], [data-url*="wa.me"], [data-url*="whatsapp"], [data-link*="wa.me"], [data-link*="whatsapp"]').forEach(el => {
-      if (el.tagName === 'A') return; // already handled above
-      const src = el.getAttribute('onclick') || el.getAttribute('data-href') ||
-                  el.getAttribute('data-url') || el.getAttribute('data-link') || '';
-      const urlMatch = src.match(/https?:\/\/[^\s'")\]]+/);
-      if (urlMatch) pushLink(urlMatch[0], el);
-    });
+    document
+      .querySelectorAll(
+        '[onclick*="wa.me"], [onclick*="whatsapp"], [data-href*="wa.me"], [data-href*="whatsapp"], [data-url*="wa.me"], [data-url*="whatsapp"], [data-link*="wa.me"], [data-link*="whatsapp"]',
+      )
+      .forEach((el) => {
+        if (el.tagName === "A") return; // already handled above
+        const src =
+          el.getAttribute("onclick") ||
+          el.getAttribute("data-href") ||
+          el.getAttribute("data-url") ||
+          el.getAttribute("data-link") ||
+          "";
+        const urlMatch = src.match(/https?:\/\/[^\s'")\]]+/);
+        if (urlMatch) pushLink(urlMatch[0], el);
+      });
 
     // 3. Widget detection — broader class/id patterns used by popular WP plugins
     const hasWidget =
@@ -428,8 +445,8 @@ async function extractWhatsApp(page, pageUrl) {
       !!window.WhatsAppWidget ||
       !!document.querySelector(
         '[class*="whatsapp"],[id*="whatsapp"],[class*="wts-chat"],[class*="wwa-btn"],' +
-        '[class*="wa-chat"],[class*="wp-whatsapp"],[class*="whatshelp"],' +
-        '[class*="wpwl-"],[id*="wpwl-"],[class*="tawkto-whatsapp"]'
+          '[class*="wa-chat"],[class*="wp-whatsapp"],[class*="whatshelp"],' +
+          '[class*="wpwl-"],[id*="wpwl-"],[class*="tawkto-whatsapp"]',
       );
 
     return { links, has_widget: hasWidget };
@@ -446,34 +463,34 @@ async function extractBookingLinks(page, pageUrl) {
   const bookingLinks = await safeEval(page, () => {
     const links = [];
     const platforms = {
-      'calendly.com': 'Calendly',
-      'acuityscheduling.com': 'Acuity Scheduling',
-      'simplybook.me': 'SimplyBook.me',
-      'booksy.com': 'Booksy',
-      'mindbodyonline.com': 'Mindbody',
-      'squareup.com': 'Square Appointments',
-      'setmore.com': 'Setmore',
-      'youcanbook.me': 'YouCanBook.me',
-      'fresha.com': 'Fresha',
-      'cliniko.com': 'Cliniko',
-      'janeapp.com': 'Jane App',
-      'treatwell.co.uk': 'Treatwell',
-      'treatwell.com': 'Treatwell',
-      'vagaro.com': 'Vagaro'
+      "calendly.com": "Calendly",
+      "acuityscheduling.com": "Acuity Scheduling",
+      "simplybook.me": "SimplyBook.me",
+      "booksy.com": "Booksy",
+      "mindbodyonline.com": "Mindbody",
+      "squareup.com": "Square Appointments",
+      "setmore.com": "Setmore",
+      "youcanbook.me": "YouCanBook.me",
+      "fresha.com": "Fresha",
+      "cliniko.com": "Cliniko",
+      "janeapp.com": "Jane App",
+      "treatwell.co.uk": "Treatwell",
+      "treatwell.com": "Treatwell",
+      "vagaro.com": "Vagaro",
     };
 
     // Check for links
-    document.querySelectorAll('a[href]').forEach(a => {
-      const href = a.getAttribute('href');
+    document.querySelectorAll("a[href]").forEach((a) => {
+      const href = a.getAttribute("href");
       for (const [domain, platform] of Object.entries(platforms)) {
         if (href.includes(domain)) {
           links.push({
             href,
             platform,
             domain,
-            type: 'external_link',
-            opens_new_tab: a.getAttribute('target') === '_blank',
-            display_text: a.textContent.trim()
+            type: "external_link",
+            opens_new_tab: a.getAttribute("target") === "_blank",
+            display_text: a.textContent.trim(),
           });
           break;
         }
@@ -481,17 +498,17 @@ async function extractBookingLinks(page, pageUrl) {
     });
 
     // Check for embedded iframes
-    document.querySelectorAll('iframe[src]').forEach(iframe => {
-      const src = iframe.getAttribute('src');
+    document.querySelectorAll("iframe[src]").forEach((iframe) => {
+      const src = iframe.getAttribute("src");
       for (const [domain, platform] of Object.entries(platforms)) {
         if (src.includes(domain)) {
           links.push({
             href: src,
             platform,
             domain,
-            type: 'embedded_iframe',
+            type: "embedded_iframe",
             opens_new_tab: false,
-            display_text: 'Embedded booking widget'
+            display_text: "Embedded booking widget",
           });
           break;
         }
@@ -502,7 +519,7 @@ async function extractBookingLinks(page, pageUrl) {
   });
 
   if (bookingLinks) {
-    bookingLinks.forEach(link => link.page_url = pageUrl);
+    bookingLinks.forEach((link) => (link.page_url = pageUrl));
   }
 
   return bookingLinks || [];
@@ -511,46 +528,48 @@ async function extractBookingLinks(page, pageUrl) {
 // Only match labels that signal direct intent to book/convert — not soft enquiry
 // terms like "enquire now", "request a quote", "get started" which typically lead
 // to contact forms rather than an actual booking action.
-const BOOKING_CTA_KEYWORDS = /\b(book\s*(now|online|a?\s*session|an?\s*appointment|a?\s*class|a?\s*consultation|a?\s*call|your|a?\s*slot|a?\s*visit)?|schedule(\s*(a?\s*call|a?\s*session|now))?|reserve(\s*(a?\s*spot|now))?|make\s*(an?\s*appointment|a?\s*booking)|arrange\s*a?\s*visit)\b/i;
+const BOOKING_CTA_KEYWORDS =
+  /\b(book\s*(now|online|a?\s*session|an?\s*appointment|a?\s*class|a?\s*consultation|a?\s*call|your|a?\s*slot|a?\s*visit)?|schedule(\s*(a?\s*call|a?\s*session|now))?|reserve(\s*(a?\s*spot|now))?|make\s*(an?\s*appointment|a?\s*booking)|arrange\s*a?\s*visit)\b/i;
 
 // URL patterns that indicate a generic contact/enquiry page — links landing here
 // are soft leads, not direct conversions, and should be excluded from booking CTAs.
-const CONTACT_PAGE_PATTERN = /\/(contact|contact-us|get-in-touch|enquire|enquiry|enquiries|reach-us|say-hello|talk-to-us|message-us)(\/|$|\?)/i;
+const CONTACT_PAGE_PATTERN =
+  /\/(contact|contact-us|get-in-touch|enquire|enquiry|enquiries|reach-us|say-hello|talk-to-us|message-us)(\/|$|\?)/i;
 
 const ALL_BOOKING_DOMAINS = {
-  'calendly.com': 'Calendly',
-  'acuityscheduling.com': 'Acuity Scheduling',
-  'simplybook.me': 'SimplyBook.me',
-  'booksy.com': 'Booksy',
-  'mindbodyonline.com': 'Mindbody',
-  'squareup.com': 'Square Appointments',
-  'setmore.com': 'Setmore',
-  'youcanbook.me': 'YouCanBook.me',
-  'fresha.com': 'Fresha',
-  'cliniko.com': 'Cliniko',
-  'janeapp.com': 'Jane App',
-  'treatwell.co.uk': 'Treatwell',
-  'treatwell.com': 'Treatwell',
-  'vagaro.com': 'Vagaro',
-  'doctolib.fr': 'Doctolib',
-  'practicepal.co.uk': 'PracticePal',
-  'healthcode.co.uk': 'Healthcode',
-  'nookal.com': 'Nookal',
-  'powerdiary.com': 'Power Diary',
-  'halaxy.com': 'Halaxy',
+  "calendly.com": "Calendly",
+  "acuityscheduling.com": "Acuity Scheduling",
+  "simplybook.me": "SimplyBook.me",
+  "booksy.com": "Booksy",
+  "mindbodyonline.com": "Mindbody",
+  "squareup.com": "Square Appointments",
+  "setmore.com": "Setmore",
+  "youcanbook.me": "YouCanBook.me",
+  "fresha.com": "Fresha",
+  "cliniko.com": "Cliniko",
+  "janeapp.com": "Jane App",
+  "treatwell.co.uk": "Treatwell",
+  "treatwell.com": "Treatwell",
+  "vagaro.com": "Vagaro",
+  "doctolib.fr": "Doctolib",
+  "practicepal.co.uk": "PracticePal",
+  "healthcode.co.uk": "Healthcode",
+  "nookal.com": "Nookal",
+  "powerdiary.com": "Power Diary",
+  "halaxy.com": "Halaxy",
 };
 
 async function extractBookingCTAs(page, context, baseUrl) {
   // Step 1 — collect all booking-related links from the current page
   const rawLinks = await safeEval(page, () => {
     const found = [];
-    document.querySelectorAll('a[href]').forEach(a => {
-      const text = (a.textContent || '').replace(/\s+/g, ' ').trim();
-      const ariaLabel = a.getAttribute('aria-label') || '';
+    document.querySelectorAll("a[href]").forEach((a) => {
+      const text = (a.textContent || "").replace(/\s+/g, " ").trim();
+      const ariaLabel = a.getAttribute("aria-label") || "";
       const labelText = (text || ariaLabel).trim();
-      const href = a.getAttribute('href') || '';
-      if (!href || href.startsWith('#') || href.startsWith('tel:') || href.startsWith('mailto:')) return;
-      found.push({ label_text: labelText, href, opens_new_tab: a.getAttribute('target') === '_blank' });
+      const href = a.getAttribute("href") || "";
+      if (!href || href.startsWith("#") || href.startsWith("tel:") || href.startsWith("mailto:")) return;
+      found.push({ label_text: labelText, href, opens_new_tab: a.getAttribute("target") === "_blank" });
     });
     return found;
   });
@@ -559,12 +578,14 @@ async function extractBookingCTAs(page, context, baseUrl) {
 
   // Filter to booking keyword matches and deduplicate by href
   const seenHrefs = new Set();
-  const bookingLinks = rawLinks.filter(link => {
-    if (!BOOKING_CTA_KEYWORDS.test(link.label_text)) return false;
-    if (seenHrefs.has(link.href)) return false;
-    seenHrefs.add(link.href);
-    return true;
-  }).slice(0, 6); // max 6 to keep the audit fast
+  const bookingLinks = rawLinks
+    .filter((link) => {
+      if (!BOOKING_CTA_KEYWORDS.test(link.label_text)) return false;
+      if (seenHrefs.has(link.href)) return false;
+      seenHrefs.add(link.href);
+      return true;
+    })
+    .slice(0, 6); // max 6 to keep the audit fast
 
   // Step 2 — follow each link in a new tab and classify the destination
   const results = [];
@@ -573,46 +594,50 @@ async function extractBookingCTAs(page, context, baseUrl) {
     let newPage = null;
     try {
       let absoluteUrl;
-      try { absoluteUrl = new URL(link.href, baseUrl).href; } catch { continue; }
+      try {
+        absoluteUrl = new URL(link.href, baseUrl).href;
+      } catch {
+        continue;
+      }
 
       newPage = await context.newPage();
       let redirectHops = 0;
-      newPage.on('response', (response) => {
+      newPage.on("response", (response) => {
         const status = response.status();
         if (status >= 300 && status < 400) redirectHops++;
       });
-      await newPage.goto(absoluteUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
-      await newPage.waitForLoadState('load', { timeout: 5000 }).catch(() => {});
+      await newPage.goto(absoluteUrl, { waitUntil: "domcontentloaded", timeout: 15000 });
+      await newPage.waitForLoadState("load", { timeout: 5000 }).catch(() => {});
 
       const finalUrl = newPage.url();
-      const pageTitle = await newPage.title().catch(() => '');
+      const pageTitle = await newPage.title().catch(() => "");
       const pageSnippet = await safeEval(newPage, () =>
-        (document.body ? document.body.innerText.replace(/\s+/g, ' ').trim().substring(0, 400) : '')
+        document.body ? document.body.innerText.replace(/\s+/g, " ").trim().substring(0, 400) : "",
       );
 
       // Classify destination
-      let destinationType = 'unknown';
+      let destinationType = "unknown";
       let platform = null;
 
       for (const [domain, name] of Object.entries(ALL_BOOKING_DOMAINS)) {
         if (finalUrl.includes(domain)) {
-          destinationType = 'booking_platform';
+          destinationType = "booking_platform";
           platform = name;
           break;
         }
       }
 
-      if (destinationType === 'unknown') {
+      if (destinationType === "unknown") {
         try {
           const isSameSite = new URL(finalUrl).origin === new URL(baseUrl).origin;
           if (isSameSite) {
-            const formCount = await safeEval(newPage, () => document.querySelectorAll('form').length) || 0;
-            destinationType = formCount > 0 ? 'same_site_form' : 'same_site_page';
+            const formCount = (await safeEval(newPage, () => document.querySelectorAll("form").length)) || 0;
+            destinationType = formCount > 0 ? "same_site_form" : "same_site_page";
           } else {
-            destinationType = 'external_unknown';
+            destinationType = "external_unknown";
           }
         } catch {
-          destinationType = 'external_unknown';
+          destinationType = "external_unknown";
         }
       }
 
@@ -621,30 +646,27 @@ async function extractBookingCTAs(page, context, baseUrl) {
       // same_site_page = follow one level deeper to see if a booking platform or
       // form lives there — if so, 2 clicks; otherwise null (depth unclear).
       let clicksToBook = null;
-      if (destinationType === 'booking_platform' || destinationType === 'same_site_form') {
+      if (destinationType === "booking_platform" || destinationType === "same_site_form") {
         clicksToBook = 1;
-      } else if (destinationType === 'external_unknown') {
+      } else if (destinationType === "external_unknown") {
         clicksToBook = 1; // reached something off-site — treat as 1, destination unknown
-      } else if (destinationType === 'same_site_page') {
-        const deepLinks = await safeEval(newPage, () =>
-          Array.from(document.querySelectorAll('a[href]')).map(a => a.href)
-        ) || [];
+      } else if (destinationType === "same_site_page") {
+        const deepLinks =
+          (await safeEval(newPage, () => Array.from(document.querySelectorAll("a[href]")).map((a) => a.href))) || [];
         const bookingDomainKeys = Object.keys(ALL_BOOKING_DOMAINS);
-        const hasDeepBookingPlatform = deepLinks.some(href =>
-          bookingDomainKeys.some(d => href.includes(d))
-        );
+        const hasDeepBookingPlatform = deepLinks.some((href) => bookingDomainKeys.some((d) => href.includes(d)));
         clicksToBook = hasDeepBookingPlatform ? 2 : null;
       }
 
       // Build GTM recommendation
       let gtm_recommendation;
-      if (destinationType === 'booking_platform') {
+      if (destinationType === "booking_platform") {
         const hostname = new URL(finalUrl).hostname;
         gtm_recommendation = `GA4 Event: click_booking | Trigger: Click - Just Links | Filter: Click URL contains "${hostname}"`;
-      } else if (destinationType === 'same_site_form') {
+      } else if (destinationType === "same_site_form") {
         const path = new URL(finalUrl).pathname;
         gtm_recommendation = `GA4 Event: click_book_cta | Trigger: Click - Just Links on this CTA. Also set up form submission tracking on "${path}"`;
-      } else if (destinationType === 'same_site_page') {
+      } else if (destinationType === "same_site_page") {
         const path = new URL(finalUrl).pathname;
         gtm_recommendation = `GA4 Event: click_book_cta | Trigger: Click - Just Links | Filter: Click URL contains "${path}"`;
       } else {
@@ -658,10 +680,10 @@ async function extractBookingCTAs(page, context, baseUrl) {
       //   same_site_page    → only if a booking platform was found one level deeper
       //   external_unknown  → keep (may be a custom booking system we don't recognise)
       const isDirectConversion =
-        destinationType === 'booking_platform' ||
-        destinationType === 'external_unknown' ||
-        (destinationType === 'same_site_form' && !CONTACT_PAGE_PATTERN.test(finalUrl)) ||
-        (destinationType === 'same_site_page' && clicksToBook !== null);
+        destinationType === "booking_platform" ||
+        destinationType === "external_unknown" ||
+        (destinationType === "same_site_form" && !CONTACT_PAGE_PATTERN.test(finalUrl)) ||
+        (destinationType === "same_site_page" && clicksToBook !== null);
 
       if (!isDirectConversion) continue;
 
@@ -677,17 +699,16 @@ async function extractBookingCTAs(page, context, baseUrl) {
         page_snippet: pageSnippet,
         gtm_recommendation,
       });
-
     } catch (err) {
       results.push({
         link_text: link.label_text,
         source_href: link.href,
         final_url: null,
         page_title: null,
-        destination_type: 'error',
+        destination_type: "error",
         platform: null,
         error: err.message,
-        gtm_recommendation: 'Could not follow link. Please check manually.',
+        gtm_recommendation: "Could not follow link. Please check manually.",
       });
     } finally {
       if (newPage) await newPage.close().catch(() => {});
@@ -700,28 +721,28 @@ async function extractBookingCTAs(page, context, baseUrl) {
 async function extractSocialLinks(page, pageUrl) {
   const socialLinks = await safeEval(page, () => {
     const platforms = {
-      'facebook.com': 'Facebook',
-      'fb.com': 'Facebook',
-      'instagram.com': 'Instagram',
-      'twitter.com': 'X (Twitter)',
-      'x.com': 'X (Twitter)',
-      'linkedin.com': 'LinkedIn',
-      'youtube.com': 'YouTube',
-      'youtu.be': 'YouTube',
-      'tiktok.com': 'TikTok',
-      'pinterest.com': 'Pinterest',
-      'snapchat.com': 'Snapchat',
-      'threads.net': 'Threads',
-      'trustpilot.com': 'Trustpilot',
+      "facebook.com": "Facebook",
+      "fb.com": "Facebook",
+      "instagram.com": "Instagram",
+      "twitter.com": "X (Twitter)",
+      "x.com": "X (Twitter)",
+      "linkedin.com": "LinkedIn",
+      "youtube.com": "YouTube",
+      "youtu.be": "YouTube",
+      "tiktok.com": "TikTok",
+      "pinterest.com": "Pinterest",
+      "snapchat.com": "Snapchat",
+      "threads.net": "Threads",
+      "trustpilot.com": "Trustpilot",
       // Google Maps intentionally excluded — tracked separately via extractLocationLinks
     };
 
     const found = [];
     const seen = new Set();
 
-    document.querySelectorAll('a[href]').forEach(a => {
-      const href = a.getAttribute('href') || '';
-      if (!href.startsWith('http')) return;
+    document.querySelectorAll("a[href]").forEach((a) => {
+      const href = a.getAttribute("href") || "";
+      if (!href.startsWith("http")) return;
 
       for (const [domain, platform] of Object.entries(platforms)) {
         if (href.includes(domain)) {
@@ -731,8 +752,8 @@ async function extractSocialLinks(page, pageUrl) {
             found.push({
               platform,
               href,
-              display_text: a.textContent.trim() || a.getAttribute('aria-label') || '',
-              opens_new_tab: a.getAttribute('target') === '_blank',
+              display_text: a.textContent.trim() || a.getAttribute("aria-label") || "",
+              opens_new_tab: a.getAttribute("target") === "_blank",
             });
           }
           break;
@@ -744,7 +765,7 @@ async function extractSocialLinks(page, pageUrl) {
   });
 
   if (socialLinks) {
-    socialLinks.forEach(link => link.page_url = pageUrl);
+    socialLinks.forEach((link) => (link.page_url = pageUrl));
   }
 
   return socialLinks || [];
@@ -755,68 +776,67 @@ async function extractSocialLinks(page, pageUrl) {
 // individual GTM triggers can be created per location.
 // ---------------------------------------------------------------------------
 async function extractLocationLinks(page, pageUrl) {
-  const MAPS_PATTERNS = [
-    'google.com/maps',
-    'maps.google.com',
-    'g.page',
-    'goo.gl/maps',
-    'maps.app.goo.gl',
-  ];
+  const MAPS_PATTERNS = ["google.com/maps", "maps.google.com", "g.page", "goo.gl/maps", "maps.app.goo.gl"];
 
-  const locations = await safeEval(page, (patterns) => {
-    const found = [];
-    const seenKeys = new Set();
+  const locations = await safeEval(
+    page,
+    (patterns) => {
+      const found = [];
+      const seenKeys = new Set();
 
-    document.querySelectorAll('a[href]').forEach(a => {
-      const href = (a.getAttribute('href') || '').trim();
-      if (!href.startsWith('http')) return;
-      if (!patterns.some(p => href.includes(p))) return;
+      document.querySelectorAll("a[href]").forEach((a) => {
+        const href = (a.getAttribute("href") || "").trim();
+        if (!href.startsWith("http")) return;
+        if (!patterns.some((p) => href.includes(p))) return;
 
-      // Deduplicate by the URL without query fragments
-      const key = href.split('#')[0];
-      if (seenKeys.has(key)) return;
-      seenKeys.add(key);
+        // Deduplicate by the URL without query fragments
+        const key = href.split("#")[0];
+        if (seenKeys.has(key)) return;
+        seenKeys.add(key);
 
-      // Try to extract a human-readable place name from the URL path
-      // e.g. /maps/place/Eiffel+Tower/@48.8584...
-      let locationName = '';
-      const placeMatch = href.match(/\/maps\/place\/([^/@?&]+)/);
-      if (placeMatch) {
-        try { locationName = decodeURIComponent(placeMatch[1].replace(/\+/g, ' ')); } catch {}
-      }
-      // Fall back to the link's visible text or aria-label
-      if (!locationName) {
-        locationName = (a.textContent || '').replace(/\s+/g, ' ').trim() ||
-                       a.getAttribute('aria-label') || '';
-      }
+        // Try to extract a human-readable place name from the URL path
+        // e.g. /maps/place/Eiffel+Tower/@48.8584...
+        let locationName = "";
+        const placeMatch = href.match(/\/maps\/place\/([^/@?&]+)/);
+        if (placeMatch) {
+          try {
+            locationName = decodeURIComponent(placeMatch[1].replace(/\+/g, " "));
+          } catch {}
+        }
+        // Fall back to the link's visible text or aria-label
+        if (!locationName) {
+          locationName = (a.textContent || "").replace(/\s+/g, " ").trim() || a.getAttribute("aria-label") || "";
+        }
 
-      // Extract lat/lng coords if present (@lat,lng,zoom)
-      let coords = null;
-      const coordsMatch = href.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
-      if (coordsMatch) coords = `${coordsMatch[1]},${coordsMatch[2]}`;
+        // Extract lat/lng coords if present (@lat,lng,zoom)
+        let coords = null;
+        const coordsMatch = href.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
+        if (coordsMatch) coords = `${coordsMatch[1]},${coordsMatch[2]}`;
 
-      // Detect place_id=ChIJ... or cid=... for a stable identifier
-      let placeId = null;
-      const placeIdMatch = href.match(/[?&]place_id=([^&]+)/);
-      if (placeIdMatch) placeId = placeIdMatch[1];
-      const cidMatch = href.match(/[?&]cid=([^&]+)/);
-      if (cidMatch && !placeId) placeId = `cid:${cidMatch[1]}`;
+        // Detect place_id=ChIJ... or cid=... for a stable identifier
+        let placeId = null;
+        const placeIdMatch = href.match(/[?&]place_id=([^&]+)/);
+        if (placeIdMatch) placeId = placeIdMatch[1];
+        const cidMatch = href.match(/[?&]cid=([^&]+)/);
+        if (cidMatch && !placeId) placeId = `cid:${cidMatch[1]}`;
 
-      found.push({
-        href,
-        location_name: locationName || 'Google Maps location',
-        coords,
-        place_id: placeId,
-        display_text: (a.textContent || '').replace(/\s+/g, ' ').trim() || a.getAttribute('aria-label') || '',
-        opens_new_tab: a.getAttribute('target') === '_blank',
+        found.push({
+          href,
+          location_name: locationName || "Google Maps location",
+          coords,
+          place_id: placeId,
+          display_text: (a.textContent || "").replace(/\s+/g, " ").trim() || a.getAttribute("aria-label") || "",
+          opens_new_tab: a.getAttribute("target") === "_blank",
+        });
       });
-    });
 
-    return found;
-  }, MAPS_PATTERNS);
+      return found;
+    },
+    MAPS_PATTERNS,
+  );
 
   if (locations) {
-    locations.forEach(l => (l.page_url = pageUrl));
+    locations.forEach((l) => (l.page_url = pageUrl));
   }
 
   return locations || [];
@@ -825,21 +845,36 @@ async function extractLocationLinks(page, pageUrl) {
 // ---------------------------------------------------------------------------
 // Service page discovery — finds all service/treatment pages from the nav.
 // ---------------------------------------------------------------------------
-async function findServicePages(page, baseUrl) {
-  const SERVICE_URL_PATTERN  = /\/(services?|treatments?|therapies|therapists?|what-we-do|solutions|programs?|packages?|specialties|procedures|expertise|offerings|portfolio)(\/|$|\?|#)/i;
-  const SERVICE_TEXT_PATTERN = /^(services?|treatments?|therapies|therapy|what we do|solutions|programs?|packages?|specialties|our\s+work|offerings|how we help|expertise)\s*$/i;
 
-  const links = await safeEval(page, () =>
-    Array.from(document.querySelectorAll(
-      'nav a[href], header a[href], [class*="nav"] a[href], [class*="menu"] a[href], [role="navigation"] a[href]'
-    )).map(a => ({
-      href: a.href,
-      text: (a.textContent || '').replace(/\s+/g, ' ').trim(),
-    }))
-  ) || [];
+const SERVICE_URL_PATTERN =
+  /\/(services?|treatments?|therapies|therapists?|what-we-do|solutions|programs?|packages?|specialties|procedures|expertise|offerings|portfolio)(\/|$|\?|#)/i;
+const SERVICE_TEXT_PATTERN =
+  /^(services?|treatments?|therapies|therapy|what we do|solutions|programs?|packages?|specialties|our\s+work|offerings|how we help|expertise)\s*$/i;
+
+// URL pattern that flags a page as a service LISTING rather than an individual
+// service page — e.g. /services or /treatments (no trailing slug).
+const SERVICE_LISTING_PATTERN =
+  /\/(services?|treatments?|therapies|what-we-do|solutions|programs?|packages?|specialties|procedures|expertise|offerings|portfolio)\/?$/i;
+
+async function findServicePages(page, baseUrl) {
+  const links =
+    (await safeEval(page, () =>
+      Array.from(
+        document.querySelectorAll(
+          'nav a[href], header a[href], [class*="nav"] a[href], [class*="menu"] a[href], [role="navigation"] a[href]',
+        ),
+      ).map((a) => ({
+        href: a.href,
+        text: (a.textContent || "").replace(/\s+/g, " ").trim(),
+      })),
+    )) || [];
 
   let baseOrigin;
-  try { baseOrigin = new URL(baseUrl).origin; } catch { return []; }
+  try {
+    baseOrigin = new URL(baseUrl).origin;
+  } catch {
+    return [];
+  }
 
   const serviceUrls = [];
   const seen = new Set();
@@ -856,10 +891,53 @@ async function findServicePages(page, baseUrl) {
         seen.add(canonical);
         serviceUrls.push(u.href);
       }
-    } catch { /* skip malformed */ }
+    } catch {
+      /* skip malformed */
+    }
   }
 
   return serviceUrls;
+}
+
+// ---------------------------------------------------------------------------
+// Service sub-page discovery — called when visiting a service LISTING page.
+// Finds all direct child pages linked from the listing (e.g. /services/massage
+// when visiting /services). Does NOT recurse deeper than one level.
+// ---------------------------------------------------------------------------
+async function findServiceSubPages(page, currentUrl, baseOrigin, alreadySeen) {
+  let currentPath;
+  try {
+    currentPath = new URL(currentUrl).pathname.replace(/\/$/, "");
+  } catch {
+    return [];
+  }
+
+  const links =
+    (await safeEval(page, () => Array.from(document.querySelectorAll("a[href]")).map((a) => ({ href: a.href })))) || [];
+
+  const subPages = [];
+  const seen = new Set(alreadySeen);
+
+  for (const link of links) {
+    try {
+      const u = new URL(link.href);
+      if (u.origin !== baseOrigin) continue;
+      const cleanPath = u.pathname.replace(/\/$/, "");
+      const canonical = u.origin + cleanPath;
+      if (seen.has(canonical)) continue;
+      // Must be a direct child of the current listing path — e.g. /services/massage
+      // when currentPath is /services. Skip grandchildren (/services/a/b).
+      if (!cleanPath.startsWith(currentPath + "/")) continue;
+      const remainder = cleanPath.slice(currentPath.length + 1);
+      if (remainder.includes("/")) continue; // grandchild — skip
+      seen.add(canonical);
+      subPages.push(u.href);
+    } catch {
+      /* skip malformed */
+    }
+  }
+
+  return subPages;
 }
 
 // ---------------------------------------------------------------------------
@@ -867,235 +945,278 @@ async function findServicePages(page, baseUrl) {
 // forms and multi-stage form wizards, used for the SayHello viability check.
 // ---------------------------------------------------------------------------
 async function detectPageFormFeatures(page) {
-  return await safeEval(page, () => {
-    // ── Multi-stage form indicators ──────────────────────────────────────────
-    const MULTI_STAGE_SELECTORS = [
-      '[class*="multi-step"]', '[class*="multistep"]', '[class*="form-step"]',
-      '[class*="form-wizard"]', '[class*="wizard"]', '[class*="step-nav"]',
-      '[class*="progress-step"]', '[class*="steps-container"]',
-      '[data-step]', '[data-page]', '[data-form-step]', '[data-wizard]',
-    ];
-    const hasMultiStageClass = MULTI_STAGE_SELECTORS.some(sel => !!document.querySelector(sel));
+  return (
+    (await safeEval(page, () => {
+      // ── Multi-stage form indicators ──────────────────────────────────────────
+      const MULTI_STAGE_SELECTORS = [
+        '[class*="multi-step"]',
+        '[class*="multistep"]',
+        '[class*="form-step"]',
+        '[class*="form-wizard"]',
+        '[class*="wizard"]',
+        '[class*="step-nav"]',
+        '[class*="progress-step"]',
+        '[class*="steps-container"]',
+        "[data-step]",
+        "[data-page]",
+        "[data-form-step]",
+        "[data-wizard]",
+      ];
+      const hasMultiStageClass = MULTI_STAGE_SELECTORS.some((sel) => !!document.querySelector(sel));
 
-    // "Next" or "Back" buttons inside a form are a strong multi-stage signal
-    const hasNextBack = Array.from(
-      document.querySelectorAll('form button, form input[type="button"], form input[type="submit"]')
-    ).some(b => /\b(next\s*step|back|previous|continue\s*to)\b/i.test(b.textContent || b.value || ''));
+      // "Next" or "Back" buttons inside a form are a strong multi-stage signal
+      const hasNextBack = Array.from(
+        document.querySelectorAll('form button, form input[type="button"], form input[type="submit"]'),
+      ).some((b) => /\b(next\s*step|back|previous|continue\s*to)\b/i.test(b.textContent || b.value || ""));
 
-    const isMultiStage = hasMultiStageClass || hasNextBack;
+      const isMultiStage = hasMultiStageClass || hasNextBack;
 
-    // ── Iframe form providers ────────────────────────────────────────────────
-    const FORM_IFRAME_HOSTS = [
-      'typeform.com', 'jotform.com', 'wufoo.com', 'formstack.com',
-      'paperform.co', '123formbuilder.com', 'formsite.com',
-      'hsforms.com', 'hbspt', 'forms.hubspot.com',
-    ];
-    const iframeProviders = [];
-    document.querySelectorAll('iframe[src]').forEach(iframe => {
-      const src = (iframe.getAttribute('src') || '').toLowerCase();
-      FORM_IFRAME_HOSTS.forEach(host => {
-        if (src.includes(host) && !iframeProviders.includes(host)) {
-          iframeProviders.push(host);
-        }
+      // ── Iframe form providers ────────────────────────────────────────────────
+      const FORM_IFRAME_HOSTS = [
+        "typeform.com",
+        "jotform.com",
+        "wufoo.com",
+        "formstack.com",
+        "paperform.co",
+        "123formbuilder.com",
+        "formsite.com",
+        "hsforms.com",
+        "hbspt",
+        "forms.hubspot.com",
+      ];
+      const iframeProviders = [];
+      document.querySelectorAll("iframe[src]").forEach((iframe) => {
+        const src = (iframe.getAttribute("src") || "").toLowerCase();
+        FORM_IFRAME_HOSTS.forEach((host) => {
+          if (src.includes(host) && !iframeProviders.includes(host)) {
+            iframeProviders.push(host);
+          }
+        });
       });
-    });
 
-    return {
-      is_multi_stage:    isMultiStage,
-      has_iframe_forms:  iframeProviders.length > 0,
-      iframe_providers:  iframeProviders,
-    };
-  }) || { is_multi_stage: false, has_iframe_forms: false, iframe_providers: [] };
+      return {
+        is_multi_stage: isMultiStage,
+        has_iframe_forms: iframeProviders.length > 0,
+        iframe_providers: iframeProviders,
+      };
+    })) || { is_multi_stage: false, has_iframe_forms: false, iframe_providers: [] }
+  );
 }
 
 // ---------------------------------------------------------------------------
 // Geographic signals — scanned from the page for the SayHello viability check.
 // ---------------------------------------------------------------------------
 async function extractGeoSignals(page) {
-  return await safeEval(page, () => {
-    const text = (document.body ? document.body.innerText : '').substring(0, 12000);
+  return (
+    (await safeEval(page, () => {
+      const text = (document.body ? document.body.innerText : "").substring(0, 12000);
 
-    let hreflangUK = false;
-    let hreflangNA = false;
-    document.querySelectorAll('link[hreflang], [hreflang]').forEach(el => {
-      const lang = (el.getAttribute('hreflang') || '').toLowerCase();
-      if (lang.includes('gb') || lang.includes('uk')) hreflangUK = true;
-      if (lang.includes('us') || lang.includes('ca')) hreflangNA = true;
-    });
+      let hreflangUK = false;
+      let hreflangNA = false;
+      document.querySelectorAll("link[hreflang], [hreflang]").forEach((el) => {
+        const lang = (el.getAttribute("hreflang") || "").toLowerCase();
+        if (lang.includes("gb") || lang.includes("uk")) hreflangUK = true;
+        if (lang.includes("us") || lang.includes("ca")) hreflangNA = true;
+      });
 
-    // Currency symbols
-    const hasGBP    = /£/.test(text);
-    const hasUSD    = /\$\d/.test(text);
+      // Currency symbols
+      const hasGBP = /£/.test(text);
+      const hasUSD = /\$\d/.test(text);
 
-    // UK postcode (rough: 1-2 letters + 1-2 digits + space + digit + 2 letters)
-    const hasUKPostcode = /\b[A-Z]{1,2}\d{1,2}[A-Z]?\s?\d[A-Z]{2}\b/.test(text);
+      // UK postcode (rough: 1-2 letters + 1-2 digits + space + digit + 2 letters)
+      const hasUKPostcode = /\b[A-Z]{1,2}\d{1,2}[A-Z]?\s?\d[A-Z]{2}\b/.test(text);
 
-    // Country/city mentions
-    const ukMention = /\b(United Kingdom|England|Scotland|Wales|Northern Ireland|Great Britain|London|Manchester|Birmingham|Edinburgh|Dublin)\b/i.test(text);
-    const naMention = /\b(United States|USA|Canada|New York|Los Angeles|Chicago|Toronto|Vancouver|San Francisco)\b/i.test(text);
+      // Country/city mentions
+      const ukMention =
+        /\b(United Kingdom|England|Scotland|Wales|Northern Ireland|Great Britain|London|Manchester|Birmingham|Edinburgh|Dublin)\b/i.test(
+          text,
+        );
+      const naMention =
+        /\b(United States|USA|Canada|New York|Los Angeles|Chicago|Toronto|Vancouver|San Francisco)\b/i.test(text);
 
-    return { hreflangUK, hreflangNA, hasGBP, hasUSD, hasUKPostcode, ukMention, naMention };
-  }) || {};
+      return { hreflangUK, hreflangNA, hasGBP, hasUSD, hasUKPostcode, ukMention, naMention };
+    })) || {}
+  );
 }
 
 async function extractAboveFoldCTAs(page) {
-  return await safeEval(page, () => {
-    const viewportHeight = window.innerHeight;
-    const results = { phone_links: [], email_links: [], whatsapp_links: [], cta_buttons: [] };
+  return (
+    (await safeEval(page, () => {
+      const viewportHeight = window.innerHeight;
+      const results = { phone_links: [], email_links: [], whatsapp_links: [], cta_buttons: [] };
 
-    // Fixed/sticky elements are always visible regardless of scroll position —
-    // treat them as always-present CTAs even if their rect.top is near the bottom.
-    const isFloating = (el) => {
-      let node = el;
-      while (node && node !== document.body) {
-        const pos = window.getComputedStyle(node).position;
-        if (pos === 'fixed' || pos === 'sticky') return true;
-        node = node.parentElement;
-      }
-      return false;
-    };
+      // Fixed/sticky elements are always visible regardless of scroll position —
+      // treat them as always-present CTAs even if their rect.top is near the bottom.
+      const isFloating = (el) => {
+        let node = el;
+        while (node && node !== document.body) {
+          const pos = window.getComputedStyle(node).position;
+          if (pos === "fixed" || pos === "sticky") return true;
+          node = node.parentElement;
+        }
+        return false;
+      };
 
-    const isVisibleInFold = (el) => {
-      try {
-        if (isFloating(el)) return true; // always on screen
-        const rect = el.getBoundingClientRect();
-        return rect.top >= 0 && rect.top < viewportHeight && rect.width > 0 && rect.height > 0;
-      } catch { return false; }
-    };
+      const isVisibleInFold = (el) => {
+        try {
+          if (isFloating(el)) return true; // always on screen
+          const rect = el.getBoundingClientRect();
+          return rect.top >= 0 && rect.top < viewportHeight && rect.width > 0 && rect.height > 0;
+        } catch {
+          return false;
+        }
+      };
 
-    document.querySelectorAll('a[href^="tel:"]').forEach(a => {
-      if (isVisibleInFold(a))
-        results.phone_links.push({
-          text: a.textContent.replace(/\s+/g, ' ').trim(),
-          href: a.getAttribute('href'),
-          is_floating: isFloating(a),
+      document.querySelectorAll('a[href^="tel:"]').forEach((a) => {
+        if (isVisibleInFold(a))
+          results.phone_links.push({
+            text: a.textContent.replace(/\s+/g, " ").trim(),
+            href: a.getAttribute("href"),
+            is_floating: isFloating(a),
+          });
+      });
+
+      document.querySelectorAll('a[href^="mailto:"]').forEach((a) => {
+        if (isVisibleInFold(a))
+          results.email_links.push({
+            text: a.textContent.replace(/\s+/g, " ").trim(),
+            href: a.getAttribute("href"),
+            is_floating: isFloating(a),
+          });
+      });
+
+      // WhatsApp — anchor hrefs AND non-anchor elements (div/button floating plugins)
+      const waSeen = new Set();
+      const pushWa = (el, href) => {
+        if (waSeen.has(href)) return;
+        waSeen.add(href);
+        if (isVisibleInFold(el))
+          results.whatsapp_links.push({
+            text: (el.textContent || "").replace(/\s+/g, " ").trim() || el.getAttribute("aria-label") || "",
+            href,
+            is_floating: isFloating(el),
+          });
+      };
+      document
+        .querySelectorAll(
+          'a[href*="wa.me"], a[href*="whatsapp.com"], a[href*="api.whatsapp.com"], a[href*="whatsapp://"]',
+        )
+        .forEach((a) => pushWa(a, a.getAttribute("href") || ""));
+      document
+        .querySelectorAll(
+          '[onclick*="wa.me"],[onclick*="whatsapp"],[data-href*="wa.me"],[data-href*="whatsapp"],' +
+            '[data-url*="wa.me"],[data-url*="whatsapp"],[data-link*="wa.me"],[data-link*="whatsapp"]',
+        )
+        .forEach((el) => {
+          if (el.tagName === "A") return;
+          const src =
+            el.getAttribute("onclick") ||
+            el.getAttribute("data-href") ||
+            el.getAttribute("data-url") ||
+            el.getAttribute("data-link") ||
+            "";
+          const m = src.match(/https?:\/\/[^\s'")\]]+/);
+          if (m) pushWa(el, m[0]);
         });
-    });
 
-    document.querySelectorAll('a[href^="mailto:"]').forEach(a => {
-      if (isVisibleInFold(a))
-        results.email_links.push({
-          text: a.textContent.replace(/\s+/g, ' ').trim(),
-          href: a.getAttribute('href'),
-          is_floating: isFloating(a),
-        });
-    });
+      const ctaPattern =
+        /\b(book(\s*(now|online|appointment|session|call|a\s*class|a\s*consultation))?|schedule|reserve|get\s*started|enquire(\s*now)?|contact\s*us|call\s*(us|now)|get\s*a?\s*quote|free\s*consultation|request\s*(a?\s*(quote|call|callback)))\b/i;
+      document.querySelectorAll("a[href], button").forEach((el) => {
+        const text = (el.textContent || "").replace(/\s+/g, " ").trim();
+        const href = el.getAttribute("href") || "";
+        if (!ctaPattern.test(text)) return;
+        if (href.startsWith("tel:") || href.startsWith("mailto:") || href.includes("wa.me")) return;
+        if (isVisibleInFold(el))
+          results.cta_buttons.push({
+            text,
+            href: href || null,
+            tag: el.tagName.toLowerCase(),
+            is_floating: isFloating(el),
+          });
+      });
 
-    // WhatsApp — anchor hrefs AND non-anchor elements (div/button floating plugins)
-    const waSeen = new Set();
-    const pushWa = (el, href) => {
-      if (waSeen.has(href)) return;
-      waSeen.add(href);
-      if (isVisibleInFold(el))
-        results.whatsapp_links.push({
-          text: (el.textContent || '').replace(/\s+/g, ' ').trim() || el.getAttribute('aria-label') || '',
-          href,
-          is_floating: isFloating(el),
-        });
-    };
-    document.querySelectorAll(
-      'a[href*="wa.me"], a[href*="whatsapp.com"], a[href*="api.whatsapp.com"], a[href*="whatsapp://"]'
-    ).forEach(a => pushWa(a, a.getAttribute('href') || ''));
-    document.querySelectorAll(
-      '[onclick*="wa.me"],[onclick*="whatsapp"],[data-href*="wa.me"],[data-href*="whatsapp"],' +
-      '[data-url*="wa.me"],[data-url*="whatsapp"],[data-link*="wa.me"],[data-link*="whatsapp"]'
-    ).forEach(el => {
-      if (el.tagName === 'A') return;
-      const src = el.getAttribute('onclick') || el.getAttribute('data-href') ||
-                  el.getAttribute('data-url') || el.getAttribute('data-link') || '';
-      const m = src.match(/https?:\/\/[^\s'")\]]+/);
-      if (m) pushWa(el, m[0]);
-    });
-
-    const ctaPattern = /\b(book(\s*(now|online|appointment|session|call|a\s*class|a\s*consultation))?|schedule|reserve|get\s*started|enquire(\s*now)?|contact\s*us|call\s*(us|now)|get\s*a?\s*quote|free\s*consultation|request\s*(a?\s*(quote|call|callback)))\b/i;
-    document.querySelectorAll('a[href], button').forEach(el => {
-      const text = (el.textContent || '').replace(/\s+/g, ' ').trim();
-      const href = el.getAttribute('href') || '';
-      if (!ctaPattern.test(text)) return;
-      if (href.startsWith('tel:') || href.startsWith('mailto:') || href.includes('wa.me')) return;
-      if (isVisibleInFold(el))
-        results.cta_buttons.push({
-          text,
-          href: href || null,
-          tag: el.tagName.toLowerCase(),
-          is_floating: isFloating(el),
-        });
-    });
-
-    return results;
-  }) || { phone_links: [], email_links: [], whatsapp_links: [], cta_buttons: [] };
+      return results;
+    })) || { phone_links: [], email_links: [], whatsapp_links: [], cta_buttons: [] }
+  );
 }
 
 async function extractForms(page, pageUrl) {
-  const forms = await safeEval(page, (pageUrl) => {
-    const formData = [];
-    const forms = document.querySelectorAll('form');
+  const forms = await safeEval(
+    page,
+    (pageUrl) => {
+      const formData = [];
+      const forms = document.querySelectorAll("form");
 
-    forms.forEach((form, index) => {
-      const fields = [];
-      const inputs = form.querySelectorAll('input, textarea, select');
-      let hasEmailField = false;
-      let hasPhoneField = false;
-      let hasMessageField = false;
-      let score = 0;
+      forms.forEach((form, index) => {
+        const fields = [];
+        const inputs = form.querySelectorAll("input, textarea, select");
+        let hasEmailField = false;
+        let hasPhoneField = false;
+        let hasMessageField = false;
+        let score = 0;
 
-      inputs.forEach(input => {
-        const type = input.type || 'text';
-        const name = input.name || input.id || '';
-        const placeholder = input.placeholder || '';
-        const required = input.hasAttribute('required');
+        inputs.forEach((input) => {
+          const type = input.type || "text";
+          const name = input.name || input.id || "";
+          const placeholder = input.placeholder || "";
+          const required = input.hasAttribute("required");
 
-        fields.push({ type, name, placeholder, required });
+          fields.push({ type, name, placeholder, required });
 
-        // Scoring for lead forms
-        const fieldText = (name + placeholder).toLowerCase();
-        if (fieldText.includes('email')) {
-          hasEmailField = true;
-          score += 2;
+          // Scoring for lead forms
+          const fieldText = (name + placeholder).toLowerCase();
+          if (fieldText.includes("email")) {
+            hasEmailField = true;
+            score += 2;
+          }
+          if (fieldText.includes("phone") || fieldText.includes("tel")) {
+            hasPhoneField = true;
+            score += 1;
+          }
+          if (fieldText.includes("message") || fieldText.includes("comment") || fieldText.includes("enquiry")) {
+            hasMessageField = true;
+            score += 1;
+          }
+          if (fieldText.includes("name")) score += 1;
+          if (fieldText.includes("company") || fieldText.includes("business")) score += 1;
+        });
+
+        // Only include forms with score >= 2 (likely lead forms)
+        if (score >= 2) {
+          const submitButton = form.querySelector('button[type="submit"], input[type="submit"], button:not([type])');
+          const submitButtonText = submitButton
+            ? submitButton.textContent.trim() || submitButton.value || "Submit"
+            : "Submit";
+
+          // Check for third-party forms
+          const formAction = form.action || "";
+          const thirdParty =
+            /hubspot|typeform|gravity|jotform|mailchimp|convertkit/i.test(formAction) ||
+            /hubspot|typeform|gravity|jotform/i.test(form.className) ||
+            !!form.querySelector('[class*="hubspot"], [class*="typeform"], [class*="gravity"], [class*="jotform"]');
+
+          const fieldCount = inputs.length;
+          const requiredCount = [...inputs].filter((i) => i.hasAttribute("required")).length;
+          formData.push({
+            page_url: pageUrl,
+            form_index: index,
+            fields,
+            field_count: fieldCount,
+            required_field_count: requiredCount,
+            friction_level: fieldCount <= 3 ? "low" : fieldCount <= 6 ? "medium" : "high",
+            submit_button_text: submitButtonText,
+            has_email_field: hasEmailField,
+            has_phone_field: hasPhoneField,
+            has_message_field: hasMessageField,
+            third_party: thirdParty,
+          });
         }
-        if (fieldText.includes('phone') || fieldText.includes('tel')) {
-          hasPhoneField = true;
-          score += 1;
-        }
-        if (fieldText.includes('message') || fieldText.includes('comment') || fieldText.includes('enquiry')) {
-          hasMessageField = true;
-          score += 1;
-        }
-        if (fieldText.includes('name')) score += 1;
-        if (fieldText.includes('company') || fieldText.includes('business')) score += 1;
       });
 
-      // Only include forms with score >= 2 (likely lead forms)
-      if (score >= 2) {
-        const submitButton = form.querySelector('button[type="submit"], input[type="submit"], button:not([type])');
-        const submitButtonText = submitButton ? submitButton.textContent.trim() || submitButton.value || 'Submit' : 'Submit';
-
-        // Check for third-party forms
-        const formAction = form.action || '';
-        const thirdParty = /hubspot|typeform|gravity|jotform|mailchimp|convertkit/i.test(formAction) ||
-                          /hubspot|typeform|gravity|jotform/i.test(form.className) ||
-                          !!form.querySelector('[class*="hubspot"], [class*="typeform"], [class*="gravity"], [class*="jotform"]');
-
-        const fieldCount = inputs.length;
-        const requiredCount = [...inputs].filter(i => i.hasAttribute('required')).length;
-        formData.push({
-          page_url: pageUrl,
-          form_index: index,
-          fields,
-          field_count: fieldCount,
-          required_field_count: requiredCount,
-          friction_level: fieldCount <= 3 ? 'low' : fieldCount <= 6 ? 'medium' : 'high',
-          submit_button_text: submitButtonText,
-          has_email_field: hasEmailField,
-          has_phone_field: hasPhoneField,
-          has_message_field: hasMessageField,
-          third_party: thirdParty
-        });
-      }
-    });
-
-    return formData;
-  }, pageUrl);
+      return formData;
+    },
+    pageUrl,
+  );
 
   // Test form submission for up to 2 forms
   if (forms && forms.length > 0) {
@@ -1105,8 +1226,8 @@ async function extractForms(page, pageUrl) {
       try {
         await testFormSubmission(page, formData);
       } catch (e) {
-        formData.submission_behaviour = { type: 'unknown', error: e.message };
-        formData.gtm_recommendation = 'Form submission test failed - manual GTM setup required';
+        formData.submission_behaviour = { type: "unknown", error: e.message };
+        formData.gtm_recommendation = "Form submission test failed - manual GTM setup required";
       }
     }
   }
@@ -1115,7 +1236,7 @@ async function extractForms(page, pageUrl) {
 }
 
 async function testFormSubmission(page, formData) {
-  const form = await page.locator('form').nth(formData.form_index);
+  const form = await page.locator("form").nth(formData.form_index);
 
   // Fill form fields with test data
   for (const field of formData.fields) {
@@ -1126,24 +1247,24 @@ async function testFormSubmission(page, formData) {
       if (await element.isVisible({ timeout: 1000 })) {
         const fieldText = (field.name + field.placeholder).toLowerCase();
 
-        if (fieldText.includes('email')) {
+        if (fieldText.includes("email")) {
           await element.fill(TEST_VALUES.email);
-        } else if (fieldText.includes('phone') || fieldText.includes('tel')) {
+        } else if (fieldText.includes("phone") || fieldText.includes("tel")) {
           await element.fill(TEST_VALUES.phone);
-        } else if (fieldText.includes('message') || fieldText.includes('comment') || fieldText.includes('enquiry')) {
+        } else if (fieldText.includes("message") || fieldText.includes("comment") || fieldText.includes("enquiry")) {
           await element.fill(TEST_VALUES.message);
-        } else if (fieldText.includes('first') && fieldText.includes('name')) {
+        } else if (fieldText.includes("first") && fieldText.includes("name")) {
           await element.fill(TEST_VALUES.firstName);
-        } else if (fieldText.includes('last') && fieldText.includes('name')) {
+        } else if (fieldText.includes("last") && fieldText.includes("name")) {
           await element.fill(TEST_VALUES.lastName);
-        } else if (fieldText.includes('name')) {
+        } else if (fieldText.includes("name")) {
           await element.fill(TEST_VALUES.fullName);
-        } else if (fieldText.includes('company') || fieldText.includes('business')) {
+        } else if (fieldText.includes("company") || fieldText.includes("business")) {
           await element.fill(TEST_VALUES.company);
-        } else if (fieldText.includes('postcode') || fieldText.includes('zip')) {
+        } else if (fieldText.includes("postcode") || fieldText.includes("zip")) {
           await element.fill(TEST_VALUES.postcode);
-        } else if (field.type === 'text' || field.type === 'email') {
-          await element.fill('Test');
+        } else if (field.type === "text" || field.type === "email") {
+          await element.fill("Test");
         }
       }
     } catch (e) {
@@ -1163,7 +1284,7 @@ async function testFormSubmission(page, formData) {
   // Check if URL changed (redirect)
   const newUrl = page.url();
   if (newUrl !== currentUrl) {
-    formData.submission_behaviour = { type: 'redirect', thank_you_url: newUrl };
+    formData.submission_behaviour = { type: "redirect", thank_you_url: newUrl };
     formData.gtm_recommendation = `Thank You URL detected: ${newUrl} - Create GA4 Event tag triggered by Page View on this URL`;
     return;
   }
@@ -1174,12 +1295,12 @@ async function testFormSubmission(page, formData) {
       const element = page.locator(selector);
       if (await element.isVisible({ timeout: 1000 })) {
         const messageText = await element.textContent();
-        const elementId = await element.getAttribute('id');
+        const elementId = await element.getAttribute("id");
         formData.submission_behaviour = {
-          type: 'inline_message',
+          type: "inline_message",
           selector,
           message_text: messageText?.trim(),
-          element_id: elementId
+          element_id: elementId,
         };
         formData.gtm_recommendation = `Success message detected with selector "${selector}" - Create GA4 Event tag triggered by Element Visibility on this selector`;
         return;
@@ -1190,67 +1311,73 @@ async function testFormSubmission(page, formData) {
   }
 
   // No clear success indicator found
-  formData.submission_behaviour = { type: 'unknown' };
-  formData.gtm_recommendation = 'No clear success indicator detected - manual form submission tracking setup required';
+  formData.submission_behaviour = { type: "unknown" };
+  formData.gtm_recommendation = "No clear success indicator detected - manual form submission tracking setup required";
 }
 
 async function extractNewsletter(page, pageUrl) {
-  const newsletters = await safeEval(page, (pageUrl) => {
-    const newsletterForms = [];
-    const forms = document.querySelectorAll('form');
+  const newsletters = await safeEval(
+    page,
+    (pageUrl) => {
+      const newsletterForms = [];
+      const forms = document.querySelectorAll("form");
 
-    forms.forEach((form, index) => {
-      const inputs = form.querySelectorAll('input');
-      let hasEmailField = false;
-      let hasPhoneField = false;
-      let hasMessageField = false;
+      forms.forEach((form, index) => {
+        const inputs = form.querySelectorAll("input");
+        let hasEmailField = false;
+        let hasPhoneField = false;
+        let hasMessageField = false;
 
-      inputs.forEach(input => {
-        const fieldText = ((input.name || '') + (input.placeholder || '')).toLowerCase();
-        if (fieldText.includes('email')) hasEmailField = true;
-        if (fieldText.includes('phone') || fieldText.includes('tel')) hasPhoneField = true;
-        if (fieldText.includes('message') || fieldText.includes('comment')) hasMessageField = true;
+        inputs.forEach((input) => {
+          const fieldText = ((input.name || "") + (input.placeholder || "")).toLowerCase();
+          if (fieldText.includes("email")) hasEmailField = true;
+          if (fieldText.includes("phone") || fieldText.includes("tel")) hasPhoneField = true;
+          if (fieldText.includes("message") || fieldText.includes("comment")) hasMessageField = true;
+        });
+
+        // Newsletter forms have email but no phone/message fields
+        if (hasEmailField && !hasPhoneField && !hasMessageField) {
+          const submitButton = form.querySelector('button[type="submit"], input[type="submit"], button:not([type])');
+          const submitButtonText = submitButton
+            ? submitButton.textContent.trim() || submitButton.value || "Subscribe"
+            : "Subscribe";
+
+          const formAction = form.action || "";
+          let platform = "Unknown";
+
+          const platforms = {
+            "mailchimp.com": "Mailchimp",
+            "klaviyo.com": "Klaviyo",
+            "constantcontact.com": "Constant Contact",
+            "convertkit.com": "ConvertKit",
+            "activecampaign.com": "ActiveCampaign",
+            "mailerlite.com": "MailerLite",
+            "brevo.com": "Brevo",
+            "getresponse.com": "GetResponse",
+            "hubspot.com": "HubSpot",
+          };
+
+          for (const [domain, platformName] of Object.entries(platforms)) {
+            if (formAction.includes(domain)) {
+              platform = platformName;
+              break;
+            }
+          }
+
+          newsletterForms.push({
+            page_url: pageUrl,
+            form_index: index,
+            platform,
+            form_action: formAction,
+            submit_button_text: submitButtonText,
+          });
+        }
       });
 
-      // Newsletter forms have email but no phone/message fields
-      if (hasEmailField && !hasPhoneField && !hasMessageField) {
-        const submitButton = form.querySelector('button[type="submit"], input[type="submit"], button:not([type])');
-        const submitButtonText = submitButton ? submitButton.textContent.trim() || submitButton.value || 'Subscribe' : 'Subscribe';
-
-        const formAction = form.action || '';
-        let platform = 'Unknown';
-
-        const platforms = {
-          'mailchimp.com': 'Mailchimp',
-          'klaviyo.com': 'Klaviyo',
-          'constantcontact.com': 'Constant Contact',
-          'convertkit.com': 'ConvertKit',
-          'activecampaign.com': 'ActiveCampaign',
-          'mailerlite.com': 'MailerLite',
-          'brevo.com': 'Brevo',
-          'getresponse.com': 'GetResponse',
-          'hubspot.com': 'HubSpot'
-        };
-
-        for (const [domain, platformName] of Object.entries(platforms)) {
-          if (formAction.includes(domain)) {
-            platform = platformName;
-            break;
-          }
-        }
-
-        newsletterForms.push({
-          page_url: pageUrl,
-          form_index: index,
-          platform,
-          form_action: formAction,
-          submit_button_text: submitButtonText
-        });
-      }
-    });
-
-    return newsletterForms;
-  }, pageUrl);
+      return newsletterForms;
+    },
+    pageUrl,
+  );
 
   return newsletters || [];
 }
@@ -1258,20 +1385,20 @@ async function extractNewsletter(page, pageUrl) {
 async function extractLiveChat(page) {
   const liveChat = await safeEval(page, () => {
     const detectors = [
-      { name: 'Intercom', global: 'Intercom' },
-      { name: 'Drift', global: 'drift' },
-      { name: 'Crisp', global: '$crisp' },
-      { name: 'Tidio', global: 'tidioChatApi' },
-      { name: 'LiveChat', global: 'LC_API' },
-      { name: 'Zendesk', global: 'zE' },
-      { name: 'HubSpot Chat', global: 'HubSpotConversations' },
-      { name: 'Tawk.to', global: 'Tawk_API' },
-      { name: 'Facebook Pixel', global: 'fbq' },
-      { name: 'TikTok Pixel', global: 'ttq' }
+      { name: "Intercom", global: "Intercom" },
+      { name: "Drift", global: "drift" },
+      { name: "Crisp", global: "$crisp" },
+      { name: "Tidio", global: "tidioChatApi" },
+      { name: "LiveChat", global: "LC_API" },
+      { name: "Zendesk", global: "zE" },
+      { name: "HubSpot Chat", global: "HubSpotConversations" },
+      { name: "Tawk.to", global: "Tawk_API" },
+      { name: "Facebook Pixel", global: "fbq" },
+      { name: "TikTok Pixel", global: "ttq" },
     ];
 
     const found = [];
-    detectors.forEach(detector => {
+    detectors.forEach((detector) => {
       if (window[detector.global]) {
         found.push(detector);
       }
@@ -1299,26 +1426,26 @@ async function generateGTMSummary(pageData) {
   const socialPlatformsSeen = new Set();
 
   // Collect unique numbers across pages before summing
-  const _uniqueClickableNums = new Set(pageData.flatMap(p => p.phones.clickable.map(ph => ph.number)));
-  const _uniquePlainTextNums = new Set(pageData.flatMap(p => p.phones.plainText.map(ph => ph.digits)));
-  _uniqueClickableNums.forEach(n => _uniquePlainTextNums.delete(n));
+  const _uniqueClickableNums = new Set(pageData.flatMap((p) => p.phones.clickable.map((ph) => ph.number)));
+  const _uniquePlainTextNums = new Set(pageData.flatMap((p) => p.phones.plainText.map((ph) => ph.digits)));
+  _uniqueClickableNums.forEach((n) => _uniquePlainTextNums.delete(n));
   totalClickablePhones = _uniqueClickableNums.size;
-  totalPlainTextPhones  = _uniquePlainTextNums.size;
+  totalPlainTextPhones = _uniquePlainTextNums.size;
 
-  pageData.forEach(page => {
+  pageData.forEach((page) => {
     totalClickableEmails += page.emails.clickable.length;
     totalPlainTextEmails += page.emails.plainText.length;
     totalWhatsAppLinks += page.whatsapp.links.length;
     totalBookingLinks += page.booking_links.length;
     totalForms += page.forms.length;
     totalNewsletterForms += page.newsletter.length;
-    (page.social_links || []).forEach(s => socialPlatformsSeen.add(s.platform));
+    (page.social_links || []).forEach((s) => socialPlatformsSeen.add(s.platform));
   });
 
   // Deduplicated Google Maps locations across all pages (by href)
   const locationMap = new Map();
-  pageData.forEach(page => {
-    (page.location_links || []).forEach(loc => {
+  pageData.forEach((page) => {
+    (page.location_links || []).forEach((loc) => {
       if (!locationMap.has(loc.href)) locationMap.set(loc.href, loc);
     });
   });
@@ -1329,7 +1456,9 @@ async function generateGTMSummary(pageData) {
     tagsToCreate.push(`GA4 Event: click_call | Trigger: Click - Just Links | Filter: Click URL contains "tel:"`);
   }
   if (totalPlainTextPhones > 0) {
-    fixesNeeded.push(`${totalPlainTextPhones} phone number(s) are plain text. Wrap in <a href="tel:..."> to make them clickable and trackable.`);
+    fixesNeeded.push(
+      `${totalPlainTextPhones} phone number(s) are plain text. Wrap in <a href="tel:..."> to make them clickable and trackable.`,
+    );
   }
 
   // Email tracking
@@ -1337,19 +1466,25 @@ async function generateGTMSummary(pageData) {
     tagsToCreate.push(`GA4 Event: click_email | Trigger: Click - Just Links | Filter: Click URL contains "mailto:"`);
   }
   if (totalPlainTextEmails > 0) {
-    fixesNeeded.push(`${totalPlainTextEmails} email address(es) are plain text. Wrap in <a href="mailto:..."> to make them trackable.`);
+    fixesNeeded.push(
+      `${totalPlainTextEmails} email address(es) are plain text. Wrap in <a href="mailto:..."> to make them trackable.`,
+    );
   }
 
   // WhatsApp tracking
   if (totalWhatsAppLinks > 0) {
-    tagsToCreate.push(`GA4 Event: click_whatsapp | Trigger: Click - Just Links | Filter: Click URL contains "wa.me" or "whatsapp.com"`);
+    tagsToCreate.push(
+      `GA4 Event: click_whatsapp | Trigger: Click - Just Links | Filter: Click URL contains "wa.me" or "whatsapp.com"`,
+    );
   }
 
   // Booking links tracking
   if (totalBookingLinks > 0) {
-    const platforms = [...new Set(pageData.flatMap(p => p.booking_links.map(b => b.domain)))];
-    platforms.forEach(platform => {
-      tagsToCreate.push(`GA4 Event: click_booking_${platform.replace('.', '_')} | Trigger: Click - Just Links | Filter: Click URL contains "${platform}"`);
+    const platforms = [...new Set(pageData.flatMap((p) => p.booking_links.map((b) => b.domain)))];
+    platforms.forEach((platform) => {
+      tagsToCreate.push(
+        `GA4 Event: click_booking_${platform.replace(".", "_")} | Trigger: Click - Just Links | Filter: Click URL contains "${platform}"`,
+      );
     });
   }
 
@@ -1364,49 +1499,63 @@ async function generateGTMSummary(pageData) {
   }
 
   // Booking CTA tracking
-  const allBookingCTAs = pageData.flatMap(p => p.booking_ctas || []);
+  const allBookingCTAs = pageData.flatMap((p) => p.booking_ctas || []);
   if (allBookingCTAs.length > 0) {
-    const platformCTAs = allBookingCTAs.filter(c => c.destination_type === 'booking_platform');
-    const nonPlatformCTAs = allBookingCTAs.filter(c => c.destination_type !== 'booking_platform' && c.destination_type !== 'error');
-    const platformNames = [...new Set(platformCTAs.map(c => c.platform).filter(Boolean))];
-    platformNames.forEach(p => {
-      tagsToCreate.push(`GA4 Event: click_booking_cta | Destination: ${p} | Trigger: Click - Just Links on "${p}" CTA buttons`);
+    const platformCTAs = allBookingCTAs.filter((c) => c.destination_type === "booking_platform");
+    const nonPlatformCTAs = allBookingCTAs.filter(
+      (c) => c.destination_type !== "booking_platform" && c.destination_type !== "error",
+    );
+    const platformNames = [...new Set(platformCTAs.map((c) => c.platform).filter(Boolean))];
+    platformNames.forEach((p) => {
+      tagsToCreate.push(
+        `GA4 Event: click_booking_cta | Destination: ${p} | Trigger: Click - Just Links on "${p}" CTA buttons`,
+      );
     });
     if (nonPlatformCTAs.length > 0) {
-      tagsToCreate.push(`GA4 Event: click_book_cta | Trigger: Click - Just Links on booking CTA buttons (see booking_ctas in audit for per-link GTM details)`);
+      tagsToCreate.push(
+        `GA4 Event: click_book_cta | Trigger: Click - Just Links on booking CTA buttons (see booking_ctas in audit for per-link GTM details)`,
+      );
     }
   }
 
   // Social link tracking
   if (socialPlatformsSeen.size > 0) {
-    [...socialPlatformsSeen].forEach(platform => {
-      tagsToCreate.push(`GA4 Event: click_social_${platform.toLowerCase().replace(/[^a-z0-9]/g, '_')} | Trigger: Click - Just Links | Filter: Click URL contains "${platform}"`);
+    [...socialPlatformsSeen].forEach((platform) => {
+      tagsToCreate.push(
+        `GA4 Event: click_social_${platform.toLowerCase().replace(/[^a-z0-9]/g, "_")} | Trigger: Click - Just Links | Filter: Click URL contains "${platform}"`,
+      );
     });
   }
 
   // Google Maps location tracking - one trigger and tag per unique location
   if (uniqueLocations.length > 0) {
-    uniqueLocations.forEach(loc => {
-      const safeName = loc.location_name.replace(/[^a-zA-Z0-9\s]/g, '').trim().replace(/\s+/g, '_').toLowerCase();
+    uniqueLocations.forEach((loc) => {
+      const safeName = loc.location_name
+        .replace(/[^a-zA-Z0-9\s]/g, "")
+        .trim()
+        .replace(/\s+/g, "_")
+        .toLowerCase();
       tagsToCreate.push(
-        `GA4 Event: click_location_${safeName} | Trigger: Click - Just Links | Filter: Click URL contains "${loc.href}" | Location: "${loc.location_name}"`
+        `GA4 Event: click_location_${safeName} | Trigger: Click - Just Links | Filter: Click URL contains "${loc.href}" | Location: "${loc.location_name}"`,
       );
     });
   }
 
   // Live chat warnings
   const liveChatServices = pageData[0]?.live_chat || [];
-  liveChatServices.forEach(service => {
-    if (['Intercom', 'Drift', 'HubSpot Chat'].includes(service.name)) {
-      warnings.push(`${service.name} live chat detected. This platform includes its own analytics so additional GA4 event tracking is not required.`);
+  liveChatServices.forEach((service) => {
+    if (["Intercom", "Drift", "HubSpot Chat"].includes(service.name)) {
+      warnings.push(
+        `${service.name} live chat detected. This platform includes its own analytics so additional GA4 event tracking is not required.`,
+      );
     }
   });
 
   return {
-    tags_to_create:   tagsToCreate,
-    fixes_needed:     fixesNeeded,
+    tags_to_create: tagsToCreate,
+    fixes_needed: fixesNeeded,
     warnings,
-    location_links:   uniqueLocations,
+    location_links: uniqueLocations,
   };
 }
 
@@ -1418,85 +1567,90 @@ function generateCTAQualityReport(pagesData) {
   // --- Phone accessibility ---
   // Deduplicate by normalised digit string across all pages — the same number
   // in the header/footer of every crawled page should count as one, not many.
-  const uniqueClickableNumbers = new Set(
-    pagesData.flatMap(p => p.phones.clickable.map(ph => ph.number))
-  );
-  const uniquePlainTextDigits = new Set(
-    pagesData.flatMap(p => p.phones.plainText.map(ph => ph.digits))
-  );
+  const uniqueClickableNumbers = new Set(pagesData.flatMap((p) => p.phones.clickable.map((ph) => ph.number)));
+  const uniquePlainTextDigits = new Set(pagesData.flatMap((p) => p.phones.plainText.map((ph) => ph.digits)));
   // Don't double-count a plain-text instance of a number that's also clickable
-  uniqueClickableNumbers.forEach(n => uniquePlainTextDigits.delete(n));
+  uniqueClickableNumbers.forEach((n) => uniquePlainTextDigits.delete(n));
 
   const totalClickablePhones = uniqueClickableNumbers.size;
-  const totalPlainTextPhones  = uniquePlainTextDigits.size;
-  const phonesAboveFold = pagesData.some(p => (p.above_fold_ctas?.phone_links?.length ?? 0) > 0);
+  const totalPlainTextPhones = uniquePlainTextDigits.size;
+  const phonesAboveFold = pagesData.some((p) => (p.above_fold_ctas?.phone_links?.length ?? 0) > 0);
 
   // Identify which clickable phone numbers are also the WhatsApp number
   // (same subscriber digits) — these are dual-purpose CTAs, not separate contacts.
   const waPhoneCoresAll = new Set(
-    pagesData.flatMap(p => (p.whatsapp?.links || [])
-      .map(w => normalisePhoneCore(w.number || ''))
-      .filter(Boolean)
-    )
+    pagesData.flatMap((p) => (p.whatsapp?.links || []).map((w) => normalisePhoneCore(w.number || "")).filter(Boolean)),
   );
-  const sharedPhoneNumbers = [...uniqueClickableNumbers].filter(n =>
-    waPhoneCoresAll.has(normalisePhoneCore(n))
-  );
+  const sharedPhoneNumbers = [...uniqueClickableNumbers].filter((n) => waPhoneCoresAll.has(normalisePhoneCore(n)));
   const independentClickable = totalClickablePhones - sharedPhoneNumbers.length;
 
-  let phoneVerdict = 'none';
+  let phoneVerdict = "none";
   if (totalClickablePhones > 0 && totalPlainTextPhones === 0) {
-    phoneVerdict = 'good';
-    strengths.push('All phone numbers are clickable. They are trackable in GA4 and tappable on mobile.');
+    phoneVerdict = "good";
+    strengths.push("All phone numbers are clickable. They are trackable in GA4 and tappable on mobile.");
     if (sharedPhoneNumbers.length > 0) {
-      strengths.push(`${sharedPhoneNumbers.length} phone number(s) double as a WhatsApp contact. These are dual-purpose CTAs.`);
+      strengths.push(
+        `${sharedPhoneNumbers.length} phone number(s) double as a WhatsApp contact. These are dual-purpose CTAs.`,
+      );
     }
   } else if (totalClickablePhones > 0 && totalPlainTextPhones > 0) {
-    phoneVerdict = 'partial';
-    issues.push(`${totalPlainTextPhones} phone number(s) are displayed as plain text alongside ${totalClickablePhones} clickable number(s). Plain-text numbers cannot be tracked or tapped on mobile.`);
+    phoneVerdict = "partial";
+    issues.push(
+      `${totalPlainTextPhones} phone number(s) are displayed as plain text alongside ${totalClickablePhones} clickable number(s). Plain-text numbers cannot be tracked or tapped on mobile.`,
+    );
     recommendations.push('Wrap remaining plain-text phone numbers in <a href="tel:..."> tags.');
     if (sharedPhoneNumbers.length > 0) {
-      strengths.push(`${sharedPhoneNumbers.length} phone number(s) double as a WhatsApp contact. These are dual-purpose CTAs.`);
+      strengths.push(
+        `${sharedPhoneNumbers.length} phone number(s) double as a WhatsApp contact. These are dual-purpose CTAs.`,
+      );
     }
   } else if (totalPlainTextPhones > 0) {
-    phoneVerdict = 'poor';
-    issues.push(`${totalPlainTextPhones} phone number(s) are plain text. They cannot be clicked on mobile and cannot be tracked in GA4.`);
+    phoneVerdict = "poor";
+    issues.push(
+      `${totalPlainTextPhones} phone number(s) are plain text. They cannot be clicked on mobile and cannot be tracked in GA4.`,
+    );
     recommendations.push('Wrap all phone numbers in <a href="tel:..."> tags.');
   }
 
   if (phonesAboveFold) {
-    strengths.push('A phone number is visible above the fold. Visitors can see it without scrolling.');
+    strengths.push("A phone number is visible above the fold. Visitors can see it without scrolling.");
   } else if (totalClickablePhones > 0 || totalPlainTextPhones > 0) {
-    issues.push('No phone number is visible above the fold. Visitors must scroll down to find contact details.');
-    recommendations.push('Move the phone number to the header or hero section so it is immediately visible on arrival.');
+    issues.push("No phone number is visible above the fold. Visitors must scroll down to find contact details.");
+    recommendations.push(
+      "Move the phone number to the header or hero section so it is immediately visible on arrival.",
+    );
   }
 
   // --- Email accessibility ---
   const totalClickableEmails = pagesData.reduce((n, p) => n + p.emails.clickable.length, 0);
-  const totalPlainTextEmails  = pagesData.reduce((n, p) => n + p.emails.plainText.length, 0);
+  const totalPlainTextEmails = pagesData.reduce((n, p) => n + p.emails.plainText.length, 0);
 
-  let emailVerdict = 'none';
+  let emailVerdict = "none";
   if (totalClickableEmails > 0 && totalPlainTextEmails === 0) {
-    emailVerdict = 'good';
-    strengths.push('All email addresses are clickable mailto: links. They are trackable in GA4.');
+    emailVerdict = "good";
+    strengths.push("All email addresses are clickable mailto: links. They are trackable in GA4.");
   } else if (totalClickableEmails > 0 && totalPlainTextEmails > 0) {
-    emailVerdict = 'partial';
-    issues.push(`${totalPlainTextEmails} email address(es) are displayed as plain text alongside clickable ones. Plain-text emails cannot be tracked.`);
+    emailVerdict = "partial";
+    issues.push(
+      `${totalPlainTextEmails} email address(es) are displayed as plain text alongside clickable ones. Plain-text emails cannot be tracked.`,
+    );
     recommendations.push('Wrap plain-text email addresses in <a href="mailto:..."> tags.');
   } else if (totalPlainTextEmails > 0) {
-    emailVerdict = 'poor';
-    issues.push(`${totalPlainTextEmails} email address(es) are plain text. They are not clickable or trackable in GA4.`);
+    emailVerdict = "poor";
+    issues.push(
+      `${totalPlainTextEmails} email address(es) are plain text. They are not clickable or trackable in GA4.`,
+    );
     recommendations.push('Wrap all email addresses in <a href="mailto:..."> tags.');
   }
 
   // --- Above the fold ---
   // Build a deduplicated per-page breakdown. CTA buttons are deduplicated by
   // href+text within each page to collapse floating/sticky nav duplicates.
-  const aboveFoldByPage = pagesData.map(p => {
+  const aboveFoldByPage = pagesData.map((p) => {
     const af = p.above_fold_ctas || { phone_links: [], email_links: [], whatsapp_links: [], cta_buttons: [] };
 
     const seenBtns = new Set();
-    const uniqueCtaButtons = (af.cta_buttons || []).filter(b => {
+    const uniqueCtaButtons = (af.cta_buttons || []).filter((b) => {
       const key = `${b.href}|${b.text}`;
       if (seenBtns.has(key)) return false;
       seenBtns.add(key);
@@ -1504,7 +1658,7 @@ function generateCTAQualityReport(pagesData) {
     });
 
     const seenPhones = new Set();
-    const uniquePhoneLinks = (af.phone_links || []).filter(ph => {
+    const uniquePhoneLinks = (af.phone_links || []).filter((ph) => {
       const key = ph.href;
       if (seenPhones.has(key)) return false;
       seenPhones.add(key);
@@ -1512,7 +1666,7 @@ function generateCTAQualityReport(pagesData) {
     });
 
     const seenWa = new Set();
-    const uniqueWaLinks = (af.whatsapp_links || []).filter(w => {
+    const uniqueWaLinks = (af.whatsapp_links || []).filter((w) => {
       const key = w.href;
       if (seenWa.has(key)) return false;
       seenWa.add(key);
@@ -1520,139 +1674,163 @@ function generateCTAQualityReport(pagesData) {
     });
 
     return {
-      page:           p.url,
-      label:          p.label,
-      has_phone:      uniquePhoneLinks.length > 0,
-      has_email:      (af.email_links || []).length > 0,
-      has_whatsapp:   uniqueWaLinks.length > 0,
+      page: p.url,
+      label: p.label,
+      has_phone: uniquePhoneLinks.length > 0,
+      has_email: (af.email_links || []).length > 0,
+      has_whatsapp: uniqueWaLinks.length > 0,
       has_cta_button: uniqueCtaButtons.length > 0,
-      phone_links:    uniquePhoneLinks,
-      email_links:    af.email_links || [],
+      phone_links: uniquePhoneLinks,
+      email_links: af.email_links || [],
       whatsapp_links: uniqueWaLinks,
-      cta_buttons:    uniqueCtaButtons,
+      cta_buttons: uniqueCtaButtons,
     };
   });
 
   // Homepage-level count used for scoring and issue messages
-  const homepageFold  = aboveFoldByPage.find(p => p.label === 'homepage');
+  const homepageFold = aboveFoldByPage.find((p) => p.label === "homepage");
   const aboveFoldCount = homepageFold
-    ? (homepageFold.phone_links.length + homepageFold.email_links.length +
-       homepageFold.whatsapp_links.length + homepageFold.cta_buttons.length)
+    ? homepageFold.phone_links.length +
+      homepageFold.email_links.length +
+      homepageFold.whatsapp_links.length +
+      homepageFold.cta_buttons.length
     : 0;
 
   if (aboveFoldCount > 0) {
-    strengths.push(`${aboveFoldCount} CTA(s) are visible above the fold on the homepage. Visitors see them without scrolling.`);
+    strengths.push(
+      `${aboveFoldCount} CTA(s) are visible above the fold on the homepage. Visitors see them without scrolling.`,
+    );
   } else {
-    issues.push('No CTAs (phone number, email, or booking button) are visible above the fold on the homepage.');
-    recommendations.push('Add a prominent call-to-action such as a "Book Now" button or phone number in the hero section.');
+    issues.push("No CTAs (phone number, email, or booking button) are visible above the fold on the homepage.");
+    recommendations.push(
+      'Add a prominent call-to-action such as a "Book Now" button or phone number in the hero section.',
+    );
   }
 
   // --- Form friction ---
-  const allForms = pagesData.flatMap(p => p.forms || []);
-  const avgFieldCount     = allForms.length ? Math.round(allForms.reduce((n, f) => n + (f.field_count ?? f.fields?.length ?? 0), 0) / allForms.length) : 0;
-  const avgRequiredCount  = allForms.length ? Math.round(allForms.reduce((n, f) => n + (f.required_field_count ?? 0), 0) / allForms.length) : 0;
-  const highFrictionForms = allForms.filter(f => f.friction_level === 'high').length;
+  const allForms = pagesData.flatMap((p) => p.forms || []);
+  const avgFieldCount = allForms.length
+    ? Math.round(allForms.reduce((n, f) => n + (f.field_count ?? f.fields?.length ?? 0), 0) / allForms.length)
+    : 0;
+  const avgRequiredCount = allForms.length
+    ? Math.round(allForms.reduce((n, f) => n + (f.required_field_count ?? 0), 0) / allForms.length)
+    : 0;
+  const highFrictionForms = allForms.filter((f) => f.friction_level === "high").length;
 
-  let formFrictionVerdict = 'none';
+  let formFrictionVerdict = "none";
   if (allForms.length > 0) {
     if (highFrictionForms > 0) {
-      formFrictionVerdict = 'high';
-      issues.push(`${highFrictionForms} form(s) have more than 6 fields. This is high friction and is likely to reduce conversions.`);
-      recommendations.push('Reduce contact forms to 4 fields or fewer: name, phone or email, message, and a submit button.');
+      formFrictionVerdict = "high";
+      issues.push(
+        `${highFrictionForms} form(s) have more than 6 fields. This is high friction and is likely to reduce conversions.`,
+      );
+      recommendations.push(
+        "Reduce contact forms to 4 fields or fewer: name, phone or email, message, and a submit button.",
+      );
     } else if (avgFieldCount > 4) {
-      formFrictionVerdict = 'medium';
+      formFrictionVerdict = "medium";
       issues.push(`Contact forms average ${avgFieldCount} fields. This is moderate friction for users.`);
-      recommendations.push('Consider trimming form fields to improve conversion rate.');
+      recommendations.push("Consider trimming form fields to improve conversion rate.");
     } else {
-      formFrictionVerdict = 'low';
-      strengths.push(`Contact forms are concise with an average of ${avgFieldCount} fields. This is low friction for users.`);
+      formFrictionVerdict = "low";
+      strengths.push(
+        `Contact forms are concise with an average of ${avgFieldCount} fields. This is low friction for users.`,
+      );
     }
   }
 
   // --- Booking journey ---
-  const allBookingCTAs    = pagesData.flatMap(p => p.booking_ctas || []);
-  const successfulCTAs    = allBookingCTAs.filter(c => c.destination_type !== 'error');
-  const directToPlatform  = successfulCTAs.filter(c => c.destination_type === 'booking_platform').length;
-  const highHopCTAs       = successfulCTAs.filter(c => (c.redirect_hops ?? 0) > 1);
-  const avgRedirectHops   = successfulCTAs.length
-    ? Math.round(successfulCTAs.reduce((n, c) => n + (c.redirect_hops ?? 0), 0) / successfulCTAs.length * 10) / 10
+  const allBookingCTAs = pagesData.flatMap((p) => p.booking_ctas || []);
+  const successfulCTAs = allBookingCTAs.filter((c) => c.destination_type !== "error");
+  const directToPlatform = successfulCTAs.filter((c) => c.destination_type === "booking_platform").length;
+  const highHopCTAs = successfulCTAs.filter((c) => (c.redirect_hops ?? 0) > 1);
+  const avgRedirectHops = successfulCTAs.length
+    ? Math.round((successfulCTAs.reduce((n, c) => n + (c.redirect_hops ?? 0), 0) / successfulCTAs.length) * 10) / 10
     : 0;
 
-  const ctasWithClickDepth = successfulCTAs.filter(c => c.clicks_to_book !== null && c.clicks_to_book !== undefined);
-  const minClicksToBook    = ctasWithClickDepth.length
-    ? Math.min(...ctasWithClickDepth.map(c => c.clicks_to_book))
+  const ctasWithClickDepth = successfulCTAs.filter((c) => c.clicks_to_book !== null && c.clicks_to_book !== undefined);
+  const minClicksToBook = ctasWithClickDepth.length
+    ? Math.min(...ctasWithClickDepth.map((c) => c.clicks_to_book))
     : null;
 
   if (allBookingCTAs.length === 0) {
-    issues.push('No booking CTAs were detected on the site. Visitors may not know how to book.');
+    issues.push("No booking CTAs were detected on the site. Visitors may not know how to book.");
     recommendations.push('Add a visible "Book Now" or "Schedule" button that links directly to your booking system.');
   } else if (directToPlatform > 0) {
-    strengths.push(`${directToPlatform} booking CTA(s) link directly to a booking platform. This is minimal friction for the user.`);
+    strengths.push(
+      `${directToPlatform} booking CTA(s) link directly to a booking platform. This is minimal friction for the user.`,
+    );
   }
 
   if (minClicksToBook !== null && minClicksToBook > 1) {
-    issues.push(`Booking requires at least ${minClicksToBook} clicks from the page. Consider adding a direct booking CTA higher up the page.`);
+    issues.push(
+      `Booking requires at least ${minClicksToBook} clicks from the page. Consider adding a direct booking CTA higher up the page.`,
+    );
     recommendations.push('Add a direct "Book Now" link to your booking platform in the header or hero section.');
   } else if (minClicksToBook === 1) {
-    strengths.push('Booking is reachable in 1 click from at least one CTA on the page.');
+    strengths.push("Booking is reachable in 1 click from at least one CTA on the page.");
   }
 
   if (highHopCTAs.length > 0) {
-    issues.push(`${highHopCTAs.length} booking CTA(s) pass through multiple redirects before reaching the destination. This adds load time and increases drop-off risk.`);
-    recommendations.push('Update booking CTA links to point directly to the final booking URL to reduce the number of redirects.');
+    issues.push(
+      `${highHopCTAs.length} booking CTA(s) pass through multiple redirects before reaching the destination. This adds load time and increases drop-off risk.`,
+    );
+    recommendations.push(
+      "Update booking CTA links to point directly to the final booking URL to reduce the number of redirects.",
+    );
   }
 
   // --- Overall score ---
   let score = 100;
-  if (phoneVerdict === 'poor')         score -= 20;
-  else if (phoneVerdict === 'partial') score -= 10;
-  if (!phonesAboveFold && (totalClickablePhones + totalPlainTextPhones) > 0) score -= 5;
-  if (emailVerdict === 'poor')         score -= 10;
-  else if (emailVerdict === 'partial') score -= 5;
-  if (aboveFoldCount === 0)            score -= 15;
-  if (formFrictionVerdict === 'high')  score -= 15;
-  else if (formFrictionVerdict === 'medium') score -= 5;
-  if (allBookingCTAs.length === 0)     score -= 10;
+  if (phoneVerdict === "poor") score -= 20;
+  else if (phoneVerdict === "partial") score -= 10;
+  if (!phonesAboveFold && totalClickablePhones + totalPlainTextPhones > 0) score -= 5;
+  if (emailVerdict === "poor") score -= 10;
+  else if (emailVerdict === "partial") score -= 5;
+  if (aboveFoldCount === 0) score -= 15;
+  if (formFrictionVerdict === "high") score -= 15;
+  else if (formFrictionVerdict === "medium") score -= 5;
+  if (allBookingCTAs.length === 0) score -= 10;
   score -= highHopCTAs.length * 5;
   score = Math.max(0, Math.min(100, score));
-  const grade = score >= 85 ? 'A' : score >= 70 ? 'B' : score >= 55 ? 'C' : score >= 40 ? 'D' : 'F';
+  const grade = score >= 85 ? "A" : score >= 70 ? "B" : score >= 55 ? "C" : score >= 40 ? "D" : "F";
 
   return {
     overall_score: score,
     grade,
     phone_quality: {
-      unique_clickable:       totalClickablePhones,
-      unique_plain_text:      totalPlainTextPhones,
-      independent_clickable:  independentClickable,
-      shared_with_whatsapp:   sharedPhoneNumbers,
-      above_fold:             phonesAboveFold,
-      verdict:                phoneVerdict,
+      unique_clickable: totalClickablePhones,
+      unique_plain_text: totalPlainTextPhones,
+      independent_clickable: independentClickable,
+      shared_with_whatsapp: sharedPhoneNumbers,
+      above_fold: phonesAboveFold,
+      verdict: phoneVerdict,
     },
     email_quality: {
-      clickable_count:  totalClickableEmails,
+      clickable_count: totalClickableEmails,
       plain_text_count: totalPlainTextEmails,
-      verdict:          emailVerdict,
+      verdict: emailVerdict,
     },
     above_fold: {
-      has_phone:      aboveFoldByPage.some(p => p.has_phone),
-      has_email:      aboveFoldByPage.some(p => p.has_email),
-      has_whatsapp:   aboveFoldByPage.some(p => p.has_whatsapp),
-      has_cta_button: aboveFoldByPage.some(p => p.has_cta_button),
-      by_page:        aboveFoldByPage,
+      has_phone: aboveFoldByPage.some((p) => p.has_phone),
+      has_email: aboveFoldByPage.some((p) => p.has_email),
+      has_whatsapp: aboveFoldByPage.some((p) => p.has_whatsapp),
+      has_cta_button: aboveFoldByPage.some((p) => p.has_cta_button),
+      by_page: aboveFoldByPage,
     },
     form_friction: {
-      forms_found:         allForms.length,
-      avg_field_count:     avgFieldCount,
+      forms_found: allForms.length,
+      avg_field_count: avgFieldCount,
       avg_required_fields: avgRequiredCount,
       high_friction_forms: highFrictionForms,
-      verdict:             formFrictionVerdict,
+      verdict: formFrictionVerdict,
     },
     booking_journey: {
-      ctas_found:         allBookingCTAs.length,
+      ctas_found: allBookingCTAs.length,
       min_clicks_to_book: minClicksToBook,
-      avg_redirect_hops:  avgRedirectHops,
+      avg_redirect_hops: avgRedirectHops,
       direct_to_platform: directToPlatform,
-      high_hop_ctas:      highHopCTAs.length,
+      high_hop_ctas: highHopCTAs.length,
     },
     strengths,
     issues,
@@ -1667,53 +1845,46 @@ function generateCTAQualityReport(pagesData) {
 // ---------------------------------------------------------------------------
 function generateSayHelloViability(pagesData, siteUrl) {
   // ── 1. Multi-stage forms — must be FALSE (no multi-stage) ─────────────────
-  const multiStagePage = pagesData.find(p => p.form_features?.is_multi_stage);
+  const multiStagePage = pagesData.find((p) => p.form_features?.is_multi_stage);
   const hasMultiStageForms = !!multiStagePage;
 
   // ── 2. Forms must be native HTML, not iframes ─────────────────────────────
-  const iframePage = pagesData.find(p =>
-    p.form_features?.has_iframe_forms ||
-    (p.booking_links || []).some(b => b.type === 'embedded_iframe')
+  const iframePage = pagesData.find(
+    (p) => p.form_features?.has_iframe_forms || (p.booking_links || []).some((b) => b.type === "embedded_iframe"),
   );
   const hasIframeForms = !!iframePage;
   const iframeProviders = [
     ...new Set(
-      pagesData.flatMap(p => [
+      pagesData.flatMap((p) => [
         ...(p.form_features?.iframe_providers || []),
-        ...(p.booking_links || []).filter(b => b.type === 'embedded_iframe').map(b => b.platform || b.domain),
-      ])
+        ...(p.booking_links || []).filter((b) => b.type === "embedded_iframe").map((b) => b.platform || b.domain),
+      ]),
     ),
   ];
 
   // ── 3. Phone numbers — ≤4 unique and no 08xx / 03xx numbers ──────────────
-  const allClickableNums = new Set(
-    pagesData.flatMap(p => (p.phones?.clickable || []).map(ph => ph.number))
-  );
-  const allPlainDigits = new Set(
-    pagesData.flatMap(p => (p.phones?.plainText || []).map(ph => ph.digits))
-  );
+  const allClickableNums = new Set(pagesData.flatMap((p) => (p.phones?.clickable || []).map((ph) => ph.number)));
+  const allPlainDigits = new Set(pagesData.flatMap((p) => (p.phones?.plainText || []).map((ph) => ph.digits)));
   // Don't double-count plain-text instances of already-clickable numbers
-  allClickableNums.forEach(n => allPlainDigits.delete(n));
+  allClickableNums.forEach((n) => allPlainDigits.delete(n));
   const uniquePhoneCount = allClickableNums.size + allPlainDigits.size;
 
   // Detect 08xx or 03xx (premium rate / non-geographic / public-service numbers).
   // Normalise to local UK format first (strip +44 / 0044 → leading 0).
   const problematicPhones = [
-    ...pagesData.flatMap(p => [
-      ...(p.phones?.clickable  || []).map(ph => ph.number),
-      ...(p.phones?.plainText  || []).map(ph => ph.digits),
+    ...pagesData.flatMap((p) => [
+      ...(p.phones?.clickable || []).map((ph) => ph.number),
+      ...(p.phones?.plainText || []).map((ph) => ph.digits),
     ]),
-  ].filter(n => {
-    const digits = (n || '').replace(/\D/g, '');
-    const local  = digits.startsWith('44') ? '0' + digits.slice(2)
-                 : digits.startsWith('0')  ? digits
-                 : digits;
+  ].filter((n) => {
+    const digits = (n || "").replace(/\D/g, "");
+    const local = digits.startsWith("44") ? "0" + digits.slice(2) : digits.startsWith("0") ? digits : digits;
     return /^0[38]/.test(local);
   });
 
-  const phoneCountOk       = uniquePhoneCount <= 4;
-  const noProblematicNums  = problematicPhones.length === 0;
-  const phonesOk           = phoneCountOk && noProblematicNums;
+  const phoneCountOk = uniquePhoneCount <= 4;
+  const noProblematicNums = problematicPhones.length === 0;
+  const phonesOk = phoneCountOk && noProblematicNums;
 
   // ── 4. Geography — GB / Northern Ireland or North America ─────────────────
   let geoScore = { uk: 0, na: 0 };
@@ -1727,26 +1898,28 @@ function generateSayHelloViability(pagesData, siteUrl) {
   } catch {}
 
   // Aggregate page-level geo signals
-  pagesData.forEach(p => {
+  pagesData.forEach((p) => {
     const s = p.geo_signals || {};
-    if (s.hreflangUK)       geoScore.uk += 3;
-    if (s.hreflangNA)       geoScore.na += 3;
-    if (s.hasGBP)           geoScore.uk += 2;
-    if (s.hasUSD)           geoScore.na += 1;
-    if (s.hasUKPostcode)    geoScore.uk += 3;
-    if (s.ukMention)        geoScore.uk += 2;
-    if (s.naMention)        geoScore.na += 2;
+    if (s.hreflangUK) geoScore.uk += 3;
+    if (s.hreflangNA) geoScore.na += 3;
+    if (s.hasGBP) geoScore.uk += 2;
+    if (s.hasUSD) geoScore.na += 1;
+    if (s.hasUKPostcode) geoScore.uk += 3;
+    if (s.ukMention) geoScore.uk += 2;
+    if (s.naMention) geoScore.na += 2;
   });
 
   // Phone number format signals
-  pagesData.flatMap(p => [
-    ...(p.phones?.clickable  || []).map(ph => ph.number),
-    ...(p.phones?.plainText  || []).map(ph => ph.digits),
-  ]).forEach(n => {
-    const d = (n || '').replace(/\D/g, '');
-    if (d.startsWith('44') || (d.startsWith('0') && d.length >= 10 && d.length <= 11)) geoScore.uk += 1;
-    if (d.startsWith('1') && d.length === 11) geoScore.na += 1;
-  });
+  pagesData
+    .flatMap((p) => [
+      ...(p.phones?.clickable || []).map((ph) => ph.number),
+      ...(p.phones?.plainText || []).map((ph) => ph.digits),
+    ])
+    .forEach((n) => {
+      const d = (n || "").replace(/\D/g, "");
+      if (d.startsWith("44") || (d.startsWith("0") && d.length >= 10 && d.length <= 11)) geoScore.uk += 1;
+      if (d.startsWith("1") && d.length === 11) geoScore.na += 1;
+    });
 
   const isGB = geoScore.uk >= 3;
   const isNA = geoScore.na >= 3;
@@ -1755,44 +1928,47 @@ function generateSayHelloViability(pagesData, siteUrl) {
   // ── Assemble result ───────────────────────────────────────────────────────
   const checks = {
     single_stage_forms: {
-      pass:   !hasMultiStageForms,
-      label:  'No multi-stage forms',
+      pass: !hasMultiStageForms,
+      label: "No multi-stage forms",
       detail: hasMultiStageForms
         ? `Multi-stage form wizard detected on: ${multiStagePage.url}`
-        : 'All forms appear to be single-stage',
+        : "All forms appear to be single-stage",
     },
     native_forms: {
-      pass:   !hasIframeForms,
-      label:  'Forms are native HTML (not iframes)',
+      pass: !hasIframeForms,
+      label: "Forms are native HTML (not iframes)",
       detail: hasIframeForms
-        ? `Iframe-based form(s) detected: ${iframeProviders.join(', ')} — on: ${iframePage.url}`
-        : 'No iframe-embedded form providers found',
+        ? `Iframe-based form(s) detected: ${iframeProviders.join(", ")} — on: ${iframePage.url}`
+        : "No iframe-embedded form providers found",
     },
     phone_numbers_ok: {
-      pass:   phonesOk,
-      label:  '≤4 unique phone numbers and no 08xx/03xx numbers',
+      pass: phonesOk,
+      label: "≤4 unique phone numbers and no 08xx/03xx numbers",
       detail: !phoneCountOk
         ? `${uniquePhoneCount} unique phone numbers found (max 4 allowed)`
         : !noProblematicNums
-        ? `Found 08xx/03xx number(s): ${[...new Set(problematicPhones)].join(', ')}`
-        : `${uniquePhoneCount} unique phone number(s) — all OK`,
+          ? `Found 08xx/03xx number(s): ${[...new Set(problematicPhones)].join(", ")}`
+          : `${uniquePhoneCount} unique phone number(s) — all OK`,
     },
     geography_ok: {
-      pass:   geoOk,
-      label:  'Based in GB, Northern Ireland, or North America',
+      pass: geoOk,
+      label: "Based in GB, Northern Ireland, or North America",
       detail: geoOk
-        ? isGB ? `Appears to be GB/Northern Ireland-based (confidence: ${geoScore.uk})`
-               : `Appears to be North America-based (confidence: ${geoScore.na})`
+        ? isGB
+          ? `Appears to be GB/Northern Ireland-based (confidence: ${geoScore.uk})`
+          : `Appears to be North America-based (confidence: ${geoScore.na})`
         : `Could not confirm GB or North American location (UK score: ${geoScore.uk}, NA score: ${geoScore.na})`,
     },
   };
 
-  const allPass = Object.values(checks).every(c => c.pass);
-  const failReasons = Object.values(checks).filter(c => !c.pass).map(c => c.detail);
+  const allPass = Object.values(checks).every((c) => c.pass);
+  const failReasons = Object.values(checks)
+    .filter((c) => !c.pass)
+    .map((c) => c.detail);
 
   return {
     viable: allPass,
-    verdict: allPass ? 'VIABLE: Meets all SayHello criteria' : `NOT VIABLE: ${failReasons.length} condition(s) failed`,
+    verdict: allPass ? "VIABLE: Meets all SayHello criteria" : `NOT VIABLE: ${failReasons.length} condition(s) failed`,
     checks,
     fail_reasons: failReasons,
   };
@@ -1801,37 +1977,33 @@ function generateSayHelloViability(pagesData, siteUrl) {
 // Helper: extract all data from a single already-loaded page.
 // Shared between homepage, contact, and service page crawls.
 async function extractPageData(page, pageUrl, label, context) {
-  const phones  = await extractPhones(page, pageUrl);
+  const phones = await extractPhones(page, pageUrl);
   const whatsapp = await extractWhatsApp(page, pageUrl);
 
   // Cross-reference: mark phone numbers that are also used in a WhatsApp link.
   // Normalise both sides to a stripped subscriber core for reliable matching.
-  const waPhoneCores = new Set(
-    (whatsapp.links || [])
-      .map(w => normalisePhoneCore(w.number || ''))
-      .filter(Boolean)
-  );
-  [...(phones.clickable || []), ...(phones.plainText || [])].forEach(ph => {
-    const core = normalisePhoneCore(ph.number || ph.digits || '');
+  const waPhoneCores = new Set((whatsapp.links || []).map((w) => normalisePhoneCore(w.number || "")).filter(Boolean));
+  [...(phones.clickable || []), ...(phones.plainText || [])].forEach((ph) => {
+    const core = normalisePhoneCore(ph.number || ph.digits || "");
     ph.also_on_whatsapp = waPhoneCores.has(core) && core.length >= 9;
   });
 
   return {
-    url:             pageUrl,
+    url: pageUrl,
     label,
     phones,
-    emails:          await extractEmails(page, pageUrl),
+    emails: await extractEmails(page, pageUrl),
     whatsapp,
-    location_links:  await extractLocationLinks(page, pageUrl),
-    booking_links:   await extractBookingLinks(page, pageUrl),
-    booking_ctas:    await extractBookingCTAs(page, context, pageUrl),
-    social_links:    await extractSocialLinks(page, pageUrl),
-    newsletter:      await extractNewsletter(page, pageUrl),
-    forms:           await extractForms(page, pageUrl),
-    form_features:   await detectPageFormFeatures(page),
-    live_chat:       await extractLiveChat(page),
+    location_links: await extractLocationLinks(page, pageUrl),
+    booking_links: await extractBookingLinks(page, pageUrl),
+    booking_ctas: await extractBookingCTAs(page, context, pageUrl),
+    social_links: await extractSocialLinks(page, pageUrl),
+    newsletter: await extractNewsletter(page, pageUrl),
+    forms: await extractForms(page, pageUrl),
+    form_features: await detectPageFormFeatures(page),
+    live_chat: await extractLiveChat(page),
     above_fold_ctas: await extractAboveFoldCTAs(page),
-    geo_signals:     await extractGeoSignals(page),
+    geo_signals: await extractGeoSignals(page),
   };
 }
 
@@ -1841,12 +2013,13 @@ async function ctaAuditSite(url) {
   try {
     const browser = await getBrowser();
     const context = await browser.newContext({
-      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+      userAgent:
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
     });
 
-    await context.route('**/*', async route => {
+    await context.route("**/*", async (route) => {
       const resourceType = route.request().resourceType();
-      if (['image', 'media', 'font'].includes(resourceType)) {
+      if (["image", "media", "font"].includes(resourceType)) {
         await route.abort();
       } else {
         await route.continue();
@@ -1858,8 +2031,8 @@ async function ctaAuditSite(url) {
     const pagesData = [];
 
     // ── Homepage ──────────────────────────────────────────────────────────────
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await page.waitForLoadState('load', { timeout: 5000 }).catch(() => {});
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+    await page.waitForLoadState("load", { timeout: 5000 }).catch(() => {});
     await acceptCookieConsent(page);
     pagesCrawled.push(url);
 
@@ -1869,17 +2042,17 @@ async function ctaAuditSite(url) {
       findServicePages(page, url),
     ]);
 
-    pagesData.push(await extractPageData(page, url, 'homepage', context));
+    pagesData.push(await extractPageData(page, url, "homepage", context));
 
     // ── Contact page ──────────────────────────────────────────────────────────
     if (contactPageUrl && contactPageUrl !== url) {
       try {
-        await page.goto(contactPageUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-        await page.waitForLoadState('load', { timeout: 5000 }).catch(() => {});
+        await page.goto(contactPageUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+        await page.waitForLoadState("load", { timeout: 5000 }).catch(() => {});
         pagesCrawled.push(contactPageUrl);
-        pagesData.push(await extractPageData(page, contactPageUrl, 'contact', context));
+        pagesData.push(await extractPageData(page, contactPageUrl, "contact", context));
       } catch (e) {
-        console.error('Failed to crawl contact page:', e.message);
+        console.error("Failed to crawl contact page:", e.message);
       }
     }
 
@@ -1887,10 +2060,45 @@ async function ctaAuditSite(url) {
     for (const serviceUrl of servicePageUrls) {
       if (pagesCrawled.includes(serviceUrl)) continue;
       try {
-        await page.goto(serviceUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-        await page.waitForLoadState('load', { timeout: 5000 }).catch(() => {});
+        await page.goto(serviceUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+        await page.waitForLoadState("load", { timeout: 5000 }).catch(() => {});
         pagesCrawled.push(serviceUrl);
-        pagesData.push(await extractPageData(page, serviceUrl, 'service', context));
+
+        // Extract page data for the service page
+        const pageData = await extractPageData(page, serviceUrl, "service", context);
+        pagesData.push(pageData);
+
+        // Check if this is a service LISTING page (e.g. /services, /treatments)
+        // If so, discover and crawl individual service sub-pages
+        let currentPath;
+        try {
+          currentPath = new URL(serviceUrl).pathname.replace(/\/$/, "");
+        } catch {
+          currentPath = "";
+        }
+
+        if (SERVICE_LISTING_PATTERN.test(currentPath)) {
+          console.log(`🔍 Found service listing page: ${serviceUrl} — discovering sub-pages...`);
+
+          // Find all direct child service pages linked from this listing
+          const subPages = await findServiceSubPages(page, serviceUrl, new URL(url).origin, new Set(pagesCrawled));
+
+          console.log(`📋 Found ${subPages.length} service sub-pages to crawl`);
+
+          // Crawl each individual service page
+          for (const subPageUrl of subPages) {
+            if (pagesCrawled.includes(subPageUrl)) continue;
+            try {
+              await page.goto(subPageUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+              await page.waitForLoadState("load", { timeout: 5000 }).catch(() => {});
+              pagesCrawled.push(subPageUrl);
+              pagesData.push(await extractPageData(page, subPageUrl, "service", context));
+              console.log(`✅ Crawled service sub-page: ${subPageUrl}`);
+            } catch (e) {
+              console.error(`Failed to crawl service sub-page ${subPageUrl}:`, e.message);
+            }
+          }
+        }
       } catch (e) {
         console.error(`Failed to crawl service page ${serviceUrl}:`, e.message);
       }
@@ -1898,23 +2106,22 @@ async function ctaAuditSite(url) {
 
     await context.close();
 
-    const gtmSummary  = await generateGTMSummary(pagesData);
-    const ctaQuality  = generateCTAQualityReport(pagesData);
-    const sayHello    = generateSayHelloViability(pagesData, url);
+    const gtmSummary = await generateGTMSummary(pagesData);
+    const ctaQuality = generateCTAQualityReport(pagesData);
+    const sayHello = generateSayHelloViability(pagesData, url);
 
     return {
-      website_url:      url,
-      ran_at:           new Date().toISOString(),
-      pages_crawled:    pagesCrawled,
-      pages:            pagesData,
-      gtm_summary:      gtmSummary,
-      cta_quality:      ctaQuality,
+      website_url: url,
+      ran_at: new Date().toISOString(),
+      pages_crawled: pagesCrawled,
+      pages: pagesData,
+      gtm_summary: gtmSummary,
+      cta_quality: ctaQuality,
       sayhello_viability: sayHello,
-      duration_ms:      Date.now() - startTime,
+      duration_ms: Date.now() - startTime,
     };
-
   } catch (error) {
-    console.error('CTA audit error:', error);
+    console.error("CTA audit error:", error);
     throw new Error(`CTA audit failed: ${error.message}`);
   }
 }
