@@ -6,7 +6,7 @@ const swaggerUi = require("swagger-ui-express");
 const swaggerSpec = require("./swagger");
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: "50mb" }));
 
 const healthRouter = require("./health.routes");
 app.use("/health", healthRouter);
