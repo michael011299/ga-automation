@@ -47,16 +47,24 @@ async function getAccessToken(refreshToken) {
     );
   }
 
-  const response = await axios.post(
-    GOOGLE_TOKEN_URL,
-    new URLSearchParams({
-      client_id: clientId,
-      client_secret: clientSecret,
-      refresh_token: refreshToken,
-      grant_type: "refresh_token",
-    }),
-    { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
-  );
+  let response;
+  try {
+    response = await axios.post(
+      GOOGLE_TOKEN_URL,
+      new URLSearchParams({
+        client_id: clientId,
+        client_secret: clientSecret,
+        refresh_token: refreshToken,
+        grant_type: "refresh_token",
+      }),
+      { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
+    );
+  } catch (err) {
+    const detail = err.response?.data
+      ? JSON.stringify(err.response.data)
+      : err.message;
+    throw new Error(`Google OAuth token refresh failed: ${detail}`);
+  }
 
   const { access_token, error, error_description } = response.data;
 
