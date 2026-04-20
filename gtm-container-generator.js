@@ -1,81 +1,182 @@
 /**
  * gtm-container-generator.js
  *
- * Generates a complete, importable GTM container export JSON from a CTA audit
- * result.  The output is structurally identical to a real GTM Admin → Export
- * Container JSON (exportFormatVersion 2), so the user can import it directly
- * via GTM Admin → Import Container.
- *
- * Included tags / triggers:
- *   - AP G-TAG           (Google tag, fires All Pages — always)
- *   - AP Cookie Banner   (Custom HTML, paused — always; consent mode v2 default)
- *   - AP Make Contact Details Clickable (Custom HTML, fires Window Loaded)
- *   - AP Click Call      (LINK_CLICK trigger + GA4 event — when clickable tel: links found)
- *   - AP Click Emails    (LINK_CLICK trigger + GA4 event — when clickable mailto: links found)
- *   - AP Contact Form    (FORM_SUBMISSION trigger + GA4 event — when forms found)
- *   - AP Click WhatsApp  (LINK_CLICK trigger + GA4 event — when WhatsApp links found)
- *   - AP Click {Social}  (LINK_CLICK trigger + GA4 event — per social platform found)
- *   - AP Click Book      (LINK_CLICK trigger + GA4 event — per deduplicated booking CTA)
+ * Generates a GTM container export JSON structurally identical to a real
+ * GTM Admin → Export Container file (exportFormatVersion 2).
+ * Import via GTM Admin → Import Container → save the top-level "container"
+ * field from the API response as a .json file.
  */
 
 "use strict";
 
-const ALL_PAGES_TRIGGER_ID  = "2147479553"; // GTM built-in — Page View / All Pages
-const WINDOW_LOADED_TRIGGER_ID = "2147479573"; // GTM built-in — Window Loaded
+// Built-in GTM trigger IDs (these always exist in every container)
+const DOM_READY_TRIGGER_ID     = "2147479572";
+const WINDOW_LOADED_TRIGGER_ID = "2147479573";
 
 const SOCIAL_TRIGGER_DOMAINS = {
-  Facebook:    "facebook.com",
-  Instagram:   "instagram.com",
+  Facebook:      "facebook.com",
+  Instagram:     "instagram.com",
   "X (Twitter)": "twitter.com",
-  LinkedIn:    "linkedin.com",
-  YouTube:     "youtube.com",
-  TikTok:      "tiktok.com",
-  Pinterest:   "pinterest.com",
-  Snapchat:    "snapchat.com",
-  Threads:     "threads.net",
-  Trustpilot:  "trustpilot.com",
+  LinkedIn:      "linkedin.com",
+  YouTube:       "youtube.com",
+  TikTok:        "tiktok.com",
+  Pinterest:     "pinterest.com",
+  Snapchat:      "snapchat.com",
+  Threads:       "threads.net",
+  Trustpilot:    "trustpilot.com",
 };
 
 // ---------------------------------------------------------------------------
-// HTML tag templates
+// Cookie banner HTML — full Consent Mode v2 implementation (matches reference)
 // ---------------------------------------------------------------------------
+const COOKIE_BANNER_HTML = `<div id="consent-banner" style="position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background-color: white; padding: 30px; text-align: center; box-shadow: 0 2px 10px rgba(0,0,0,0.2); z-index: 1000; border-radius: 10px; width: 90%; max-width: 400px;">
+  <p>We use cookies to improve your experience. By clicking "Accept", you consent to the use of all cookies.</p>
+  <button id="accept-button" style="background-color: #4CAF50; color: white; border: none; padding: 10px 20px; cursor: pointer; border-radius: 5px; margin-right: 10px;">Accept</button>
+  <button id="reject-button" style="background-color: #F44336; color: white; border: none; padding: 10px 20px; cursor: pointer; border-radius: 5px;">Reject</button>
+</div>
 
-/**
- * Cookie consent banner with Consent Mode v2 defaults (denied until user accepts).
- * Paused in GTM — client configures their CMP then unpauses.
- */
-const COOKIE_BANNER_HTML = `<script>
+<!-- Overlay -->
+<div id="consent-overlay" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0, 0, 0, 0.5); z-index: 999;"></div>
+
+<!-- Reopen Cookie Settings Button -->
+<button id="reopen-banner-button" style="position: fixed; bottom: 20px; left: 20px; background-color: #555; color: white; border: none; padding: 10px 15px; border-radius: 5px; cursor: pointer; display: none; z-index: 1001;">
+  Cookie Settings
+</button>
+
+
+<script>
   window.dataLayer = window.dataLayer || [];
   function gtag(){dataLayer.push(arguments);}
 
-  // Consent Mode v2 — default all denied until user accepts
+  // Set default consent to 'denied'
   gtag('consent', 'default', {
-    'ad_storage':            'denied',
-    'ad_user_data':          'denied',
-    'ad_personalization':    'denied',
-    'analytics_storage':     'denied',
+    'ad_storage': 'denied',
+    'ad_user_data': 'denied',
+    'ad_personalization': 'denied',
+    'analytics_storage': 'denied',
     'functionality_storage': 'denied',
     'personalization_storage': 'denied',
-    'security_storage':      'granted',
-    'wait_for_update':       500
+    'security_storage': 'denied'
   });
 
-  // TODO: Replace the block below with your CMP's consent update logic.
-  // Call gtag('consent', 'update', {...}) once the user grants/denies consent.
-  // Example (Cookiebot):
-  //   window.addEventListener('CookiebotOnAccept', function () {
-  //     gtag('consent', 'update', {
-  //       'ad_storage':         'granted',
-  //       'ad_user_data':       'granted',
-  //       'ad_personalization': 'granted',
-  //       'analytics_storage':  'granted'
-  //     });
-  //   });
-</script>`;
+  // Grant consent
+  function grantConsent() {
+    gtag('consent', 'update', {
+      'ad_storage': 'granted',
+      'ad_user_data': 'granted',
+      'ad_personalization': 'granted',
+      'analytics_storage': 'granted',
+      'functionality_storage': 'granted',
+      'personalization_storage': 'granted',
+      'security_storage': 'granted'
+    });
 
-/**
- * Build the "Make Contact Details Clickable" custom HTML tag body.
- */
+    // Save cookies
+    var oneYear = "; path=/; max-age=31536000";
+    document.cookie = "ad_storage=granted" + oneYear;
+    document.cookie = "ad_user_data=granted" + oneYear;
+    document.cookie = "ad_personalization=granted" + oneYear;
+    document.cookie = "analytics_storage=granted" + oneYear;
+    document.cookie = "functionality_storage=granted" + oneYear;
+    document.cookie = "personalization_storage=granted" + oneYear;
+    document.cookie = "security_storage=granted" + oneYear;
+
+    // Push custom event to dataLayer
+    window.dataLayer.push({
+      event: 'all_required_consents_granted'
+    });
+  }
+
+  // Deny consent
+  function denyConsent() {
+    gtag('consent', 'update', {
+      'ad_storage': 'denied',
+      'ad_user_data': 'denied',
+      'ad_personalization': 'denied',
+      'analytics_storage': 'denied',
+      'functionality_storage': 'denied',
+      'personalization_storage': 'denied',
+      'security_storage': 'denied'
+    });
+
+    // Save cookies as denied
+    var oneYear = "; path=/; max-age=31536000";
+    document.cookie = "ad_storage=denied" + oneYear;
+    document.cookie = "ad_user_data=denied" + oneYear;
+    document.cookie = "ad_personalization=denied" + oneYear;
+    document.cookie = "analytics_storage=denied" + oneYear;
+    document.cookie = "functionality_storage=denied" + oneYear;
+    document.cookie = "personalization_storage=denied" + oneYear;
+    document.cookie = "security_storage=denied" + oneYear;
+  }
+
+  // Check if all consents are granted
+  function allConsentsGranted() {
+    var consents = [
+      'ad_storage',
+      'ad_user_data',
+      'ad_personalization',
+      'analytics_storage',
+      'functionality_storage',
+      'personalization_storage',
+      'security_storage'
+    ];
+    return consents.every(function(consent) {
+      return document.cookie.split(';').some(function(item) {
+        return item.trim().indexOf(consent + '=granted') === 0;
+      });
+    });
+  }
+
+  // Accept button click
+  document.getElementById('accept-button').addEventListener('click', function() {
+    grantConsent();
+    document.getElementById('consent-banner').style.display = 'none';
+    document.getElementById('consent-overlay').style.display = 'none';
+    document.getElementById('reopen-banner-button').style.display = 'block';
+    window.dataLayer.push({
+    event: 'consent_updated',
+    ad_storage: 'granted'
+    });
+  });
+
+  // Reject button click
+  document.getElementById('reject-button').addEventListener('click', function() {
+    denyConsent();
+    document.getElementById('consent-banner').style.display = 'none';
+    document.getElementById('consent-overlay').style.display = 'none';
+    document.getElementById('reopen-banner-button').style.display = 'block';
+    window.dataLayer.push({
+    event: 'consent_updated',
+    ad_storage: 'denied'
+    });
+  });
+
+  // Reopen button click
+  document.getElementById('reopen-banner-button').addEventListener('click', function() {
+    document.getElementById('consent-banner').style.display = 'block';
+    document.getElementById('consent-overlay').style.display = 'block';
+    document.getElementById('reopen-banner-button').style.display = 'none';
+  });
+
+  // Auto-accept if cookies exist
+  if (allConsentsGranted()) {
+    grantConsent();
+    document.getElementById('consent-banner').style.display = 'none';
+    document.getElementById('consent-overlay').style.display = 'none';
+    document.getElementById('reopen-banner-button').style.display = 'block';
+  } else {
+    document.getElementById('consent-banner').style.display = 'block';
+    document.getElementById('consent-overlay').style.display = 'block';
+    document.getElementById('reopen-banner-button').style.display = 'none';
+  }
+</script>
+
+`;
+
+// ---------------------------------------------------------------------------
+// Make Contact Details Clickable HTML
+// ---------------------------------------------------------------------------
 function buildMakeClickableHTML(phoneNumbers, emailAddresses) {
   const phonesJson = JSON.stringify(phoneNumbers.map((n) => n.replace(/\D/g, "")));
   const emailsJson = JSON.stringify(emailAddresses);
@@ -99,14 +200,14 @@ function buildMakeClickableHTML(phoneNumbers, emailAddresses) {
     phonePatterns.forEach(function (re, i) {
       text = text.replace(re, function (match) {
         var href = 'tel:+44' + phones[i].replace(/^0+44|^0+/, '');
-        return '<a href="' + href + '" class="ap-clickable-phone">' + match + '</a>';
+        return '<a href="' + href + '" style="text-decoration: inherit; color: inherit;">' + match + '</a>';
       });
     });
 
     emails.forEach(function (email) {
       var safeEmail = email.replace(/[.*+?^\${}()|[\\]\\\\]/g, '\\\\$&');
       text = text.replace(new RegExp(safeEmail, 'gi'), function (match) {
-        return '<a href="mailto:' + email + '" class="ap-clickable-email">' + match + '</a>';
+        return '<a href="mailto:' + email + '" style="text-decoration: inherit; color: inherit;">' + match + '</a>';
       });
     });
 
@@ -134,9 +235,8 @@ function buildMakeClickableHTML(phoneNumbers, emailAddresses) {
 }
 
 // ---------------------------------------------------------------------------
-// ID counter helpers
+// ID counter
 // ---------------------------------------------------------------------------
-
 function makeIdCounter(start) {
   let n = start;
   return () => String(n++);
@@ -147,25 +247,23 @@ function makeIdCounter(start) {
 // ---------------------------------------------------------------------------
 
 /**
- * Generate a complete GTM container export JSON from a CTA audit result.
- *
- * @param {Object} audit          — result from ctaAuditSite() / POST /health/audit
- * @param {string} measurementId  — GA4 measurement ID, e.g. "G-XXXXXXXXXX"
+ * @param {Object} audit          — result from ctaAuditSite()
+ * @param {string} measurementId  — GA4 measurement ID e.g. "G-XXXXXXXXXX"
  * @param {string} containerName  — display name for the container
  * @param {string} [accountId]    — GTM account ID (cosmetic; defaults to "0")
  * @param {string} [containerId]  — GTM container ID (cosmetic; defaults to "0")
- * @returns {Object}              — GTM container export JSON
+ * @returns {Object}
  */
 function generateGTMContainerExport(audit, measurementId, containerName, accountId = "0", containerId = "0") {
   const pages = audit.pages || [];
 
   // ── Aggregate audit findings ──────────────────────────────────────────────
-  const hasClickablePhone      = pages.some((p) => p.phones?.clickable?.length > 0);
-  const hasClickableEmail      = pages.some((p) => p.emails?.clickable?.length > 0);
-  const hasForms               = pages.some((p) => p.forms?.length > 0);
-  const hasHighFrictionForms   = pages.some((p) => p.forms?.some((f) => f.friction_level === "high"));
-  const hasNewsletter          = pages.some((p) => p.newsletter?.length > 0);
-  const hasWhatsApp            = pages.some((p) => p.whatsapp?.links?.length > 0);
+  const hasClickablePhone    = pages.some((p) => p.phones?.clickable?.length > 0);
+  const hasClickableEmail    = pages.some((p) => p.emails?.clickable?.length > 0);
+  const hasForms             = pages.some((p) => p.forms?.length > 0);
+  const hasHighFrictionForms = pages.some((p) => p.forms?.some((f) => f.friction_level === "high"));
+  const hasNewsletter        = pages.some((p) => p.newsletter?.length > 0);
+  const hasWhatsApp          = pages.some((p) => p.whatsapp?.links?.length > 0);
 
   const socialPlatforms = [
     ...new Set(pages.flatMap((p) => (p.social_links || []).map((s) => s.platform))),
@@ -225,7 +323,15 @@ function generateGTMContainerExport(audit, measurementId, containerName, account
 
   const meta = { accountId, containerId };
 
-  // ── Built-in variables ────────────────────────────────────────────────────
+  // Standard fields appended to every tag
+  const tagMeta = () => ({
+    fingerprint:       nextFp(),
+    tagFiringOption:   "ONCE_PER_LOAD",
+    monitoringMetadata: { type: "MAP" },
+    consentSettings:   { consentStatus: "NOT_SET" },
+  });
+
+  // ── Built-in variables (matches reference exactly) ────────────────────────
   const builtInVariables = [
     { accountId, containerId, type: "PAGE_URL",      name: "Page URL" },
     { accountId, containerId, type: "PAGE_HOSTNAME", name: "Page Hostname" },
@@ -236,6 +342,7 @@ function generateGTMContainerExport(audit, measurementId, containerName, account
   ];
 
   // ── Helper: LINK_CLICK trigger ────────────────────────────────────────────
+  // Reference: BOOLEAN false for waitForTags/checkValidation, TEMPLATE (no value) for uniqueTriggerId
   function addLinkTrigger(name, urlContains) {
     const triggerId = nextTriggerId();
     triggers.push({
@@ -252,11 +359,29 @@ function generateGTMContainerExport(audit, measurementId, containerName, account
           ],
         },
       ],
-      uniqueTriggerId:      { type: "TEMPLATE" },
-      waitForTags:          { type: "TEMPLATE" },
-      checkValidation:      { type: "TEMPLATE" },
-      waitForTagsTimeout:   { type: "TEMPLATE", value: "2000" },
-      fingerprint:          nextFp(),
+      waitForTags:        { type: "BOOLEAN",  value: "false" },
+      checkValidation:    { type: "BOOLEAN",  value: "false" },
+      waitForTagsTimeout: { type: "TEMPLATE", value: "2000" },
+      uniqueTriggerId:    { type: "TEMPLATE" },
+      fingerprint:        nextFp(),
+    });
+    return triggerId;
+  }
+
+  // ── Helper: FORM_SUBMISSION trigger ───────────────────────────────────────
+  // Reference: TEMPLATE (no value) for waitForTags, checkValidation, uniqueTriggerId
+  function addFormTrigger(name) {
+    const triggerId = nextTriggerId();
+    triggers.push({
+      ...meta,
+      triggerId,
+      name,
+      type:               "FORM_SUBMISSION",
+      waitForTags:        { type: "TEMPLATE" },
+      checkValidation:    { type: "TEMPLATE" },
+      waitForTagsTimeout: { type: "TEMPLATE", value: "2000" },
+      uniqueTriggerId:    { type: "TEMPLATE" },
+      fingerprint:        nextFp(),
     });
     return triggerId;
   }
@@ -270,13 +395,12 @@ function generateGTMContainerExport(audit, measurementId, containerName, account
       name,
       type: "gaawe",
       parameter: [
-        { type: "TEMPLATE", key: "eventName",            value: eventName },
+        { type: "BOOLEAN",  key: "sendEcommerceData",     value: "false" },
+        { type: "TEMPLATE", key: "eventName",             value: eventName },
         { type: "TEMPLATE", key: "measurementIdOverride", value: measurementId },
-        { type: "BOOLEAN",  key: "sendEcommerceData",    value: "false" },
       ],
       firingTriggerId: firingTriggerIds,
-      tagFiringOption: "ONCE_PER_LOAD",
-      fingerprint:     nextFp(),
+      ...tagMeta(),
     });
     return tagId;
   }
@@ -287,51 +411,61 @@ function generateGTMContainerExport(audit, measurementId, containerName, account
     addGA4EventTag(tagName, eventName, [triggerId]);
   }
 
-  // ── AP G-TAG (always) ─────────────────────────────────────────────────────
+  // ── AP G-TAG (fires on Window Loaded — matches reference) ─────────────────
   tags.push({
     ...meta,
-    tagId:   nextTagId(),
-    name:    "AP G-TAG",
-    type:    "googtag",
+    tagId: nextTagId(),
+    name:  "AP G-TAG",
+    type:  "googtag",
     parameter: [
-      { type: "TEMPLATE", key: "tagId",                value: measurementId },
-      { type: "TEMPLATE", key: "configSettingsTable",  value: "" },
+      { type: "TEMPLATE", key: "tagId", value: measurementId },
     ],
-    firingTriggerId: [ALL_PAGES_TRIGGER_ID],
+    firingTriggerId: [WINDOW_LOADED_TRIGGER_ID],
+    ...tagMeta(),
     tagFiringOption: "ONCE_PER_EVENT",
-    fingerprint:     nextFp(),
   });
 
-  // ── AP Cookie Banner (always, paused) ─────────────────────────────────────
+  // ── AP Cookie Banner (fires on DOM Ready — matches reference, paused) ──────
   tags.push({
     ...meta,
-    tagId:   nextTagId(),
-    name:    "AP Cookie Banner",
-    type:    "html",
+    tagId: nextTagId(),
+    name:  "AP Cookie Banner",
+    type:  "html",
     parameter: [
       { type: "TEMPLATE", key: "html",                 value: COOKIE_BANNER_HTML },
       { type: "BOOLEAN",  key: "supportDocumentWrite", value: "false" },
     ],
-    firingTriggerId: [ALL_PAGES_TRIGGER_ID],
+    firingTriggerId: [DOM_READY_TRIGGER_ID],
+    paused: true,
+    ...tagMeta(),
     tagFiringOption: "ONCE_PER_EVENT",
-    paused:          true,
-    fingerprint:     nextFp(),
   });
 
-  // ── AP Make Contact Details Clickable (Window Loaded) ─────────────────────
+  // ── AP Make Contact Details Clickable (custom Window Loaded trigger) ───────
   if (allPhoneNumbers.length > 0 || allEmails.length > 0) {
+    // Create a custom Window Loaded trigger — matches reference structure
+    const windowLoadedTriggerId = nextTriggerId();
+    triggers.push({
+      ...meta,
+      triggerId:   windowLoadedTriggerId,
+      name:        "Window Loaded",
+      type:        "WINDOW_LOADED",
+      fingerprint: nextFp(),
+    });
+
     tags.push({
       ...meta,
-      tagId:   nextTagId(),
-      name:    "AP Make Contact Details Clickable",
-      type:    "html",
+      tagId: nextTagId(),
+      name:  "AP Make Contact Details Clickable",
+      type:  "html",
+      priority: { type: "INTEGER", value: "3" },
       parameter: [
         { type: "TEMPLATE", key: "html",                 value: buildMakeClickableHTML(allPhoneNumbers, allEmails) },
         { type: "BOOLEAN",  key: "supportDocumentWrite", value: "false" },
       ],
-      firingTriggerId: [WINDOW_LOADED_TRIGGER_ID],
-      tagFiringOption: "ONCE_PER_LOAD",
-      fingerprint:     nextFp(),
+      firingTriggerId: [windowLoadedTriggerId],
+      ...tagMeta(),
+      tagFiringOption: "UNLIMITED",
     });
   }
 
@@ -351,19 +485,7 @@ function generateGTMContainerExport(audit, measurementId, containerName, account
 
   // ── Contact Form ──────────────────────────────────────────────────────────
   if (hasForms) {
-    const triggerId = nextTriggerId();
-    triggers.push({
-      ...meta,
-      triggerId,
-      name:             "AP Contact Form",
-      type:             "FORM_SUBMISSION",
-      uniqueTriggerId:  { type: "TEMPLATE" },
-      waitForTags:      { type: "TEMPLATE" },
-      checkValidation:  { type: "TEMPLATE" },
-      waitForTagsTimeout: { type: "TEMPLATE", value: "2000" },
-      fingerprint:      nextFp(),
-    });
-    addGA4EventTag("AP Contact Form", "contact_form", [triggerId]);
+    addGA4EventTag("AP Contact Form", "contact_form", [addFormTrigger("AP Contact Form")]);
   } else {
     skipped.push("contact_form — no contact forms found on site");
   }
@@ -386,67 +508,21 @@ function generateGTMContainerExport(audit, measurementId, containerName, account
       fingerprint:        nextFp(),
     });
     addGA4EventTag("AP Form Start (High Friction)", "form_start", [visibilityTriggerId]);
-
-    const submitTriggerId = nextTriggerId();
-    triggers.push({
-      ...meta,
-      triggerId:          submitTriggerId,
-      name:               "AP Form Submit (High Friction)",
-      type:               "FORM_SUBMISSION",
-      uniqueTriggerId:    { type: "TEMPLATE" },
-      waitForTags:        { type: "TEMPLATE" },
-      checkValidation:    { type: "TEMPLATE" },
-      waitForTagsTimeout: { type: "TEMPLATE", value: "2000" },
-      fingerprint:        nextFp(),
-    });
-    addGA4EventTag("AP Form Submit (High Friction)", "form_submit_high_friction", [submitTriggerId]);
+    addGA4EventTag("AP Form Submit (High Friction)", "form_submit_high_friction", [addFormTrigger("AP Form Submit (High Friction)")]);
   } else {
     skipped.push("form_start / form_submit_high_friction — no high-friction forms (5+ fields) found on site");
   }
 
   // ── Newsletter Form ────────────────────────────────────────────────────────
   if (hasNewsletter) {
-    const triggerId = nextTriggerId();
-    triggers.push({
-      ...meta,
-      triggerId,
-      name:               "AP Newsletter Form",
-      type:               "FORM_SUBMISSION",
-      uniqueTriggerId:    { type: "TEMPLATE" },
-      waitForTags:        { type: "TEMPLATE" },
-      checkValidation:    { type: "TEMPLATE" },
-      waitForTagsTimeout: { type: "TEMPLATE", value: "2000" },
-      fingerprint:        nextFp(),
-    });
-    addGA4EventTag("AP Newsletter Form", "newsletter_signup", [triggerId]);
+    addGA4EventTag("AP Newsletter Form", "newsletter_signup", [addFormTrigger("AP Newsletter Form")]);
   } else {
     skipped.push("newsletter_signup — no newsletter forms found on site");
   }
 
   // ── WhatsApp ──────────────────────────────────────────────────────────────
   if (hasWhatsApp) {
-    const triggerId = nextTriggerId();
-    triggers.push({
-      ...meta,
-      triggerId,
-      name:  "AP Click WhatsApp",
-      type:  "LINK_CLICK",
-      filter: [
-        {
-          type: "CONTAINS",
-          parameter: [
-            { type: "TEMPLATE", key: "arg0", value: "{{Click URL}}" },
-            { type: "TEMPLATE", key: "arg1", value: "wa.me" },
-          ],
-        },
-      ],
-      uniqueTriggerId:    { type: "TEMPLATE" },
-      waitForTags:        { type: "TEMPLATE" },
-      checkValidation:    { type: "TEMPLATE" },
-      waitForTagsTimeout: { type: "TEMPLATE", value: "2000" },
-      fingerprint:        nextFp(),
-    });
-    addGA4EventTag("AP Click WhatsApp", "click_whatsapp", [triggerId]);
+    addLinkTriggerAndTag("AP Click WhatsApp", "wa.me", "AP Click WhatsApp", "click_whatsapp");
   } else {
     skipped.push("click_whatsapp — no WhatsApp links found on site");
   }
@@ -457,7 +533,6 @@ function generateGTMContainerExport(audit, measurementId, containerName, account
   } else {
     socialPlatforms.forEach((platform) => {
       const safeName = platform.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase();
-
       if (platform === "X (Twitter)") {
         const tTriggerId = addLinkTrigger("AP Click X - twitter.com", "twitter.com");
         const xTriggerId = addLinkTrigger("AP Click X - x.com", "x.com");
@@ -476,7 +551,7 @@ function generateGTMContainerExport(audit, measurementId, containerName, account
     dedupedBookingCTAs.forEach((cta) => {
       try {
         if (cta.destination_type === "booking_platform") {
-          const hostname    = new URL(cta.final_url).hostname;
+          const hostname     = new URL(cta.final_url).hostname;
           const safePlatform = (cta.platform || hostname).replace(/[^a-zA-Z0-9]/g, "_").toLowerCase();
           addLinkTriggerAndTag(
             `AP Book CTA - ${cta.platform || hostname}`,
@@ -520,55 +595,59 @@ function generateGTMContainerExport(audit, measurementId, containerName, account
     .replace("T", " ")
     .replace(/\.\d+Z$/, "");
 
+  const containerPath    = `accounts/${accountId}/containers/${containerId}`;
+  const containerVerPath = `${containerPath}/versions/0`;
+
   const containerExport = {
     exportFormatVersion: 2,
     exportTime,
     containerVersion: {
-      path:               `accounts/${accountId}/containers/${containerId}/versions/0`,
+      path:               containerVerPath,
       accountId,
       containerId,
       containerVersionId: "0",
-      name:               containerName || "AP Tracking Setup",
-      description:        `Generated by AP automation — measurement ID: ${measurementId}`,
       container: {
-        path:         `accounts/${accountId}/containers/${containerId}`,
+        path:         containerPath,
         accountId,
         containerId,
         name:         containerName || "AP Tracking Setup",
         usageContext: ["WEB"],
+        fingerprint:  nextFp(),
+        tagManagerUrl: `https://tagmanager.google.com/#/container/${containerPath}/workspaces?apiLink=container`,
         features: {
-          supportUserPermissions:      true,
-          supportEnvironments:         true,
-          supportWorkspaces:           true,
-          supportGtagConfigs:          true,
-          supportBuiltInVariables:     true,
-          supportClients:              false,
-          supportFolders:              true,
-          supportTags:                 true,
-          supportTemplates:            true,
-          supportTriggers:             true,
-          supportVariables:            true,
-          supportVersions:             true,
-          supportZones:                true,
-          supportTransformations:      true,
+          supportUserPermissions:  true,
+          supportEnvironments:     true,
+          supportWorkspaces:       true,
+          supportGtagConfigs:      false,
+          supportBuiltInVariables: true,
+          supportClients:          false,
+          supportFolders:          true,
+          supportTags:             true,
+          supportTemplates:        true,
+          supportTriggers:         true,
+          supportVariables:        true,
+          supportVersions:         true,
+          supportZones:            true,
+          supportTransformations:  false,
         },
       },
-      tag:              tags,
-      trigger:          triggers,
-      builtInVariable:  builtInVariables,
-      fingerprint:      String(Date.now()),
+      tag:             tags,
+      trigger:         triggers,
+      builtInVariable: builtInVariables,
+      fingerprint:     nextFp(),
+      tagManagerUrl:   `https://tagmanager.google.com/#/versions/${containerVerPath}?apiLink=version`,
     },
   };
 
   return {
     export: containerExport,
     summary: {
-      measurement_id:    measurementId,
-      tags_count:        tags.length,
-      triggers_count:    triggers.length,
+      measurement_id:  measurementId,
+      tags_count:      tags.length,
+      triggers_count:  triggers.length,
       skipped,
-      phones_included:   allPhoneNumbers,
-      emails_included:   allEmails,
+      phones_included: allPhoneNumbers,
+      emails_included: allEmails,
     },
   };
 }
