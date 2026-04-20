@@ -146,6 +146,7 @@ function generateGTMContainerExport(audit, measurementId, containerName, account
   const hasClickablePhone = pages.some((p) => p.phones?.clickable?.length > 0);
   const hasClickableEmail = pages.some((p) => p.emails?.clickable?.length > 0);
   const hasForms = pages.some((p) => p.forms?.length > 0);
+  const hasHighFrictionForms = pages.some((p) => p.forms?.some((f) => f.friction_level === "high"));
   const hasNewsletter = pages.some((p) => p.newsletter?.length > 0);
   const hasWhatsApp = pages.some((p) => p.whatsapp?.links?.length > 0);
 
@@ -340,6 +341,40 @@ function generateGTMContainerExport(audit, measurementId, containerName, account
     addGA4EventTag("AP Contact Form", "contact_form", [triggerId]);
   } else {
     skipped.push("contact_form — no contact forms found on site");
+  }
+
+  // ── High-Friction Form Abandonment ───────────────────────────────────────
+  if (hasHighFrictionForms) {
+    // form_start: fires when a form is 50% visible in viewport (proxy for "user engaged")
+    const visibilityTriggerId = nextTriggerId();
+    triggers.push({
+      ...meta,
+      triggerId: visibilityTriggerId,
+      name: "AP Form Visible (High Friction)",
+      type: "ELEMENT_VISIBILITY",
+      visibilitySelector: { type: "TEMPLATE", value: "form" },
+      visibleRatioType: { type: "INTEGER", value: "50" },
+      visibleRatioMin: { type: "INTEGER", value: "50" },
+      waitForTags: { type: "BOOLEAN", value: "false" },
+      checkValidation: { type: "BOOLEAN", value: "false" },
+      waitForTagsTimeout: { type: "TEMPLATE", value: "2000" },
+    });
+    addGA4EventTag("AP Form Start (High Friction)", "form_start", [visibilityTriggerId]);
+
+    // form_submit_high_friction: separate submit tag so abandonment = form_start sessions − form_submit sessions
+    const submitTriggerId = nextTriggerId();
+    triggers.push({
+      ...meta,
+      triggerId: submitTriggerId,
+      name: "AP Form Submit (High Friction)",
+      type: "FORM_SUBMISSION",
+      waitForTags: { type: "BOOLEAN", value: "false" },
+      checkValidation: { type: "BOOLEAN", value: "false" },
+      waitForTagsTimeout: { type: "TEMPLATE", value: "2000" },
+    });
+    addGA4EventTag("AP Form Submit (High Friction)", "form_submit_high_friction", [submitTriggerId]);
+  } else {
+    skipped.push("form_start / form_submit_high_friction — no high-friction forms (5+ fields) found on site");
   }
 
   // ── Newsletter Form ────────────────────────────────────────────────────────

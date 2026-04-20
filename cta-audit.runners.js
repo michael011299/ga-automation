@@ -755,6 +755,35 @@ async function extractBookingCTAs(page, context, baseUrl) {
   return results;
 }
 
+function checkDeadSocialLink(href, platform) {
+  try {
+    const url = new URL(href);
+    const path = url.pathname.replace(/\/$/, "") || "/";
+    if (platform === "LinkedIn") {
+      if (!/^\/(in|company|school)\/[^/]+/.test(path))
+        return { is_dead: true, dead_reason: "Missing profile path (/in/ or /company/)" };
+    } else if (platform === "YouTube") {
+      if (!/^\/((@[^/]+)|(c\/[^/]+)|(channel\/[^/]+)|(user\/[^/]+))/.test(path))
+        return { is_dead: true, dead_reason: "Missing channel path (/@username, /c/, /channel/, /user/)" };
+    } else if (platform === "Instagram") {
+      if (path === "/" || /^\/(explore|reels|accounts|stories|direct|p\/|reel\/)/.test(path))
+        return { is_dead: true, dead_reason: "Links to Instagram homepage or generic page, not a profile" };
+    } else if (platform === "X (Twitter)") {
+      if (path === "/" || /^\/(login|signup|home|share|intent|i\/|hashtag\/|search)/.test(path))
+        return { is_dead: true, dead_reason: "Links to X homepage or generic page, not a profile" };
+    } else if (platform === "Facebook") {
+      if (path === "/" || /^\/(sharer|dialog|login|share\/)/.test(path))
+        return { is_dead: true, dead_reason: "Links to Facebook homepage or share/dialog, not a page" };
+    } else if (platform === "TikTok") {
+      if (!path.startsWith("/@"))
+        return { is_dead: true, dead_reason: "Missing profile path (/@username)" };
+    }
+    return { is_dead: false, dead_reason: null };
+  } catch {
+    return { is_dead: false, dead_reason: null };
+  }
+}
+
 async function extractSocialLinks(page, pageUrl) {
   const socialLinks = await safeEval(page, () => {
     const platforms = {
@@ -802,7 +831,12 @@ async function extractSocialLinks(page, pageUrl) {
   });
 
   if (socialLinks) {
-    socialLinks.forEach((link) => (link.page_url = pageUrl));
+    socialLinks.forEach((link) => {
+      link.page_url = pageUrl;
+      const dead = checkDeadSocialLink(link.href, link.platform);
+      link.is_dead = dead.is_dead;
+      link.dead_reason = dead.dead_reason;
+    });
   }
 
   return socialLinks || [];
@@ -1505,6 +1539,13 @@ async function extractForms(page, pageUrl) {
           const fieldCount = fields.length;
           const requiredCount = fields.filter((f) => f.required).length;
 
+          const rect = form.getBoundingClientRect();
+          const scrollY = window.scrollY || window.pageYOffset || 0;
+          const positionPx = Math.round(rect.top + scrollY);
+          const totalHeight = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight, 1);
+          const positionPercent = Math.round((positionPx / totalHeight) * 100);
+          const positionLabel = positionPercent <= 30 ? "above_fold" : positionPercent <= 70 ? "mid_page" : "below_fold";
+
           formData.push({
             page_url: pageUrl,
             form_index: index,
@@ -1518,7 +1559,10 @@ async function extractForms(page, pageUrl) {
             has_message_field: hasMessageField,
             has_name_field: hasNameField,
             third_party: thirdParty,
-            score, // Include score for debugging
+            position_px: positionPx,
+            position_percent: positionPercent,
+            position_label: positionLabel,
+            score,
           });
         }
       });
@@ -1819,6 +1863,17 @@ async function generateGTMSummary(pageData) {
   // Form tracking
   if (totalForms > 0) {
     tagsToCreate.push(`GA4 Event: form_submit_contact | Trigger: Form Submission on contact forms`);
+  }
+
+  // High-friction form abandonment tracking
+  const highFrictionForms = pageData.flatMap((p) => (p.forms || []).filter((f) => f.friction_level === "high"));
+  if (highFrictionForms.length > 0) {
+    tagsToCreate.push(
+      `GA4 Event: form_start | Trigger: Element Visibility — form 50% in viewport (fires when user first sees high-friction form)`,
+    );
+    tagsToCreate.push(
+      `GA4 Event: form_submit_high_friction | Trigger: Form Submission on high-friction forms (${highFrictionForms.length} form(s) with 5+ fields) — compare with form_start to measure abandonment rate`,
+    );
   }
 
   // Newsletter tracking
