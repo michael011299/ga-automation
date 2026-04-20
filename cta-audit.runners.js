@@ -1589,102 +1589,207 @@ async function extractForms(page, pageUrl) {
   return forms || [];
 }
 
+// Build the most specific usable CSS selector for an element returned from page.evaluate.
+// Priority: #id > meaningful class combo > [role] > [data-*] > full class list > tag
+function buildSpecificSelector(id, classList, role, dataAttrs, tag) {
+  if (id) return `#${id}`;
+  const meaningful = (classList || []).filter((c) =>
+    /success|thank|confirm|sent|submit|complete|response|message|alert|notification|error|wpcf7|gform|wpforms|forminator|ninja|elementor/i.test(c),
+  );
+  if (meaningful.length) return "." + meaningful.join(".");
+  if (role) return `[role="${role}"]`;
+  for (const [attr, val] of Object.entries(dataAttrs || {})) {
+    if (val) return `[${attr}="${val}"]`;
+  }
+  if ((classList || []).length) return "." + classList.slice(0, 3).join(".");
+  return tag || "div";
+}
+
 async function testFormSubmission(page, formData) {
   const form = await page.locator("form").nth(formData.form_index);
 
-  // Fill form fields with test data
+  // ── Fill fields ───────────────────────────────────────────────────────────
   for (const field of formData.fields) {
     try {
-      const selector = field.name ? `[name="${field.name}"]` : `input:nth-child(${formData.fields.indexOf(field) + 1})`;
+      const selector = field.name
+        ? `[name="${field.name}"]`
+        : `input:nth-child(${formData.fields.indexOf(field) + 1})`;
       const element = form.locator(selector).first();
-
       if (await element.isVisible({ timeout: 1000 })) {
-        const fieldText = (field.name + field.placeholder).toLowerCase();
+        const fieldText = (field.name + " " + field.placeholder).toLowerCase();
+        if (fieldText.includes("email"))                                         await element.fill(TEST_VALUES.email);
+        else if (fieldText.includes("phone") || fieldText.includes("tel"))       await element.fill(TEST_VALUES.phone);
+        else if (fieldText.includes("message") || fieldText.includes("comment") || fieldText.includes("enquiry")) await element.fill(TEST_VALUES.message);
+        else if (fieldText.includes("first") && fieldText.includes("name"))      await element.fill(TEST_VALUES.firstName);
+        else if (fieldText.includes("last") && fieldText.includes("name"))       await element.fill(TEST_VALUES.lastName);
+        else if (fieldText.includes("name"))                                     await element.fill(TEST_VALUES.fullName);
+        else if (fieldText.includes("company") || fieldText.includes("business")) await element.fill(TEST_VALUES.company);
+        else if (fieldText.includes("postcode") || fieldText.includes("zip"))    await element.fill(TEST_VALUES.postcode);
+        else if (field.type === "select-one") { /* leave selects at default */ }
+        else if (field.type === "text" || field.type === "email")                await element.fill("Test");
+      }
+    } catch (_) { /* continue */ }
+  }
 
-        if (fieldText.includes("email")) {
-          await element.fill(TEST_VALUES.email);
-        } else if (fieldText.includes("phone") || fieldText.includes("tel")) {
-          await element.fill(TEST_VALUES.phone);
-        } else if (fieldText.includes("message") || fieldText.includes("comment") || fieldText.includes("enquiry")) {
-          await element.fill(TEST_VALUES.message);
-        } else if (fieldText.includes("first") && fieldText.includes("name")) {
-          await element.fill(TEST_VALUES.firstName);
-        } else if (fieldText.includes("last") && fieldText.includes("name")) {
-          await element.fill(TEST_VALUES.lastName);
-        } else if (fieldText.includes("name")) {
-          await element.fill(TEST_VALUES.fullName);
-        } else if (fieldText.includes("company") || fieldText.includes("business")) {
-          await element.fill(TEST_VALUES.company);
-        } else if (fieldText.includes("postcode") || fieldText.includes("zip")) {
-          await element.fill(TEST_VALUES.postcode);
-        } else if (field.type === "text" || field.type === "email") {
-          await element.fill("Test");
+  // ── Snapshot hidden success-like elements & start MutationObserver ─────────
+  await page.evaluate(() => {
+    window.__apFormResult = null;
+
+    // Record elements that look like success containers but are currently hidden
+    const PATTERN = /success|thank|confirm|sent|complete|response|submitted|wpcf7-response|gform_confirmation|wpforms-confirmation|elementor-message/i;
+    window.__apHiddenCandidates = Array.from(document.querySelectorAll("*")).filter((el) => {
+      if (!PATTERN.test(el.className + " " + (el.id || ""))) return false;
+      const cs = window.getComputedStyle(el);
+      return cs.display === "none" || cs.visibility === "hidden" || cs.opacity === "0" || el.hasAttribute("hidden");
+    });
+
+    // Observe new nodes added to the DOM
+    window.__apAddedNodes = [];
+    window.__apObserver = new MutationObserver((mutations) => {
+      for (const m of mutations) {
+        for (const node of m.addedNodes) {
+          if (node.nodeType === 1 && node.textContent?.trim().length > 3) {
+            window.__apAddedNodes.push(node);
+          }
+        }
+        // Also watch for attribute changes that might reveal hidden elements
+        if (m.type === "attributes" && m.target.nodeType === 1) {
+          window.__apAddedNodes.push(m.target);
         }
       }
-    } catch (e) {
-      // Continue with other fields if one fails
-    }
-  }
+    });
+    window.__apObserver.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["style", "class", "hidden", "aria-hidden"],
+    });
+  });
 
   const currentUrl = page.url();
 
-  // Submit form
+  // ── Submit ─────────────────────────────────────────────────────────────────
   const submitButton = form
     .locator('button[type="submit"], input[type="submit"], button:not([type]):not([type="button"]), [role="button"]')
     .first();
   await submitButton.click();
-
-  // Wait a moment for submission to process (longer wait for slower forms)
   await page.waitForTimeout(3000);
 
-  // Check if URL changed (redirect)
+  // ── Redirect ──────────────────────────────────────────────────────────────
   const newUrl = page.url();
   if (newUrl !== currentUrl) {
     formData.submission_behaviour = { type: "redirect", thank_you_url: newUrl };
-    formData.gtm_recommendation = `Thank You URL detected: ${newUrl} - Create GA4 Event tag triggered by Page View on this URL`;
+    formData.gtm_recommendation = `Thank You URL detected: ${newUrl} — GA4 Event: Page View trigger with URL contains "${newUrl}"`;
     return;
   }
 
-  // Check for success message with extended selectors
-  for (const selector of SUCCESS_SELECTORS) {
+  // ── URL fragment ──────────────────────────────────────────────────────────
+  const fragment = newUrl.split("#")[1];
+  if (fragment && /success|thank|sent|complete/i.test(fragment)) {
+    formData.submission_behaviour = { type: "url_fragment", fragment };
+    formData.gtm_recommendation = `Success URL fragment: #${fragment} — GA4 Event: Page View trigger with URL fragment condition`;
+    return;
+  }
+
+  // ── Check mutation observer results — newly added/revealed elements ────────
+  const mutationHit = await page.evaluate(() => {
+    if (window.__apObserver) window.__apObserver.disconnect();
+
+    const PATTERN = /success|thank|confirm|sent|complete|response|submitted|wpcf7|gform|wpforms|elementor-message/i;
+    const isVisible = (el) => {
+      if (!el || el.nodeType !== 1) return false;
+      const cs = window.getComputedStyle(el);
+      return cs.display !== "none" && cs.visibility !== "hidden" && parseFloat(cs.opacity) > 0 && el.offsetParent !== null;
+    };
+    const buildInfo = (el) => ({
+      id:        el.id || null,
+      classList: Array.from(el.classList),
+      role:      el.getAttribute("role"),
+      dataAttrs: {
+        "data-status": el.getAttribute("data-status"),
+        "data-type":   el.getAttribute("data-type"),
+      },
+      tag:  el.tagName.toLowerCase(),
+      text: (el.textContent || "").trim().slice(0, 300),
+    });
+
+    // 1. Previously hidden candidates that are now visible
+    for (const el of window.__apHiddenCandidates || []) {
+      if (isVisible(el) && el.textContent?.trim().length > 3) return buildInfo(el);
+    }
+
+    // 2. Newly added nodes that match success pattern and are visible
+    for (const el of window.__apAddedNodes || []) {
+      if (!isVisible(el)) continue;
+      if (PATTERN.test(el.className + " " + (el.id || "")) && el.textContent?.trim().length > 3) return buildInfo(el);
+    }
+
+    // 3. Any newly added node that is visible and has meaningful text (less strict)
+    for (const el of window.__apAddedNodes || []) {
+      if (isVisible(el) && el.textContent?.trim().length > 10) return buildInfo(el);
+    }
+
+    return null;
+  });
+
+  if (mutationHit) {
+    const selector = buildSpecificSelector(
+      mutationHit.id,
+      mutationHit.classList,
+      mutationHit.role,
+      mutationHit.dataAttrs,
+      mutationHit.tag,
+    );
+    formData.submission_behaviour = {
+      type:          "inline_message",
+      selector,
+      message_text:  mutationHit.text,
+      element_id:    mutationHit.id,
+      element_class: mutationHit.classList.join(" ") || null,
+      detected_by:   "mutation_observer",
+    };
+    formData.gtm_recommendation = `Success element detected: "${selector}" — GA4 Event: Element Visibility trigger on this selector`;
+    return;
+  }
+
+  // ── Fallback: scan SUCCESS_SELECTORS list ─────────────────────────────────
+  for (const genericSelector of SUCCESS_SELECTORS) {
     try {
-      const element = page.locator(selector);
-      if (await element.isVisible({ timeout: 2000 })) {
-        const messageText = await element.textContent();
-        const elementId = await element.getAttribute("id");
-        const elementClass = await element.getAttribute("class");
+      const el = page.locator(genericSelector).first();
+      if (await el.isVisible({ timeout: 1500 })) {
+        // Generate the most specific selector for the actual element found
+        const info = await el.evaluate((node) => ({
+          id:        node.id || null,
+          classList: Array.from(node.classList),
+          role:      node.getAttribute("role"),
+          dataAttrs: {
+            "data-status": node.getAttribute("data-status"),
+            "data-type":   node.getAttribute("data-type"),
+          },
+          tag:  node.tagName.toLowerCase(),
+          text: (node.textContent || "").trim().slice(0, 300),
+        }));
+        const specificSelector = buildSpecificSelector(
+          info.id, info.classList, info.role, info.dataAttrs, info.tag,
+        );
         formData.submission_behaviour = {
-          type: "inline_message",
-          selector,
-          message_text: messageText?.trim(),
-          element_id: elementId,
-          element_class: elementClass,
+          type:          "inline_message",
+          selector:      specificSelector,
+          fallback_selector: genericSelector,
+          message_text:  info.text,
+          element_id:    info.id,
+          element_class: info.classList.join(" ") || null,
+          detected_by:   "selector_scan",
         };
-        formData.gtm_recommendation = `Success message detected with selector "${selector}" - Create GA4 Event tag triggered by Element Visibility on this selector`;
+        formData.gtm_recommendation = `Success element detected: "${specificSelector}" — GA4 Event: Element Visibility trigger on this selector`;
         return;
       }
-    } catch (e) {
-      // Continue checking other selectors
-    }
+    } catch (_) { /* try next */ }
   }
 
-  // Check for URL fragments that might indicate success (#success, #thank-you, etc.)
-  const currentHash = page.url().split("#")[1];
-  if (
-    currentHash &&
-    (currentHash.includes("success") ||
-      currentHash.includes("thank") ||
-      currentHash.includes("sent") ||
-      currentHash.includes("complete"))
-  ) {
-    formData.submission_behaviour = { type: "url_fragment", fragment: currentHash };
-    formData.gtm_recommendation = `Success URL fragment detected: #${currentHash} - Create GA4 Event tag triggered by Page View with URL fragment condition`;
-    return;
-  }
-
-  // No clear success indicator found
+  // ── No success indicator found ────────────────────────────────────────────
   formData.submission_behaviour = { type: "unknown" };
-  formData.gtm_recommendation = "No clear success indicator detected - manual form submission tracking setup required";
+  formData.gtm_recommendation = "No clear success indicator detected — manual GTM setup required";
 }
 
 async function extractNewsletter(page, pageUrl) {
