@@ -518,7 +518,7 @@ function generateGTMContainerExport(audit, measurementId, containerName, account
         accountId,
         containerId,
         name: containerName || "AP Tracking Setup",
-        usageContext: ["WEB"],
+        usageContext: ["web"],
       },
       tag: tags,
       trigger: triggers,

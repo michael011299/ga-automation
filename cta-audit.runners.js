@@ -2122,6 +2122,22 @@ function generateCTAQualityReport(pagesData) {
     }
   }
 
+  // --- Form position ---
+  const belowFoldForms = allForms.filter((f) => f.position_label === "below_fold");
+  const midPageForms   = allForms.filter((f) => f.position_label === "mid_page");
+  if (belowFoldForms.length > 0) {
+    issues.push(
+      `${belowFoldForms.length} form(s) are positioned low on the page (below 70% scroll depth). Most visitors will never reach them.`,
+    );
+    recommendations.push(
+      "Move contact forms higher up the page — ideally within the first 50% of scroll depth so visitors see them without having to scroll past most of the content.",
+    );
+  } else if (midPageForms.length > 0 && allForms.every((f) => f.position_label !== "above_fold")) {
+    recommendations.push(
+      "Consider moving a contact form into the upper half of the page to make it easier for visitors to reach.",
+    );
+  }
+
   // --- Booking journey ---
   const allBookingCTAs = pagesData.flatMap((p) => p.booking_ctas || []);
   const successfulCTAs = allBookingCTAs.filter((c) => c.destination_type !== "error");
