@@ -168,9 +168,11 @@ const LIVE_CHAT_DETECTORS = [
   { name: "TikTok Pixel", global: "ttq" },
 ];
 
-async function safeEval(page, script) {
+async function safeEval(page, script, arg) {
   try {
-    return await page.evaluate(script);
+    return arg !== undefined
+      ? await page.evaluate(script, arg)
+      : await page.evaluate(script);
   } catch (e) {
     return null;
   }
