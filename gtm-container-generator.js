@@ -167,8 +167,8 @@ function generateGTMContainerExport(audit, measurementId, containerName, account
   const allEmails = [
     ...new Set(
       pages.flatMap((p) => [
-        ...(p.emails?.clickable || []).map((e) => e.email || e.href?.replace("mailto:", "") || ""),
-        ...(p.emails?.plainText || []).map((e) => e.email || ""),
+        ...(p.emails?.clickable || []).map((e) => e.address || e.email || e.href?.replace("mailto:", "") || ""),
+        ...(p.emails?.plainText || []).map((e) => e.address || e.email || ""),
       ]),
     ),
   ].filter(Boolean);
@@ -399,9 +399,18 @@ function generateGTMContainerExport(audit, measurementId, containerName, account
     skipped.push("click_social — no social platform links found on site");
   } else {
     socialPlatforms.forEach((platform) => {
-      const domain = SOCIAL_TRIGGER_DOMAINS[platform];
       const safeName = platform.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase();
-      addLinkTriggerAndTag(`AP Click ${platform}`, domain, `AP Click ${platform}`, `click_social_${safeName}`);
+
+      if (platform === "X (Twitter)") {
+        // Twitter rebranded to X — links exist under both twitter.com and x.com.
+        // Create two LINK triggers and fire one GA4 event tag from both.
+        const tTriggerId = addLinkTrigger("AP Click X - twitter.com", "twitter.com");
+        const xTriggerId = addLinkTrigger("AP Click X - x.com", "x.com");
+        addGA4EventTag("AP Click X (Twitter)", "click_social_x_twitter", [tTriggerId, xTriggerId]);
+      } else {
+        const domain = SOCIAL_TRIGGER_DOMAINS[platform];
+        addLinkTriggerAndTag(`AP Click ${platform}`, domain, `AP Click ${platform}`, `click_social_${safeName}`);
+      }
     });
   }
 
@@ -440,9 +449,13 @@ function generateGTMContainerExport(audit, measurementId, containerName, account
         .trim()
         .replace(/\s+/g, "_")
         .toLowerCase();
+      // Strip protocol from the filter so it matches http:// and https:// equally.
+      // For goo.gl/maps.app short links this is the unique hash path, e.g.
+      // "maps.app.goo.gl/bEMjbKdWMhri7YUg6" — unique per location.
+      const urlFilter = loc.href.replace(/^https?:\/\//, "");
       addLinkTriggerAndTag(
         `AP Click Location - ${loc.location_name}`,
-        loc.href,
+        urlFilter,
         `AP Click Location - ${loc.location_name}`,
         `click_location_${safeName}`,
       );
