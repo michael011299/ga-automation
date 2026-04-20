@@ -373,6 +373,7 @@ function buildAuditReport(audit, clientName) {
 
   // ── Section 5: Contact Forms (only if forms detected) ────────────────────
   const ff = quality.form_friction || {};
+  const allForms = pages.flatMap((p) => (p.forms || []).map((f) => ({ ...f, _page: p.label || p.page_url })));
   if ((ff.forms_found || 0) > 0) {
     h2(sectionTitle('Contact Forms'));
     sub('Whether contact forms are concise enough to convert well and how submission is handled.');
@@ -386,6 +387,27 @@ function buildAuditReport(audit, clientName) {
       bold: true,
       colour: verdictColour(ff.verdict),
       paragraphNamedStyle: 'NORMAL_TEXT',
+    });
+    // Per-form position breakdown
+    allForms.forEach((f, i) => {
+      const posLabel = f.position_label ? f.position_label.replace(/_/g, ' ') : 'unknown';
+      const frictionColour = f.friction_level === 'high' ? COLOUR.red : f.friction_level === 'medium' ? COLOUR.amber : COLOUR.green;
+      line(`  Form ${i + 1} (${f._page}): ${f.field_count} fields — friction: ${f.friction_level} — position: ${posLabel} (${f.position_percent ?? '?'}% down page)`, { colour: frictionColour });
+    });
+    spacer();
+  }
+
+  // ── Dead social links (only if any found) ────────────────────────────────
+  const deadLinks = pages.flatMap((p) =>
+    (p.social_links || []).filter((s) => s.is_dead).map((s) => ({ ...s, _page: p.label || p.page_url }))
+  );
+  if (deadLinks.length > 0) {
+    h2(sectionTitle('Dead or Invalid Social Links'));
+    sub('These social links were found on the site but do not appear to point to a real profile. They should be updated or removed.');
+    deadLinks.forEach((s) => {
+      line(`  ${s.platform} on ${s._page}`, { bold: true, colour: COLOUR.red });
+      line(`     URL: ${s.href}`, { colour: COLOUR.apGrey });
+      line(`     Reason: ${s.dead_reason}`, { colour: COLOUR.red });
     });
     spacer();
   }
