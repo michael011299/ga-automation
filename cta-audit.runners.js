@@ -988,57 +988,144 @@ async function extractLocationLinks(page, pageUrl) {
 // Service page discovery — finds all service/treatment pages from the nav.
 // ---------------------------------------------------------------------------
 
+// Kept as a fallback for flat navs and sub-page expansion on already-visited pages.
 const SERVICE_URL_PATTERN =
-  /\/(services?|treatments?|therapies|therapists?|what-we-do|solutions|programs?|packages?|specialties|procedures|expertise|offerings|portfolio|our-service|physiotherapy|osteopathy|chiropractic|massage|acupuncture|nutrition|wellness|health|medical|clinic|practice|care|therapy|treatment|healing|rehab|rehabilitation|recovery|pain|injury|fitness|exercise|training|consultation|assessment|diagnosis|prescription|medicine|pharmacy|dental|dentistry|orthodontics|cosmetic|beauty|aesthetic|spa|wellbeing|holistic|alternative|complementary|integrative|functional|preventive|chronic|acute|specialist|specialty|department|unit|centre|center)(\/|$|\?|#)/i;
-const SERVICE_TEXT_PATTERN =
-  /^(services?|treatments?|therapies|therapy|what we do|solutions|programs?|packages?|specialties|our\s+work|offerings|how we help|expertise|our services?|our treatments?|our therapies?|physiotherapy|osteopathy|chiropractic|massage|acupuncture|nutrition|wellness|health|clinic|practice|care|healing|rehab|pain|injury|fitness|consultation|assessment|diagnosis|prescription|dental|cosmetic|beauty|spa|wellbeing|holistic|alternative|complementary)\s*$/i;
+  /\/(services?|treatments?|therapies|therapists?|what-we-do|solutions|programs?|packages?|specialties|procedures|expertise|offerings|portfolio|our-service|physiotherapy|osteopathy|chiropractic|massage|acupuncture|nutrition|wellness|health|medical|clinic|practice|care|therapy|treatment|healing|rehab|rehabilitation|recovery|pain|injury|fitness|exercise|training|consultation|assessment|diagnosis|prescription|medicine|pharmacy|dental|dentistry|orthodontics|cosmetic|beauty|aesthetic|spa|wellbeing|holistic|alternative|complementary)(\/|$|\?|#)/i;
 
-// URL pattern that flags a page as a service LISTING rather than an individual
-// service page — e.g. /services or /treatments (no trailing slug).
-const SERVICE_LISTING_PATTERN =
-  /\/(services?|treatments?|therapies|what-we-do|solutions|programs?|packages?|specialties|procedures|expertise|offerings|portfolio|our-service)\/?$/i;
+const SERVICE_TEXT_PATTERN =
+  /^(services?|treatments?|therapies|therapy|what we do|solutions|programs?|packages?|specialties|our\s+work|offerings|how we help|expertise|our services?|our treatments?|our therapies?|physiotherapy|osteopathy|chiropractic|massage|acupuncture|nutrition|wellness|health|clinic|practice|care|healing|rehab|pain|injury|fitness|consultation|assessment|dental|cosmetic|beauty|spa|wellbeing|holistic|alternative|complementary)\s*$/i;
+
+// Pages that should never be treated as service pages regardless of context.
+const GENERIC_PAGE_PATTERN =
+  /\/(about|about-us|our-story|our-people|the-team|our-team|meet-the-team|team|staff|people|blog|news|articles|press|media|resources|downloads|case-studies|gallery|events|calendar|careers|jobs|vacancies|work-for-us|privacy|privacy-policy|terms|terms-of-service|terms-conditions|cookie-policy|legal|disclaimer|sitemap|faq|faqs|help|support|login|sign-in|signup|register|account|basket|cart|checkout|search|404|error|home)(\/|$|\?|#)/i;
+
+// Top-level nav section text that signals a non-service section.
+const GENERIC_NAV_TEXT =
+  /^(about|about us|our story|our people|the team|our team|meet the team|team|staff|people|blog|news|press|media|resources|case studies|gallery|events|careers|jobs|work for us|privacy|terms|legal|sitemap|faq|faqs|help|support|login|sign in|register|account|basket|cart|home|get in touch|contact us?)\s*$/i;
 
 async function findServicePages(page, baseUrl) {
-  const links =
-    (await safeEval(page, () =>
-      Array.from(
-        document.querySelectorAll(
-          'nav a[href], header a[href], [class*="nav"] a[href], [class*="menu"] a[href], [role="navigation"] a[href], .menu-item a[href], main a[href], [class*="content"] a[href], [class*="main"] a[href], footer a[href], aside a[href], [class*="sidebar"] a[href], [class*="services"] a[href]',
-        ),
-      ).map((a) => ({
-        href: a.href,
-        text: (a.textContent || "").replace(/\s+/g, " ").trim(),
-      })),
-    )) || [];
-
   let baseOrigin;
-  try {
-    baseOrigin = new URL(baseUrl).origin;
-  } catch {
-    return [];
-  }
+  try { baseOrigin = new URL(baseUrl).origin; } catch { return []; }
 
-  const serviceUrls = [];
-  const seen = new Set();
-  seen.add(baseUrl);
+  // Parse the nav as a tree so we can identify sections with dropdown children.
+  // Any non-generic nav section that has sub-menu items is treated as a service
+  // section — its children are all included regardless of URL/text patterns.
+  // Three strategies, tried in order:
+  //   1. LI-based  — standard WordPress / Bootstrap / most themes
+  //   2. Direct children of nav container  — Webflow, custom div navs
+  //   3. Flat fallback  — flat nav with no hierarchy; falls back to pattern matching
+  const navTree = await safeEval(page, () => {
+    const cleanText = (el) => (el ? (el.textContent || '').replace(/\s+/g, ' ').trim() : '');
+    const seen = new Set();
+    const sections = [];
 
-  for (const link of links) {
-    try {
-      const u = new URL(link.href);
-      if (u.origin !== baseOrigin) continue;
-      const canonical = u.origin + u.pathname;
-      if (seen.has(canonical)) continue;
+    const pushSection = (topAnchor, childAnchors) => {
+      if (!topAnchor || !topAnchor.href || seen.has(topAnchor.href)) return;
+      seen.add(topAnchor.href);
+      sections.push({
+        href: topAnchor.href,
+        text: cleanText(topAnchor),
+        children: childAnchors
+          .filter(a => a !== topAnchor && a.href)
+          .map(a => ({ href: a.href, text: cleanText(a) })),
+      });
+    };
 
-      if (SERVICE_URL_PATTERN.test(u.pathname) || SERVICE_TEXT_PATTERN.test(link.text)) {
-        seen.add(canonical);
-        serviceUrls.push(u.href);
-      }
-    } catch {
-      /* skip malformed */
+    // Strategy 1: find top-level <li> elements under any nav/header <ul>
+    const navUls = document.querySelectorAll(
+      '[role="navigation"] > ul, nav > ul, header > ul, ' +
+      '[role="navigation"] > div > ul, nav > div > ul, ' +
+      'header > nav > ul, .menu > ul, .nav > ul, ' +
+      '.navbar > ul, .navigation > ul, .main-navigation > ul, ' +
+      '.primary-menu > ul, .site-navigation > ul'
+    );
+    navUls.forEach(ul => {
+      ul.querySelectorAll(':scope > li').forEach(li => {
+        const top = li.querySelector(':scope > a[href]');
+        const children = Array.from(li.querySelectorAll('a[href]'));
+        pushSection(top, children);
+      });
+    });
+
+    if (sections.length >= 2) return { tree: sections };
+
+    // Strategy 2: direct children of nav/header containers (Webflow, custom)
+    const containers = [
+      ...document.querySelectorAll('[role="navigation"]'),
+      ...document.querySelectorAll('nav'),
+      document.querySelector('header'),
+    ].filter(Boolean);
+
+    for (const container of containers) {
+      Array.from(container.children).forEach(child => {
+        // Skip children that are themselves containers (nested nav/ul/div wrapping everything)
+        const tag = child.tagName.toLowerCase();
+        if (tag === 'ul' || tag === 'nav') return;
+        const links = Array.from(child.querySelectorAll('a[href]'));
+        if (links.length > 0) pushSection(links[0], links);
+      });
+      if (sections.length >= 2) break;
     }
+
+    if (sections.length >= 2) return { tree: sections };
+
+    // Strategy 3: flat fallback
+    return {
+      flat: Array.from(document.querySelectorAll(
+        'nav a[href], header a[href], [role="navigation"] a[href]'
+      )).map(a => ({ href: a.href, text: cleanText(a) })),
+    };
+  });
+
+  if (!navTree) return [];
+
+  const seen = new Set();
+  const results = [];
+
+  const tryAdd = (href) => {
+    try {
+      const u = new URL(href);
+      if (u.origin !== baseOrigin) return;
+      if (u.pathname === '/' || u.pathname === '') return;
+      const canonical = u.origin + u.pathname.replace(/\/$/, '');
+      if (seen.has(canonical)) return;
+      if (GENERIC_PAGE_PATTERN.test(u.pathname)) return;
+      seen.add(canonical);
+      results.push(u.href);
+    } catch { /* skip malformed */ }
+  };
+
+  if (navTree.tree) {
+    for (const section of navTree.tree) {
+      // Skip obviously non-service top-level sections
+      if (GENERIC_NAV_TEXT.test(section.text)) continue;
+
+      if (section.children.length > 0) {
+        // This section has a dropdown — all its children are candidate pages.
+        // Cap at 30 to guard against mega-menus with hundreds of links.
+        tryAdd(section.href);
+        section.children.slice(0, 30).forEach(c => tryAdd(c.href));
+      } else {
+        // No dropdown — only include if the URL/text matches known service patterns
+        let pathname = '';
+        try { pathname = new URL(section.href).pathname; } catch {}
+        if (SERVICE_URL_PATTERN.test(pathname) || SERVICE_TEXT_PATTERN.test(section.text)) {
+          tryAdd(section.href);
+        }
+      }
+    }
+  } else if (navTree.flat) {
+    // Flat fallback: pattern matching only
+    navTree.flat.forEach(link => {
+      let pathname = '';
+      try { pathname = new URL(link.href).pathname; } catch {}
+      if (SERVICE_URL_PATTERN.test(pathname) || SERVICE_TEXT_PATTERN.test(link.text)) {
+        tryAdd(link.href);
+      }
+    });
   }
 
-  return serviceUrls;
+  return results;
 }
 
 // ---------------------------------------------------------------------------
@@ -1059,7 +1146,7 @@ async function findServiceSubPages(page, currentUrl, baseOrigin, alreadySeen) {
     (await safeEval(page, () =>
       Array.from(
         document.querySelectorAll(
-          'main a[href], [class*="content"] a[href], [class*="services"] a[href], [class*="service"] a[href], [class*="treatment"] a[href], [class*="therapy"] a[href], article a[href], section a[href], .entry-content a[href], [class*="post"] a[href]',
+          'main a[href], [class*="content"] a[href], [class*="services"] a[href], [class*="service"] a[href], [class*="treatment"] a[href], [class*="therapy"] a[href], article a[href], section a[href], .entry-content a[href], [class*="post"] a[href], [class*="cta"] a[href], [class*="button"] a[href], button a[href], [role="button"] a[href]',
         ),
       ).map((a) => ({
         href: a.href,
@@ -2295,49 +2382,38 @@ async function ctaAuditSite(url) {
       }
     }
 
-    // ── Service pages (all found in nav) ─────────────────────────────────────
-    for (const serviceUrl of servicePageUrls) {
-      if (pagesCrawled.includes(serviceUrl)) continue;
+    // ── Service pages — dynamic queue ─────────────────────────────────────────
+    // The queue starts with pages found in the nav. After visiting each page,
+    // findServiceSubPages scans it for any additional service pages linked from
+    // the content (e.g. individual treatment pages linked from a /services listing).
+    // New discoveries are pushed back onto the queue so the crawl expands naturally.
+    const crawledSet = new Set(pagesCrawled);
+    const serviceQueue = [...servicePageUrls];
+    let qi = 0;
+
+    let baseOrigin;
+    try { baseOrigin = new URL(url).origin; } catch { baseOrigin = ''; }
+
+    while (qi < serviceQueue.length) {
+      const serviceUrl = serviceQueue[qi++];
+      if (crawledSet.has(serviceUrl)) continue;
+
       try {
-        await page.goto(serviceUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
-        await page.waitForLoadState("load", { timeout: 5000 }).catch(() => {});
+        await page.goto(serviceUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+        await page.waitForLoadState('load', { timeout: 5000 }).catch(() => {});
+        crawledSet.add(serviceUrl);
         pagesCrawled.push(serviceUrl);
 
-        // Extract page data for the service page
-        const pageData = await extractPageData(page, serviceUrl, "service", context);
-        pagesData.push(pageData);
+        pagesData.push(await extractPageData(page, serviceUrl, 'service', context));
 
-        // Check if this is a service LISTING page (e.g. /services, /treatments)
-        // If so, discover and crawl individual service sub-pages
-        let currentPath;
-        try {
-          currentPath = new URL(serviceUrl).pathname.replace(/\/$/, "");
-        } catch {
-          currentPath = "";
-        }
-
-        if (SERVICE_LISTING_PATTERN.test(currentPath)) {
-          console.log(`🔍 Found service listing page: ${serviceUrl} — discovering sub-pages...`);
-
-          // Find all direct child service pages linked from this listing
-          const subPages = await findServiceSubPages(page, serviceUrl, new URL(url).origin, new Set(pagesCrawled));
-
-          console.log(`📋 Found ${subPages.length} service sub-pages to crawl`);
-
-          // Crawl each individual service page
-          for (const subPageUrl of subPages) {
-            if (pagesCrawled.includes(subPageUrl)) continue;
-            try {
-              await page.goto(subPageUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
-              await page.waitForLoadState("load", { timeout: 5000 }).catch(() => {});
-              pagesCrawled.push(subPageUrl);
-              pagesData.push(await extractPageData(page, subPageUrl, "service", context));
-              console.log(`✅ Crawled service sub-page: ${subPageUrl}`);
-            } catch (e) {
-              console.error(`Failed to crawl service sub-page ${subPageUrl}:`, e.message);
-            }
-          }
-        }
+        // After visiting the page, scan it for any linked service sub-pages and
+        // add them to the queue if not already seen. This handles listing pages
+        // (e.g. /services → /services/massage) as well as any page that cross-links
+        // to other service pages in its body copy or sidebar.
+        const subPages = await findServiceSubPages(page, serviceUrl, baseOrigin, crawledSet);
+        subPages.forEach(u => {
+          if (!crawledSet.has(u)) serviceQueue.push(u);
+        });
       } catch (e) {
         console.error(`Failed to crawl service page ${serviceUrl}:`, e.message);
       }
