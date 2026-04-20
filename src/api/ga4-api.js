@@ -7,7 +7,7 @@
  * Functions:
  *
  *   createConversionEvents(accessToken, propertyId)
- *     → Registers click_call, click_emails, contact_form as conversion events
+ *     → Registers click_call, click_email, contact_form as conversion events
  *
  *   linkGoogleAds(accessToken, propertyId, cid)
  *     → Links the GA4 property to a Google Ads customer account (CID)
@@ -22,7 +22,7 @@ const axios = require("axios");
 const GA4_API_BASE = "https://analyticsadmin.googleapis.com/v1beta";
 
 // The three conversion events registered on every new GA4 property.
-const CONVERSION_EVENTS = ["click_call", "click_emails", "contact_form"];
+const CONVERSION_EVENTS = ["click_call", "click_email", "contact_form"];
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Internal helper
@@ -61,7 +61,7 @@ async function ga4Request(method, path, token, body) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Register click_call, click_emails, and contact_form as conversion events
+ * Register click_call, click_email, and contact_form as conversion events
  * on the GA4 property.
  *
  * GA4 deduplicates conversion events — if an event already exists it will

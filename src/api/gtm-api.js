@@ -19,7 +19,7 @@
  *
  *   createTags(accessToken, { numericAccountId, numericContainerId, workspaceId,
  *                              measurementId, callTriggerId, emailTriggerId, formTriggerId })
- *     → Creates AP G-TAG (googtag), AP Click Call, AP Click Emails, AP Contact Form tags
+ *     → Creates AP G-TAG (googtag), AP Click Call, AP Click Email, AP Contact Form tags
  *
  * Google Tag Manager API docs:
  *   https://developers.google.com/tag-platform/tag-manager/api/v2
@@ -203,7 +203,7 @@ async function createTriggers(accessToken, { numericAccountId, numericContainerI
  * Create the four AP tracking tags:
  *   - "AP G-TAG"         — Google tag (googtag), fires on All Pages
  *   - "AP Click Call"    — GA4 event (click_call), fires on call trigger
- *   - "AP Click Emails"  — GA4 event (click_emails), fires on email trigger
+ *   - "AP Click Email"  — GA4 event (click_email), fires on email trigger
  *   - "AP Contact Form"  — GA4 event (contact_form), fires on form trigger
  *
  * @param {string} accessToken
@@ -254,17 +254,17 @@ async function createTags(accessToken, {
   });
   console.log("✅ AP Click Call tag created");
 
-  // ── AP Click Emails — GA4 event: click_emails ─────────────────────────────
+  // ── AP Click Email — GA4 event: click_email ─────────────────────────────
   await gtmRequest("POST", basePath, accessToken, {
-    name: "AP Click Emails",
+    name: "AP Click Email",
     type: "gaawe",
     parameter: [
-      { type: "TEMPLATE", key: "eventName",    value: "click_emails" },
+      { type: "TEMPLATE", key: "eventName",    value: "click_email" },
       { type: "TEMPLATE", key: "measurementId", value: measurementId },
     ],
     firingTriggerId: [emailTriggerId],
   });
-  console.log("✅ AP Click Emails tag created");
+  console.log("✅ AP Click Email tag created");
 
   // ── AP Contact Form — GA4 event: contact_form ─────────────────────────────
   await gtmRequest("POST", basePath, accessToken, {
@@ -358,7 +358,7 @@ async function createLinkTriggerAndTag(
  *
  * Created only if the audit found them:
  *   - click_call        — if clickable tel: links exist
- *   - click_emails      — if clickable mailto: links exist
+ *   - click_email      — if clickable mailto: links exist
  *   - contact_form      — if contact forms exist
  *   - click_whatsapp    — if WhatsApp links exist
  *   - click_social_X    — one per social platform found (Facebook, Instagram, …)
@@ -450,12 +450,12 @@ async function buildContainerFromAudit(accessToken, {
     const r = await createLinkTriggerAndTag(
       accessToken, triggersPath, tagsPath,
       "AP Click to Email", "mailto:",
-      "AP Click Emails", "click_emails", measurementId,
+      "AP Click Email", "click_email", measurementId,
     );
     created.triggers.push(r.triggerName);
     created.tags.push(r.tagName);
   } else {
-    created.skipped.push("click_emails (no clickable mailto: links found)");
+    created.skipped.push("click_email (no clickable mailto: links found)");
   }
 
   // ── 6. Contact Form ───────────────────────────────────────────────────────

@@ -14,7 +14,7 @@
  * Exported function:
  *
  *   createConversionActions(accessToken, cid)
- *     → Creates AP Click Call, AP Click Emails, AP Contact Form conversion actions
+ *     → Creates AP Click Call, AP Click Email, AP Contact Form conversion actions
  *       on the customer account identified by cid.
  *     → No-op if cid is empty/null.
  *
@@ -35,7 +35,7 @@ const CONVERSION_ACTION_DEFINITIONS = [
     status: "ENABLED",
   },
   {
-    name: "AP Click Emails",
+    name: "AP Click Email",
     type: "CONTACT",
     category: "DEFAULT",
     status: "ENABLED",
@@ -99,7 +99,7 @@ async function adsRequest(method, path, accessToken, body, customerId) {
  *
  * Actions created:
  *   - AP Click Call    (PHONE_CALL_LEAD)
- *   - AP Click Emails  (CONTACT)
+ *   - AP Click Email  (CONTACT)
  *   - AP Contact Form  (SUBMIT_LEAD_FORM)
  *
  * If cid is empty this function is a no-op (some cases don't have an Ads account).

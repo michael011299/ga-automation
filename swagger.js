@@ -249,7 +249,7 @@ const spec = {
                   },
                 },
                 register_ga4_conversions: {
-                  summary: "Register click_call / click_emails / contact_form as GA4 conversions",
+                  summary: "Register click_call / click_email / contact_form as GA4 conversions",
                   value: {
                     action: "register_ga4_conversions",
                     google_email: "leadgen1@example.com",

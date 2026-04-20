@@ -478,9 +478,9 @@ function generateGTMContainerExport(audit, measurementId, containerName, account
 
   // ── Click to Email ────────────────────────────────────────────────────────
   if (hasClickableEmail) {
-    addLinkTriggerAndTag("AP Click to Email", "mailto:", "AP Click Emails", "click_emails");
+    addLinkTriggerAndTag("AP Click to Email", "mailto:", "AP Click Email", "click_email");
   } else {
-    skipped.push("click_emails — no clickable mailto: links found on site");
+    skipped.push("click_email — no clickable mailto: links found on site");
   }
 
   // ── Contact Form ──────────────────────────────────────────────────────────

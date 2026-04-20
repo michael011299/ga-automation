@@ -1546,6 +1546,103 @@ async function extractForms(page, pageUrl) {
           const positionPercent = Math.round((positionPx / totalHeight) * 100);
           const positionLabel = positionPercent <= 30 ? "above_fold" : positionPercent <= 70 ? "mid_page" : "below_fold";
 
+          // ── Static submission detection (no form submit needed) ──────────
+          // Detect success behaviour from HTML alone before we ever submit.
+          // Reliable for CF7, Gravity Forms, WPForms, Elementor, etc.
+          let staticSubmissionHint = null;
+
+          // 1. Form action URL contains thank/success → redirect form
+          const actionUrl = (form.getAttribute("action") || "").toLowerCase();
+          if (actionUrl && !/^javascript:|^#/.test(actionUrl) && /thank|success|confirm|complete|sent/.test(actionUrl)) {
+            staticSubmissionHint = {
+              type: "redirect",
+              thank_you_url: form.getAttribute("action"),
+              confidence: "high",
+              detected_by: "form_action",
+            };
+          }
+
+          // 2. Plugin-specific hidden confirmation elements already in the DOM
+          if (!staticSubmissionHint) {
+            const PLUGIN_PATTERNS = [
+              { sel: ".wpcf7-response-output",                 plugin: "Contact Form 7" },
+              { sel: ".wpcf7-mail-sent-ok",                    plugin: "Contact Form 7" },
+              { sel: '[class*="gform_confirmation_message"]',   plugin: "Gravity Forms" },
+              { sel: ".wpforms-confirmation",                   plugin: "WPForms" },
+              { sel: '[class*="wpforms-confirmation"]',         plugin: "WPForms" },
+              { sel: ".elementor-message-success",              plugin: "Elementor Forms" },
+              { sel: '[class*="elementor-message"]',            plugin: "Elementor Forms" },
+              { sel: ".nf-response-msg",                        plugin: "Ninja Forms" },
+              { sel: ".forminator-response-message",            plugin: "Forminator" },
+              { sel: '[class*="frm_message"]',                  plugin: "Formidable Forms" },
+              { sel: ".mc4wp-success",                          plugin: "MC4WP" },
+              { sel: '[class*="fluentform"] .success-message',  plugin: "Fluent Forms" },
+              { sel: ".ff-message-success",                     plugin: "Fluent Forms" },
+              { sel: '[class*="hs-form"] .submitted-message',   plugin: "HubSpot Forms" },
+            ];
+            const searchRoot = form.closest('[class*="wpcf7"],[class*="gform"],[class*="wpforms"],[class*="elementor-form"]') || form.parentElement || document.body;
+            for (const { sel, plugin } of PLUGIN_PATTERNS) {
+              const el = searchRoot.querySelector(sel) || document.querySelector(sel);
+              if (el) {
+                const specificSel = el.id ? `#${el.id}` : sel;
+                staticSubmissionHint = {
+                  type: "inline_message",
+                  selector: specificSel,
+                  element_id: el.id || null,
+                  element_class: el.className || null,
+                  plugin,
+                  confidence: "high",
+                  detected_by: "static_plugin_pattern",
+                };
+                break;
+              }
+            }
+          }
+
+          // 3. Hidden input with a redirect URL value
+          if (!staticSubmissionHint) {
+            const redir = form.querySelector(
+              'input[type="hidden"][name*="redirect"], input[type="hidden"][name*="thankyou"], input[type="hidden"][name*="thank_you"]',
+            );
+            if (redir && redir.value && /https?:\/\/|^\//.test(redir.value)) {
+              staticSubmissionHint = {
+                type: "redirect",
+                thank_you_url: redir.value,
+                confidence: "medium",
+                detected_by: "hidden_redirect_input",
+              };
+            }
+          }
+
+          // 4. Adjacent sibling or parent container with success-like class/id that is hidden
+          if (!staticSubmissionHint) {
+            const ADJACENT_PATTERN = /success|thank|confirm|sent|complete|submitted/i;
+            const candidates = [
+              ...(form.parentElement ? Array.from(form.parentElement.children) : []),
+              form.nextElementSibling,
+              form.previousElementSibling,
+            ].filter(Boolean);
+            for (const el of candidates) {
+              if (el === form) continue;
+              if (ADJACENT_PATTERN.test(el.className + " " + (el.id || ""))) {
+                const cs = window.getComputedStyle(el);
+                const isHidden = cs.display === "none" || cs.visibility === "hidden" || el.hasAttribute("hidden");
+                if (isHidden) {
+                  const specificSel = el.id ? `#${el.id}` : "." + Array.from(el.classList).slice(0, 3).join(".");
+                  staticSubmissionHint = {
+                    type: "inline_message",
+                    selector: specificSel,
+                    element_id: el.id || null,
+                    element_class: el.className || null,
+                    confidence: "medium",
+                    detected_by: "adjacent_hidden_element",
+                  };
+                  break;
+                }
+              }
+            }
+          }
+
           formData.push({
             page_url: pageUrl,
             form_index: index,
@@ -1563,6 +1660,7 @@ async function extractForms(page, pageUrl) {
             position_percent: positionPercent,
             position_label: positionLabel,
             score,
+            static_submission_hint: staticSubmissionHint,
           });
         }
       });
@@ -1572,16 +1670,35 @@ async function extractForms(page, pageUrl) {
     pageUrl,
   );
 
-  // Test form submission for up to 2 forms
+  // Resolve submission behaviour — use static hint when confident, submit otherwise
   if (forms && forms.length > 0) {
-    const formsToTest = forms.slice(0, 2);
+    for (const formData of forms.slice(0, 2)) {
+      const hint = formData.static_submission_hint;
 
-    for (const formData of formsToTest) {
-      try {
-        await testFormSubmission(page, formData);
-      } catch (e) {
-        formData.submission_behaviour = { type: "unknown", error: e.message };
-        formData.gtm_recommendation = "Form submission test failed - manual GTM setup required";
+      if (hint && hint.confidence === "high") {
+        // Static analysis already gave us a reliable answer — no submission needed
+        formData.submission_behaviour = hint;
+        if (hint.type === "redirect") {
+          formData.gtm_recommendation = `Thank You URL detected: ${hint.thank_you_url} — GA4 Event: Page View trigger with URL contains "${hint.thank_you_url}"`;
+        } else {
+          formData.gtm_recommendation = `Success element detected${hint.plugin ? ` (${hint.plugin})` : ""}: "${hint.selector}" — GA4 Event: Element Visibility trigger on this selector`;
+        }
+      } else {
+        // Fall back to live submission test (also seeds from medium-confidence hint if found)
+        try {
+          await testFormSubmission(page, formData);
+        } catch (e) {
+          // If live test fails but we have a medium-confidence static hint, use that
+          if (hint) {
+            formData.submission_behaviour = { ...hint, fallback: true };
+            formData.gtm_recommendation = hint.type === "redirect"
+              ? `Thank You URL (static detection): ${hint.thank_you_url}`
+              : `Success element (static detection): "${hint.selector}" — GA4 Event: Element Visibility trigger`;
+          } else {
+            formData.submission_behaviour = { type: "unknown", error: e.message };
+            formData.gtm_recommendation = "Form submission test failed — manual GTM setup required";
+          }
+        }
       }
     }
   }

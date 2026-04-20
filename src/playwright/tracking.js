@@ -23,7 +23,7 @@ const { trackingHealthCheckSite } = require("../../health.runners");
  * Launches a Chromium browser internally (via health.runners.js) to:
  *   - Visit the homepage and check for GA4/GTM beacons
  *   - Click phone numbers (click_call events)
- *   - Click email links (click_emails events)
+ *   - Click email links (click_email events)
  *   - Submit the contact form (contact_form event)
  *
  * @param {string} website_url — the client site URL to test

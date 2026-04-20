@@ -2288,7 +2288,7 @@ app.post("/run", async (req, res) => {
   }
 
   // ── register_ga4_conversions: API-only GA4 conversion event registration ──
-  // Registers click_call, click_emails, contact_form as conversion events.
+  // Registers click_call, click_email, contact_form as conversion events.
   if (action === "register_ga4_conversions") {
     const { google_email, property_id } = req.body;
 
