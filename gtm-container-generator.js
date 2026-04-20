@@ -561,7 +561,13 @@ function generateGTMContainerExport(audit, measurementId, containerName, account
           );
         } else {
           const path = new URL(cta.final_url).pathname;
-          addLinkTriggerAndTag(`AP Book CTA - ${path}`, path, "AP Click Book CTA", "click_book_cta");
+          const safePath = path.replace(/[^a-zA-Z0-9]/g, "_").replace(/^_+|_+$/g, "") || "root";
+          addLinkTriggerAndTag(
+            `AP Book CTA - ${path}`,
+            path,
+            `AP Click Book CTA - ${safePath}`,
+            `click_book_cta_${safePath}`,
+          );
         }
       } catch (e) {
         skipped.push(`booking CTA "${cta.link_text}" — ${e.message}`);
@@ -588,6 +594,19 @@ function generateGTMContainerExport(audit, measurementId, containerName, account
       );
     });
   }
+
+  // ── Deduplicate tag/trigger names (GTM rejects duplicates) ───────────────
+  const dedup = (items, key) => {
+    const seen = new Map();
+    items.forEach(item => {
+      const base = item[key];
+      const count = seen.get(base) || 0;
+      seen.set(base, count + 1);
+      if (count > 0) item[key] = `${base} (${count})`;
+    });
+  };
+  dedup(tags, "name");
+  dedup(triggers, "name");
 
   // ── Assemble export JSON ──────────────────────────────────────────────────
   const exportTime = new Date()
