@@ -262,6 +262,8 @@ function generateGTMContainerExport(audit, measurementId, containerName, account
   const hasClickableEmail    = pages.some((p) => p.emails?.clickable?.length > 0);
   const hasForms             = pages.some((p) => p.forms?.length > 0);
   const hasHighFrictionForms = pages.some((p) => p.forms?.some((f) => f.friction_level === "high"));
+  // Regular forms = forms that are NOT high-friction (high-friction forms get their own dedicated tag)
+  const hasRegularForms      = pages.some((p) => p.forms?.some((f) => f.friction_level !== "high"));
   const hasNewsletter        = pages.some((p) => p.newsletter?.length > 0);
   const hasWhatsApp          = pages.some((p) => p.whatsapp?.links?.length > 0);
 
@@ -484,14 +486,23 @@ function generateGTMContainerExport(audit, measurementId, containerName, account
   }
 
   // ── Contact Form ──────────────────────────────────────────────────────────
-  if (hasForms) {
+  // Only create for regular (non-high-friction) forms. High-friction forms are
+  // tracked via form_submit_high_friction to avoid the same submission firing
+  // two separate form conversion events into GA4.
+  if (hasRegularForms) {
     addGA4EventTag("AP Contact Form", "contact_form", [addFormTrigger("AP Contact Form")]);
-  } else {
+  } else if (!hasForms) {
     skipped.push("contact_form — no contact forms found on site");
+  } else {
+    skipped.push("contact_form — all forms are high-friction (tracked via form_submit_high_friction)");
   }
 
-  // ── High-Friction Form Abandonment ───────────────────────────────────────
+  // ── High-Friction Form Tracking ───────────────────────────────────────────
   if (hasHighFrictionForms) {
+    // form_view fires when the form scrolls 50% into the viewport — this is a
+    // scroll/visibility event and is intentionally distinct from GA4's native
+    // form_start (which fires on first field interaction via Enhanced Measurement).
+    // Naming it form_view avoids any conflict with the native form_start event.
     const visibilityTriggerId = nextTriggerId();
     triggers.push({
       ...meta,
@@ -507,10 +518,10 @@ function generateGTMContainerExport(audit, measurementId, containerName, account
       waitForTagsTimeout: { type: "TEMPLATE", value: "2000" },
       fingerprint:        nextFp(),
     });
-    addGA4EventTag("AP Form Start (High Friction)", "form_start", [visibilityTriggerId]);
+    addGA4EventTag("AP Form View (High Friction)", "form_view", [visibilityTriggerId]);
     addGA4EventTag("AP Form Submit (High Friction)", "form_submit_high_friction", [addFormTrigger("AP Form Submit (High Friction)")]);
   } else {
-    skipped.push("form_start / form_submit_high_friction — no high-friction forms (5+ fields) found on site");
+    skipped.push("form_view / form_submit_high_friction — no high-friction forms (5+ fields) found on site");
   }
 
   // ── Newsletter Form ────────────────────────────────────────────────────────
