@@ -18,6 +18,8 @@
  */
 
 const GTM_API_BASE = "https://tagmanager.googleapis.com/tagmanager/v2";
+
+const safeEventName = (name) => name.slice(0, 25);
 const ALL_PAGES_TRIGGER_ID = "2147479553"; // GTM built-in — always exists, never needs creating
 
 const SOCIAL_TRIGGER_DOMAINS = {
@@ -240,7 +242,7 @@ function generateGTMPayload(audit, measurementId, accountId, containerId) {
   // ── Social platforms ──────────────────────────────────────────────────────
   socialPlatforms.forEach((platform, i) => {
     const domain    = SOCIAL_TRIGGER_DOMAINS[platform];
-    const eventName = `click_social_${platform.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase()}`;
+    const eventName = safeEventName(`click_social_${platform.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase()}`);
     addLinkTriggerAndTag(
       `AP Click ${platform}`, domain,
       `AP Click ${platform}`, eventName,
@@ -256,7 +258,7 @@ function generateGTMPayload(audit, measurementId, accountId, containerId) {
       try {
         if (cta.destination_type === "booking_platform") {
           const hostname  = new URL(cta.final_url).hostname;
-          const eventName = `click_booking_${(cta.platform || hostname).replace(/[^a-zA-Z0-9]/g, "_").toLowerCase()}`;
+          const eventName = safeEventName(`click_booking_${(cta.platform || hostname).replace(/[^a-zA-Z0-9]/g, "_").toLowerCase()}`);
           addLinkTriggerAndTag(
             `AP Book CTA - ${cta.platform}`, hostname,
             `AP Click Book - ${cta.platform}`, eventName,

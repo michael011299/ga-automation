@@ -242,6 +242,10 @@ function makeIdCounter(start) {
   return () => String(n++);
 }
 
+// GA4 event names must not exceed 40 chars per the API, and we enforce a
+// stricter 25-char internal limit to keep key event labels readable in GA4.
+const safeEventName = (name) => name.slice(0, 25);
+
 // ---------------------------------------------------------------------------
 // Main export
 // ---------------------------------------------------------------------------
@@ -398,7 +402,7 @@ function generateGTMContainerExport(audit, measurementId, containerName, account
       type: "gaawe",
       parameter: [
         { type: "BOOLEAN",  key: "sendEcommerceData",     value: "false" },
-        { type: "TEMPLATE", key: "eventName",             value: eventName },
+        { type: "TEMPLATE", key: "eventName",             value: safeEventName(eventName) },
         { type: "TEMPLATE", key: "measurementIdOverride", value: measurementId },
       ],
       firingTriggerId: firingTriggerIds,
@@ -487,14 +491,14 @@ function generateGTMContainerExport(audit, measurementId, containerName, account
 
   // ── Contact Form ──────────────────────────────────────────────────────────
   // Only create for regular (non-high-friction) forms. High-friction forms are
-  // tracked via form_submit_high_friction to avoid the same submission firing
+  // tracked via form_submit_hi_friction to avoid the same submission firing
   // two separate form conversion events into GA4.
   if (hasRegularForms) {
     addGA4EventTag("AP Contact Form", "contact_form", [addFormTrigger("AP Contact Form")]);
   } else if (!hasForms) {
     skipped.push("contact_form — no contact forms found on site");
   } else {
-    skipped.push("contact_form — all forms are high-friction (tracked via form_submit_high_friction)");
+    skipped.push("contact_form — all forms are high-friction (tracked via form_submit_hi_friction)");
   }
 
   // ── High-Friction Form Tracking ───────────────────────────────────────────
@@ -519,9 +523,9 @@ function generateGTMContainerExport(audit, measurementId, containerName, account
       fingerprint:        nextFp(),
     });
     addGA4EventTag("AP Form View (High Friction)", "form_view", [visibilityTriggerId]);
-    addGA4EventTag("AP Form Submit (High Friction)", "form_submit_high_friction", [addFormTrigger("AP Form Submit (High Friction)")]);
+    addGA4EventTag("AP Form Submit (High Friction)", "form_submit_hi_friction", [addFormTrigger("AP Form Submit (High Friction)")]);
   } else {
-    skipped.push("form_view / form_submit_high_friction — no high-friction forms (5+ fields) found on site");
+    skipped.push("form_view / form_submit_hi_friction — no high-friction forms (5+ fields) found on site");
   }
 
   // ── Newsletter Form ────────────────────────────────────────────────────────

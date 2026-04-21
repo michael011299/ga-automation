@@ -2091,10 +2091,10 @@ async function generateGTMSummary(pageData) {
   const highFrictionForms = pageData.flatMap((p) => (p.forms || []).filter((f) => f.friction_level === "high"));
   if (highFrictionForms.length > 0) {
     tagsToCreate.push(
-      `GA4 Event: form_start | Trigger: Element Visibility — form 50% in viewport (fires when user first sees high-friction form)`,
+      `GA4 Event: form_view | Trigger: Element Visibility — form 50% in viewport (fires when user first sees high-friction form)`,
     );
     tagsToCreate.push(
-      `GA4 Event: form_submit_high_friction | Trigger: Form Submission on high-friction forms (${highFrictionForms.length} form(s) with 5+ fields) — compare with form_start to measure abandonment rate`,
+      `GA4 Event: form_submit_hi_friction | Trigger: Form Submission on high-friction forms (${highFrictionForms.length} form(s) with 5+ fields) — compare with form_view to measure abandonment rate`,
     );
   }
 

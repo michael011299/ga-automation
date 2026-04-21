@@ -29,6 +29,8 @@ const axios = require("axios");
 
 const GTM_API_BASE = "https://tagmanager.googleapis.com/tagmanager/v2";
 
+const safeEventName = (name) => name.slice(0, 25);
+
 // The GTM built-in "All Pages" trigger always has this ID — no need to create it.
 const ALL_PAGES_TRIGGER_ID = "2147479553";
 
@@ -501,7 +503,7 @@ async function buildContainerFromAudit(accessToken, {
   for (const platform of socialPlatforms) {
     const domain    = SOCIAL_TRIGGER_DOMAINS[platform];
     const safeName  = platform.replace(/[^a-zA-Z0-9]/g, "_");
-    const eventName = `click_social_${safeName.toLowerCase()}`;
+    const eventName = safeEventName(`click_social_${safeName.toLowerCase()}`);
 
     const r = await createLinkTriggerAndTag(
       accessToken, triggersPath, tagsPath,
@@ -518,7 +520,7 @@ async function buildContainerFromAudit(accessToken, {
       if (cta.destination_type === "booking_platform") {
         const hostname  = new URL(cta.final_url).hostname;
         const safePlat  = (cta.platform || hostname).replace(/[^a-zA-Z0-9]/g, "_");
-        const eventName = `click_booking_${safePlat.toLowerCase()}`;
+        const eventName = safeEventName(`click_booking_${safePlat.toLowerCase()}`);
         const r = await createLinkTriggerAndTag(
           accessToken, triggersPath, tagsPath,
           `AP Book CTA - ${cta.platform}`, hostname,
