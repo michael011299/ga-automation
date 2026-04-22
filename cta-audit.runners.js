@@ -146,12 +146,19 @@ const GENERIC_EMAIL_PROVIDERS = new Set([
 const GENERIC_EMAIL_LOCAL =
   /^(noreply|no[-_.]reply|donotreply|do[-_.]not[-_.]reply|bounce|bounces?|mailer[-_]daemon|postmaster|webmaster|hostmaster|daemon|automated|unsubscribe|subscribe|notification|notifications|alerts?|info-noreply|support-noreply|admin-noreply)$/i;
 
+// Generic business placeholder local-parts — these are catch-all inboxes that
+// appear on almost every site and don't represent meaningful conversion intent.
+// Named personal emails (john@company.com) or specific dept emails (sales@) pass.
+const PLACEHOLDER_EMAIL_LOCAL =
+  /^(info|information|hello|hi|hey|contact|contactus|enquir(y|ies|e)|general|generalenquir(y|ies)|office|team|mail|email|reception|welcome|getintouch|reach|reachout|ask|query|queries|message|feedback|hq|headquarters)$/i;
+
 function isGenericEmail(address) {
   if (!address || !address.includes("@")) return false;
   const [local, domain] = address.toLowerCase().split("@");
   if (!domain) return false;
   if (GENERIC_EMAIL_PROVIDERS.has(domain)) return true;
   if (GENERIC_EMAIL_LOCAL.test(local)) return true;
+  if (PLACEHOLDER_EMAIL_LOCAL.test(local)) return true;
   return false;
 }
 
@@ -1938,6 +1945,57 @@ async function extractForms(page, pageUrl) {
             }
           }
 
+          // ── Form plugin detection ────────────────────────────────────────────
+          // Check the form element and its ancestors for plugin-specific
+          // class/id/attribute fingerprints. The detected plugin key maps to the
+          // Custom HTML listener script generated in gtm-container-generator.js.
+          let form_plugin = null;
+          let form_plugin_meta = {};
+
+          const formClasses = (form.className || "").toLowerCase();
+          const parentClasses = (form.parentElement ? (form.parentElement.className || "") : "").toLowerCase();
+          const grandParentClasses = (form.parentElement && form.parentElement.parentElement
+            ? (form.parentElement.parentElement.className || "")
+            : "").toLowerCase();
+          const allClasses = formClasses + " " + parentClasses + " " + grandParentClasses;
+          const wrapperId = (form.closest('[class*="wpcf7"],[class*="gform_wrapper"],[class*="wpforms-container"],[class*="elementor-widget-form"],[class*="hs_form_target"]') || {}).id || "";
+
+          if (/wpcf7/.test(allClasses) || /wpcf7/.test(formId)) {
+            form_plugin = "cf7";
+          } else if (/et[-_]pb[-_]contact/.test(allClasses) || /et_pb_contactform/.test(formId)) {
+            form_plugin = "divi";
+          } else if (/gform/.test(formId) || /gform_wrapper/.test(allClasses)) {
+            form_plugin = "gravityforms";
+            // Extract numeric form ID (gform_1, gform_wrapper_1, etc.)
+            const gfMatch = (formId + " " + allClasses).match(/gform[_-](?:wrapper[_-])?(\d+)/);
+            if (gfMatch) form_plugin_meta.form_id = gfMatch[1];
+          } else if (/elementor-form/.test(formClasses) || /elementor-widget-form/.test(allClasses)) {
+            form_plugin = "elementor";
+          } else if (/wpforms-form/.test(formId) || /wpforms-form/.test(formClasses)) {
+            form_plugin = "wpforms";
+            // Extract numeric form ID (wpforms-form-41, wpforms-form-123, etc.)
+            const wpfMatch = (formId + " " + formClasses).match(/wpforms-form-(\d+)/);
+            if (wpfMatch) form_plugin_meta.form_id = wpfMatch[1];
+          } else if (/\bhs-form\b|\bhsForm/.test(allClasses) || /hs-form/.test(formId)) {
+            form_plugin = "hubspot";
+          } else if (/wsf-form/.test(formClasses)) {
+            form_plugin = "wsforms";
+            form_plugin_meta.form_id = form.getAttribute("data-id") || null;
+          } else if (/react-form-contents/.test(formClasses)) {
+            form_plugin = "squarespace";
+          } else if (/metform-form-content/.test(formClasses)) {
+            form_plugin = "metform";
+            // Try to extract MetForm endpoint ID from action or data attributes
+            const metMatch = (form.action || "").match(/\/entries\/insert\/(\d+)/);
+            if (metMatch) form_plugin_meta.form_id = metMatch[1];
+          } else if (/fluentform|ff-form/.test(allClasses)) {
+            form_plugin = "fluentforms";
+          } else if (/nf-form/.test(formId) || /nf-form-content/.test(formClasses)) {
+            form_plugin = "ninjaforms";
+          } else if (/forminator/.test(formId) || /forminator/.test(formClasses)) {
+            form_plugin = "forminator";
+          }
+
           formData.push({
             page_url: pageUrl,
             form_index: index,
@@ -1956,6 +2014,8 @@ async function extractForms(page, pageUrl) {
             position_label: positionLabel,
             score,
             static_submission_hint: staticSubmissionHint,
+            form_plugin,
+            form_plugin_meta,
           });
         }
       });

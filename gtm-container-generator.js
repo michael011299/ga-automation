@@ -247,6 +247,225 @@ function makeIdCounter(start) {
 const safeEventName = (name) => name.slice(0, 25);
 
 // ---------------------------------------------------------------------------
+// Form plugin listener scripts + metadata
+// Each entry defines the Custom HTML to inject and the dataLayer event name
+// that the GA4 contact_form tag should listen for.
+// ---------------------------------------------------------------------------
+const FORM_PLUGIN_LISTENERS = {
+  cf7: {
+    label:      "Contact Form 7",
+    eventName:  "cf7submission",
+    html: `<script>
+document.addEventListener('wpcf7mailsent', function(event) {
+  window.dataLayer = window.dataLayer || [];
+  window.dataLayer.push({
+    event: 'cf7submission',
+    formId: event.detail.contactFormId,
+    response: event.detail.inputs
+  });
+});
+</script>`,
+  },
+
+  divi: {
+    label:      "Divi Form",
+    eventName:  "form_sent",
+    html: `<script>
+jQuery(document).on('ajaxSuccess', function(_event, xhr, req, data) {
+  var reqData = Object.fromEntries(new URLSearchParams(req.data));
+  if (
+    req.url === window.location.href &&
+    req.type === 'POST' &&
+    Object.keys(reqData).some(function(k) { return k.startsWith('et_pb_contactform'); }) &&
+    xhr.status === 200 &&
+    !jQuery(data).find('.et_pb_contact_error_text').length
+  ) {
+    window.dataLayer = window.dataLayer || [];
+    window.dataLayer.push({ event: 'form_sent' });
+  }
+});
+</script>`,
+  },
+
+  gravityforms: {
+    label:      "Gravity Forms",
+    eventName:  "formSubmission",
+    html: `<script>
+jQuery(document).ready(function() {
+  jQuery(document).bind('gform_confirmation_loaded', function(event, formID) {
+    window.dataLayer = window.dataLayer || [];
+    window.dataLayer.push({ event: 'formSubmission', formID: formID });
+  });
+});
+</script>`,
+  },
+
+  elementor: {
+    label:      "Elementor Forms",
+    eventName:  "elementorFormSubmitted",
+    html: `<script>
+jQuery(document).ready(function($) {
+  $(document).on('submit_success', function() {
+    window.dataLayer = window.dataLayer || [];
+    window.dataLayer.push({ event: 'elementorFormSubmitted' });
+  });
+});
+</script>`,
+  },
+
+  wpforms: {
+    label:      "WPForms",
+    eventName:  "wpformsSubmission",
+    // html is built dynamically in the generator to include the form ID
+    html: null,
+  },
+
+  hubspot: {
+    label:      "HubSpot Forms",
+    eventName:  "form_submission",
+    html: `<script>
+window.dataLayer = window.dataLayer || [];
+// HubSpot Forms v3
+window.addEventListener('message', function(event) {
+  if (event.data.type === 'hsFormCallback' && event.data.eventName === 'onFormSubmitted') {
+    window.dataLayer.push({
+      event: 'form_submission',
+      form_id: event.data.id,
+      conversion_id: event.data.data && event.data.data.conversionId
+    });
+  }
+});
+// HubSpot Forms v4
+window.addEventListener('hs-form-event:on-submission:success', function(event) {
+  var hsform = window.HubspotFormsV4 && HubspotFormsV4.getFormFromEvent(event);
+  if (hsform) {
+    hsform.getFormFieldValues().then(function(fieldValues) {
+      window.dataLayer.push({
+        event: 'form_submission',
+        form_id: hsform.getFormId(),
+        conversion_id: hsform.getConversionId()
+      });
+    });
+  }
+});
+</script>`,
+  },
+
+  wsforms: {
+    label:      "WS Form",
+    eventName:  "wsform_submit_success",
+    html: `<script>
+(function() {
+  function pushEvent(formId) {
+    window.dataLayer = window.dataLayer || [];
+    window.dataLayer.push({ event: 'wsform_submit_success', wsform_form_id: formId });
+  }
+  document.addEventListener('submit', function(e) {
+    var form = e.target;
+    if (!form.classList.contains('wsf-form')) return;
+    var formId = form.getAttribute('data-id') || '';
+    setTimeout(function() { pushEvent(formId); }, 1000);
+  }, true);
+})();
+</script>`,
+  },
+
+  squarespace: {
+    label:      "Squarespace Forms",
+    eventName:  "contact_form_success",
+    html: `<script>
+(function() {
+  var fired = false;
+  var hadUserInput = false;
+  function checkForSubmission() {
+    if (fired || !hadUserInput) return;
+    var submittedForm = document.querySelector('form.react-form-contents--submitted');
+    if (submittedForm) {
+      fired = true;
+      window.dataLayer = window.dataLayer || [];
+      window.dataLayer.push({ event: 'contact_form_success', form_name: 'Squarespace Contact Form' });
+      observer.disconnect();
+    }
+  }
+  var formInterval = setInterval(function() {
+    var form = document.querySelector('form.react-form-contents');
+    if (form) {
+      form.addEventListener('input', function(e) {
+        if (e.target && e.target.value && e.target.value.trim().length > 0) hadUserInput = true;
+      }, true);
+      clearInterval(formInterval);
+    }
+  }, 300);
+  var observer = new MutationObserver(checkForSubmission);
+  observer.observe(document.body, { childList: true, attributes: true, subtree: true });
+})();
+</script>`,
+  },
+
+  metform: {
+    label:      "MetForm",
+    eventName:  "contact_form_submitted",
+    // html is built dynamically to include the form endpoint ID
+    html: null,
+  },
+
+  fluentforms: {
+    label:      "Fluent Forms",
+    eventName:  "fluentform_submission_success",
+    html: `<script>
+(function() {
+  document.addEventListener('fluentform_submission_success', function(e) {
+    window.dataLayer = window.dataLayer || [];
+    window.dataLayer.push({
+      event: 'fluentform_submission_success',
+      form_id: e.detail && e.detail.form_id
+    });
+  });
+  // Also catch jQuery trigger used by older Fluent Forms versions
+  if (window.jQuery) {
+    jQuery(document).on('fluentform_submission_success', function(e, data) {
+      window.dataLayer = window.dataLayer || [];
+      window.dataLayer.push({ event: 'fluentform_submission_success', form_id: data && data.form_id });
+    });
+  }
+})();
+</script>`,
+  },
+
+  ninjaforms: {
+    label:      "Ninja Forms",
+    eventName:  "nf_submit_success",
+    html: `<script>
+(function() {
+  document.addEventListener('nfFormSubmitResponse', function(e) {
+    window.dataLayer = window.dataLayer || [];
+    window.dataLayer.push({
+      event: 'nf_submit_success',
+      form_id: e.detail && e.detail.id
+    });
+  });
+})();
+</script>`,
+  },
+
+  forminator: {
+    label:      "Forminator",
+    eventName:  "forminator_submit_success",
+    html: `<script>
+(function() {
+  document.addEventListener('forminator:form:submit:success', function(e) {
+    window.dataLayer = window.dataLayer || [];
+    window.dataLayer.push({
+      event: 'forminator_submit_success',
+      form_id: e.detail && e.detail.formId
+    });
+  });
+})();
+</script>`,
+  },
+};
+
+// ---------------------------------------------------------------------------
 // Main export
 // ---------------------------------------------------------------------------
 
@@ -270,6 +489,12 @@ function generateGTMContainerExport(audit, measurementId, containerName, account
   const hasRegularForms      = pages.some((p) => p.forms?.some((f) => f.friction_level !== "high"));
   const hasNewsletter        = pages.some((p) => p.newsletter?.length > 0);
   const hasWhatsApp          = pages.some((p) => p.whatsapp?.links?.length > 0);
+
+  // Detect the dominant form plugin across all pages — first detected wins.
+  // form_plugin_meta carries optional extras like form_id for WPForms/MetForm.
+  const allForms = pages.flatMap((p) => p.forms || []);
+  const detectedFormPlugin = allForms.find((f) => f.form_plugin)?.form_plugin || null;
+  const detectedFormMeta   = allForms.find((f) => f.form_plugin)?.form_plugin_meta || {};
 
   const socialPlatforms = [
     ...new Set(pages.flatMap((p) => (p.social_links || []).map((s) => s.platform))),
@@ -392,6 +617,47 @@ function generateGTMContainerExport(audit, measurementId, containerName, account
     return triggerId;
   }
 
+  // ── Helper: Custom Event trigger ─────────────────────────────────────────
+  function addCustomEventTrigger(name, customEventFilter) {
+    const triggerId = nextTriggerId();
+    triggers.push({
+      ...meta,
+      triggerId,
+      name,
+      type:            "CUSTOM_EVENT",
+      customEventFilter: [
+        {
+          type: "EQUALS",
+          parameter: [
+            { type: "TEMPLATE", key: "arg0", value: "{{_event}}" },
+            { type: "TEMPLATE", key: "arg1", value: customEventFilter },
+          ],
+        },
+      ],
+      fingerprint: nextFp(),
+    });
+    return triggerId;
+  }
+
+  // ── Helper: Custom HTML tag ───────────────────────────────────────────────
+  function addCustomHTMLTag(name, html, firingTriggerIds) {
+    const tagId = nextTagId();
+    tags.push({
+      ...meta,
+      tagId,
+      name,
+      type: "html",
+      parameter: [
+        { type: "TEMPLATE", key: "html",                 value: html },
+        { type: "BOOLEAN",  key: "supportDocumentWrite", value: "false" },
+      ],
+      firingTriggerId: firingTriggerIds,
+      ...tagMeta(),
+      tagFiringOption: "ONCE_PER_EVENT",
+    });
+    return tagId;
+  }
+
   // ── Helper: GA4 event tag ─────────────────────────────────────────────────
   function addGA4EventTag(name, eventName, firingTriggerIds) {
     const tagId = nextTagId();
@@ -493,8 +759,78 @@ function generateGTMContainerExport(audit, measurementId, containerName, account
   // Only create for regular (non-high-friction) forms. High-friction forms are
   // tracked via form_submit_hi_friction to avoid the same submission firing
   // two separate form conversion events into GA4.
+  //
+  // When a form plugin is detected we use a Custom HTML listener tag +
+  // Custom Event trigger instead of the generic GTM FORM_SUBMISSION trigger,
+  // which is unreliable on AJAX-based form plugins (CF7, Elementor, etc.).
   if (hasRegularForms) {
-    addGA4EventTag("AP Contact Form", "contact_form", [addFormTrigger("AP Contact Form")]);
+    const plugin = detectedFormPlugin ? FORM_PLUGIN_LISTENERS[detectedFormPlugin] : null;
+
+    if (plugin) {
+      // Build the listener HTML (some plugins need dynamic values)
+      let listenerHtml = plugin.html;
+
+      if (detectedFormPlugin === "wpforms") {
+        const formId = detectedFormMeta.form_id || "0";
+        listenerHtml = `<script>
+(function() {
+  window.dataLayer = window.dataLayer || [];
+  function waitForConfirmation() {
+    var confirmation = document.querySelector('#wpforms-confirmation-${formId} p');
+    if (confirmation && confirmation.innerText) {
+      window.dataLayer.push({ event: 'wpformsSubmission', formId: ${formId}, confirmationMessage: confirmation.innerText });
+      return true;
+    }
+    return false;
+  }
+  if (waitForConfirmation()) return;
+  var interval = setInterval(function() {
+    if (waitForConfirmation()) clearInterval(interval);
+  }, 300);
+})();
+<\/script>`;
+      } else if (detectedFormPlugin === "metform") {
+        const formId = detectedFormMeta.form_id || "0";
+        listenerHtml = `<script>
+(function() {
+  var originalFetch = window.fetch;
+  window.fetch = function() {
+    var fetchCall = originalFetch.apply(this, arguments);
+    fetchCall.then(function(response) {
+      try {
+        var url = response.url || "";
+        if (url.indexOf("/wp-json/metform/v1/entries/insert/${formId}") > -1 && response.ok) {
+          window.dataLayer = window.dataLayer || [];
+          window.dataLayer.push({ event: 'contact_form_submitted', form_id: '${formId}', form_name: 'metform_contact' });
+        }
+      } catch(e) {}
+    });
+    return fetchCall;
+  };
+})();
+<\/script>`;
+      }
+
+      // Custom HTML tag fires on All Pages (DOM_READY_TRIGGER_ID) so the
+      // listener is attached before any form interaction occurs.
+      addCustomHTMLTag(
+        `AP Form Listener - ${plugin.label}`,
+        listenerHtml,
+        [DOM_READY_TRIGGER_ID],
+      );
+
+      // Custom Event trigger listens for the plugin's dataLayer event
+      const customEventTriggerId = addCustomEventTrigger(
+        `AP ${plugin.label} Submission`,
+        plugin.eventName,
+      );
+
+      // GA4 tag fires on the custom event
+      addGA4EventTag("AP Contact Form", "contact_form", [customEventTriggerId]);
+    } else {
+      // No recognised plugin — fall back to GTM's native FORM_SUBMISSION trigger
+      addGA4EventTag("AP Contact Form", "contact_form", [addFormTrigger("AP Contact Form")]);
+    }
   } else if (!hasForms) {
     skipped.push("contact_form — no contact forms found on site");
   } else {
@@ -682,6 +1018,9 @@ function generateGTMContainerExport(audit, measurementId, containerName, account
       skipped,
       phones_included: allPhoneNumbers,
       emails_included: allEmails,
+      form_plugin_detected: detectedFormPlugin
+        ? FORM_PLUGIN_LISTENERS[detectedFormPlugin]?.label ?? detectedFormPlugin
+        : null,
     },
   };
 }
