@@ -3091,4 +3091,4 @@ async function ctaAuditSite(url) {
   }
 }
 
-module.exports = { ctaAuditSite };
+module.exports = { ctaAuditSite, getBrowser };

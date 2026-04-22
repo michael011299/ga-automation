@@ -1,6 +1,6 @@
 const express = require('express');
 const { trackingHealthCheckSite, runBatchHealthCheck, getBatchJob } = require('./health.runners');
-const { ctaAuditSite } = require('./cta-audit.runners');
+const { ctaAuditSite, getBrowser } = require('./cta-audit.runners');
 const crypto = require('crypto');
 const router = express.Router();
 
@@ -129,6 +129,28 @@ router.post('/audit', async (req, res) => {
   } catch (e) {
     console.error('CTA audit error:', e);
     return res.status(500).json({ ok: false, error: e.message, url });
+  }
+});
+
+// GET /health/scrape?url=https://example.com
+// Returns the fully-rendered HTML of the given page via Playwright.
+router.get('/scrape', async (req, res) => {
+  const { url } = req.query;
+  if (!url) return res.status(400).json({ ok: false, error: 'url query parameter is required' });
+
+  let page;
+  try {
+    const browser = await getBrowser();
+    page = await browser.newPage();
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    const html = await page.content();
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    return res.send(html);
+  } catch (e) {
+    console.error('Scrape error:', e);
+    return res.status(500).json({ ok: false, error: e.message, url });
+  } finally {
+    if (page) await page.close().catch(() => {});
   }
 });
 
