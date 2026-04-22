@@ -497,63 +497,57 @@ async function extractWhatsApp(page, pageUrl) {
 }
 
 async function extractBookingLinks(page, pageUrl) {
-  const bookingLinks = await safeEval(page, () => {
-    const links = [];
-    const platforms = {
-      "calendly.com": "Calendly",
-      "acuityscheduling.com": "Acuity Scheduling",
-      "simplybook.me": "SimplyBook.me",
-      "booksy.com": "Booksy",
-      "mindbodyonline.com": "Mindbody",
-      "squareup.com": "Square Appointments",
-      "setmore.com": "Setmore",
-      "youcanbook.me": "YouCanBook.me",
-      "fresha.com": "Fresha",
-      "cliniko.com": "Cliniko",
-      "janeapp.com": "Jane App",
-      "treatwell.co.uk": "Treatwell",
-      "treatwell.com": "Treatwell",
-      "vagaro.com": "Vagaro",
-    };
+  // Pass ALL_BOOKING_DOMAINS entries into the browser context so this function
+  // stays in sync with the master platform list without duplication.
+  const platformEntries = Object.entries(ALL_BOOKING_DOMAINS);
 
-    // Check for links
-    document.querySelectorAll("a[href]").forEach((a) => {
-      const href = a.getAttribute("href");
-      for (const [domain, platform] of Object.entries(platforms)) {
-        if (href.includes(domain)) {
-          links.push({
-            href,
-            platform,
-            domain,
-            type: "external_link",
-            opens_new_tab: a.getAttribute("target") === "_blank",
-            display_text: a.textContent.trim(),
-          });
-          break;
+  const bookingLinks = await safeEval(
+    page,
+    (entries) => {
+      const links = [];
+
+      // Check for links
+      document.querySelectorAll("a[href]").forEach((a) => {
+        const href = (a.getAttribute("href") || "").trim();
+        if (!href) return;
+        for (const [domain, platformName] of entries) {
+          if (href.includes(domain)) {
+            links.push({
+              href,
+              platform: platformName,
+              domain,
+              type: "external_link",
+              opens_new_tab: a.getAttribute("target") === "_blank",
+              display_text: a.textContent.trim(),
+            });
+            break;
+          }
         }
-      }
-    });
+      });
 
-    // Check for embedded iframes
-    document.querySelectorAll("iframe[src]").forEach((iframe) => {
-      const src = iframe.getAttribute("src");
-      for (const [domain, platform] of Object.entries(platforms)) {
-        if (src.includes(domain)) {
-          links.push({
-            href: src,
-            platform,
-            domain,
-            type: "embedded_iframe",
-            opens_new_tab: false,
-            display_text: "Embedded booking widget",
-          });
-          break;
+      // Check for embedded iframes (booking widgets embedded directly on page)
+      document.querySelectorAll("iframe[src]").forEach((iframe) => {
+        const src = (iframe.getAttribute("src") || "").trim();
+        if (!src) return;
+        for (const [domain, platformName] of entries) {
+          if (src.includes(domain)) {
+            links.push({
+              href: src,
+              platform: platformName,
+              domain,
+              type: "embedded_iframe",
+              opens_new_tab: false,
+              display_text: "Embedded booking widget",
+            });
+            break;
+          }
         }
-      }
-    });
+      });
 
-    return links;
-  });
+      return links;
+    },
+    platformEntries,
+  );
 
   if (bookingLinks) {
     bookingLinks.forEach((link) => (link.page_url = pageUrl));
@@ -562,38 +556,268 @@ async function extractBookingLinks(page, pageUrl) {
   return bookingLinks || [];
 }
 
-// Only match labels that signal direct intent to book/convert — not soft enquiry
-// terms like "enquire now", "request a quote", "get started" which typically lead
-// to contact forms rather than an actual booking action.
+// Match labels that signal direct intent to book or get a price — covers both
+// appointment-style ("book now", "schedule") and transport/service-style
+// ("get a quote", "order now", "hire a driver", "calculate fare") CTAs.
 const BOOKING_CTA_KEYWORDS =
-  /\b(book\s*(now|online|a?\s*session|an?\s*appointment|a?\s*class|a?\s*consultation|a?\s*call|your|a?\s*slot|a?\s*visit)?|schedule(\s*(a?\s*call|a?\s*session|now))?|reserve(\s*(a?\s*spot|now))?|make\s*(an?\s*appointment|a?\s*booking)|arrange\s*a?\s*visit)\b/i;
+  /\b(book(\s*(now|online|a?\s*taxi|a?\s*cab|a?\s*ride|a?\s*transfer|a?\s*session|an?\s*appointment|a?\s*class|a?\s*consultation|a?\s*call|your|a?\s*slot|a?\s*visit))?|schedule(\s*(a?\s*call|a?\s*session|now))?|reserve(\s*(a?\s*spot|now|a?\s*seat))?|make\s*(an?\s*appointment|a?\s*booking|a?\s*reservation)|arrange\s*(a?\s*visit|a?\s*transfer)|get\s*a?\s*(quote|price|fare)|order(\s*(now|a?\s*(taxi|cab|ride|transfer)))?|hire(\s*(a?\s*(driver|taxi|cab|car|van|minibus|coach)))?|calculate\s*(fare|price|route)|check\s*(fare|price|availability)|instant\s*(quote|booking)|request\s*(a?\s*(quote|call|callback|transfer))|make\s*a?\s*transfer)\b/i;
 
 // URL patterns that indicate a generic contact/enquiry page — links landing here
 // are soft leads, not direct conversions, and should be excluded from booking CTAs.
 const CONTACT_PAGE_PATTERN =
   /\/(contact|contact-us|get-in-touch|enquire|enquiry|enquiries|reach-us|say-hello|talk-to-us|message-us)(\/|$|\?)/i;
 
+// URL patterns for service/info pages — a link to these with a form on them is
+// NOT a direct booking CTA; it's just a nav link to a brochure/services page.
+const INFO_PAGE_PATTERN =
+  /\/(services?|our-services?|treatments?|packages?|about|about-us|our-story|portfolio|gallery|blog|news|team|staff|faq|faqs|help)(\/|$|\?)/i;
+
+// Booking platform domain → display name.
+// Organised by sector so it's easy to add new platforms.
+// To extend: add "domain.com": "Platform Name" in the relevant sector block.
 const ALL_BOOKING_DOMAINS = {
-  "calendly.com": "Calendly",
-  "acuityscheduling.com": "Acuity Scheduling",
-  "simplybook.me": "SimplyBook.me",
-  "booksy.com": "Booksy",
-  "mindbodyonline.com": "Mindbody",
-  "squareup.com": "Square Appointments",
-  "setmore.com": "Setmore",
-  "youcanbook.me": "YouCanBook.me",
-  "fresha.com": "Fresha",
-  "cliniko.com": "Cliniko",
-  "janeapp.com": "Jane App",
-  "treatwell.co.uk": "Treatwell",
-  "treatwell.com": "Treatwell",
-  "vagaro.com": "Vagaro",
-  "doctolib.fr": "Doctolib",
-  "practicepal.co.uk": "PracticePal",
-  "healthcode.co.uk": "Healthcode",
-  "nookal.com": "Nookal",
-  "powerdiary.com": "Power Diary",
-  "halaxy.com": "Halaxy",
+  // ── General multi-sector scheduling ───────────────────────────────────────
+  "calendly.com":          "Calendly",
+  "acuityscheduling.com":  "Acuity Scheduling",
+  "simplybook.me":         "SimplyBook.me",
+  "setmore.com":           "Setmore",
+  "youcanbook.me":         "YouCanBook.me",
+  "trafft.com":            "Trafft",
+  "appointy.com":          "Appointy",
+  "10to8.com":             "10to8",
+  "supersaas.com":         "SuperSaaS",
+  "picktime.com":          "Picktime",
+  "bookafy.com":           "Bookafy",
+  "vcita.com":             "vCita",
+  "bookwhen.com":          "Bookwhen",
+  "shore.com":             "Shore",
+  "squareup.com":          "Square Appointments",
+  "thryv.com":             "Thryv",
+  "hubspot.com":           "HubSpot Meetings",
+  "meetings.hubspot.com":  "HubSpot Meetings",
+  "chili.piper.com":       "Chili Piper",
+  "chilipiper.com":        "Chili Piper",
+  "savvycal.com":          "SavvyCal",
+  "doodle.com":            "Doodle",
+  "reclaim.ai":            "Reclaim",
+  "book.like.a.boss":      "Book Like a Boss",
+  "oncehub.com":           "OnceHub",
+
+  // ── Beauty / personal care / hair / nails ─────────────────────────────────
+  "booksy.com":            "Booksy",
+  "fresha.com":            "Fresha",
+  "treatwell.co.uk":       "Treatwell",
+  "treatwell.com":         "Treatwell",
+  "vagaro.com":            "Vagaro",
+  "glossgenius.com":       "GlossGenius",
+  "boulevard.app":         "Boulevard",
+  "booker.com":            "Booker",
+  "salonspa.com":          "SalonSpa",
+  "salonbiz.com":          "SalonBiz",
+  "shortcuts.net":         "Shortcuts",
+  "timely.com":            "Timely",
+  "goldie.app":            "Goldie",
+  "styleseat.com":         "StyleSeat",
+  "genbook.com":           "Genbook",
+
+  // ── Fitness / gym / wellness / yoga ───────────────────────────────────────
+  "mindbodyonline.com":    "Mindbody",
+  "wellhub.com":           "Wellhub",
+  "gympass.com":           "Gympass",
+  "clubready.com":         "ClubReady",
+  "marianatek.com":        "Mariana Tek",
+  "wellnessliving.com":    "WellnessLiving",
+  "teamup.com":            "TeamUp",
+  "ezfacility.com":        "EZFacility",
+  "gymmaster.com":         "GymMaster",
+  "pushpress.com":         "PushPress",
+  "zenplanner.com":        "Zen Planner",
+  "glofox.com":            "Glofox",
+  "hapana.com":            "Hapana",
+  "classbento.com.au":     "ClassBento",
+
+  // ── Healthcare / medical / dental / therapy ───────────────────────────────
+  "cliniko.com":           "Cliniko",
+  "janeapp.com":           "Jane App",
+  "powerdiary.com":        "Power Diary",
+  "halaxy.com":            "Halaxy",
+  "nookal.com":            "Nookal",
+  "practicepal.co.uk":     "PracticePal",
+  "healthcode.co.uk":      "Healthcode",
+  "doctolib.fr":           "Doctolib",
+  "doctolib.de":           "Doctolib",
+  "zocdoc.com":            "Zocdoc",
+  "healthengine.com.au":   "HealthEngine",
+  "lumahealth.io":         "Luma Health",
+  "myhealth1st.com.au":    "MyHealth1st",
+  "patientfusion.com":     "Patient Fusion",
+  "dentally.co":           "Dentally",
+  "soegroup.co.uk":        "Software of Excellence",
+  "psyquel.com":           "Psyquel",
+  "therapynotes.com":      "TherapyNotes",
+  "simplepractice.com":    "SimplePractice",
+  "karenapp.io":           "Karen (dental)",
+  "drchrono.com":          "DrChrono",
+
+  // ── Taxi / private hire / transfers / transport ───────────────────────────
+  "icabbi.com":            "iCabbi",
+  "autocab.com":           "Autocab",
+  "autocabgo.com":         "Autocab Go",
+  "taxicaller.com":        "TaxiCaller",
+  "cab9.net":              "Cab9",
+  "karhoo.com":            "Karhoo",
+  "cordic.com":            "Cordic",
+  "comcab.com":            "ComCab",
+  "igoapp.com":            "iGo Taxi",
+  "taxibooker.com":        "TaxiBooker",
+  "gett.com":              "Gett",
+  "wheely.com":            "Wheely",
+  "blacklane.com":         "Blacklane",
+  "welcomepickups.com":    "Welcome Pickups",
+  "mytransfer.com":        "MyTransfer",
+  "transfeero.com":        "Transfeero",
+  "kiwitaxi.com":          "KiwiTaxi",
+
+  // ── Tours / activities / experiences ──────────────────────────────────────
+  "viator.com":            "Viator",
+  "getyourguide.com":      "GetYourGuide",
+  "klook.com":             "Klook",
+  "fareharbor.com":        "FareHarbor",
+  "xola.com":              "Xola",
+  "checkfront.com":        "Checkfront",
+  "rezdy.com":             "Rezdy",
+  "bokun.io":              "Bókun",
+  "peek.com":              "Peek Pro",
+  "trekksoft.com":         "TrekkSoft",
+
+  // ── Restaurants / hospitality / food ──────────────────────────────────────
+  "opentable.com":         "OpenTable",
+  "resy.com":              "Resy",
+  "sevenrooms.com":        "SevenRooms",
+  "quandoo.co.uk":         "Quandoo",
+  "quandoo.com":           "Quandoo",
+  "designmynight.com":     "DesignMyNight",
+  "bookatable.co.uk":      "TheFork",
+  "thefork.com":           "TheFork",
+  "resdiary.com":          "ResDiary",
+  "eatapp.co":             "Eat App",
+  "dimmi.com.au":          "Dimmi",
+  "nowbookit.com":         "NowBookIt",
+
+  // ── Hotels / accommodation ────────────────────────────────────────────────
+  "booking.com":           "Booking.com",
+  "hotels.com":            "Hotels.com",
+  "expedia.com":           "Expedia",
+  "siteminder.com":        "SiteMinder",
+  "cloudbeds.com":         "Cloudbeds",
+  "little-hotelier.com":   "Little Hotelier",
+  "guestline.com":         "Guestline",
+  "mews.com":              "Mews",
+  "clock-software.com":    "Clock PMS",
+  "beds24.com":            "Beds24",
+
+  // ── Events / tickets ──────────────────────────────────────────────────────
+  "eventbrite.com":        "Eventbrite",
+  "eventbrite.co.uk":      "Eventbrite",
+  "ticketmaster.com":      "Ticketmaster",
+  "ticketmaster.co.uk":    "Ticketmaster",
+  "dice.fm":               "Dice",
+  "skiddle.com":           "Skiddle",
+  "seetickets.com":        "See Tickets",
+  "axs.com":               "AXS",
+  "humanitix.com":         "Humanitix",
+  "universe.com":          "Universe",
+  "tixel.com":             "Tixel",
+  "tickettailor.com":      "Ticket Tailor",
+  "billetto.co.uk":        "Billetto",
+
+  // ── Home services / trades / cleaning / maintenance ───────────────────────
+  "checkatrade.com":       "Checkatrade",
+  "ratedpeople.com":       "Rated People",
+  "trustatrader.com":      "TrustATrader",
+  "mybuilder.com":         "MyBuilder",
+  "bark.com":              "Bark",
+  "hipages.com.au":        "Hipages",
+  "houzz.com":             "Houzz",
+  "taskrabbit.com":        "TaskRabbit",
+  "angi.com":              "Angi",
+  "homeadvisor.com":       "HomeAdvisor",
+  "thumbtack.com":         "Thumbtack",
+  "jobber.com":            "Jobber",
+  "housecallpro.com":      "Housecall Pro",
+  "servicem8.com":         "ServiceM8",
+  "launch27.com":          "Launch27",
+  "mhelpdesk.com":         "mHelpDesk",
+
+  // ── Legal / professional services ─────────────────────────────────────────
+  "clio.com":              "Clio",
+  "mycase.com":            "MyCase",
+  "practicepanther.com":   "PracticePanther",
+  "lawmatics.com":         "Lawmatics",
+  "smokeball.com":         "Smokeball",
+  "filevine.com":          "Filevine",
+
+  // ── Photography / creative / events planning ──────────────────────────────
+  "honeybook.com":         "HoneyBook",
+  "dubsado.com":           "Dubsado",
+  "17hats.com":            "17Hats",
+  "sproutstudio.com":      "Sprout Studio",
+  "studio.ninja":          "Studio Ninja",
+  "pixieset.com":          "Pixieset",
+  "táve.com":              "Táve",
+
+  // ── Education / tutoring / coaching ──────────────────────────────────────
+  "tutorcruncher.com":     "TutorCruncher",
+  "teachworks.com":        "Teachworks",
+  "tutorbird.com":         "TutorBird",
+  "lessonspace.com":       "Lessonspace",
+  "classgap.com":          "Classgap",
+  "coach.me":              "Coach.me",
+  "paperbell.com":         "Paperbell",
+  "coachvantage.com":      "CoachVantage",
+
+  // ── Pet care / grooming / vet ─────────────────────────────────────────────
+  "gingr.com":             "Gingr",
+  "timetopet.com":         "Time To Pet",
+  "pawfinity.com":         "Pawfinity",
+  "petexec.net":           "PetExec",
+  "petstablished.com":     "Petstablished",
+  "123pet.com":            "123Pet",
+  "daysmart.com":          "DaySmart Pet",
+
+  // ── Automotive / MOT / servicing ──────────────────────────────────────────
+  "motorway.co.uk":        "Motorway",
+  "autoserve1.com":        "AutoServe1",
+  "schedulemaster.com":    "ScheduleMaster",
+  "workshopmate.co.uk":    "WorkshopMate",
+  "garage-hive.com":       "Garage Hive",
+
+  // ── Sports / leisure / courts / classes ───────────────────────────────────
+  "courtreserve.com":      "CourtReserve",
+  "clubautomation.com":    "Club Automation",
+  "amilia.com":            "Amilia",
+  "sportsbooking.com":     "SportsbBooking",
+  "pitchbooking.com":      "Pitchbooking",
+  "playfinder.com":        "Playfinder",
+  "lta.org.uk":            "LTA Clubspark",
+  "clubspark.co.uk":       "LTA ClubSpark",
+
+  // ── Childcare / nursery ───────────────────────────────────────────────────
+  "brightwheel.com":       "Brightwheel",
+  "himama.com":            "HiMama",
+  "procaresoftware.com":   "Procare",
+  "kindertales.com":       "Kindertales",
+
+  // ── Real estate / lettings ────────────────────────────────────────────────
+  "viewingtracker.com":    "ViewingTracker",
+  "rex.technology":        "Rex CRM",
+  "propertybase.com":      "Propertybase",
+  "agentbox.com.au":       "AgentBox",
+
+  // ── eCommerce checkout / payment-linked booking ───────────────────────────
+  "thrivecart.com":        "ThriveCart",
+  "samcart.com":           "SamCart",
+  "kartra.com":            "Kartra",
 };
 
 async function extractBookingCTAs(page, context, baseUrl) {
@@ -605,8 +829,21 @@ async function extractBookingCTAs(page, context, baseUrl) {
       const ariaLabel = a.getAttribute("aria-label") || "";
       const labelText = (text || ariaLabel).trim();
       const href = a.getAttribute("href") || "";
-      if (!href || href.startsWith("#") || href.startsWith("tel:") || href.startsWith("mailto:")) return;
-      found.push({ label_text: labelText, href, opens_new_tab: a.getAttribute("target") === "_blank" });
+      if (!href || href.startsWith("tel:") || href.startsWith("mailto:")) return;
+
+      // Include same-page anchor links (#section) only when the target element
+      // exists and is a form — these are very common on taxi/service sites where
+      // "Book Now" scrolls to an on-page booking form.
+      if (href.startsWith("#")) {
+        const anchor = href.slice(1);
+        if (!anchor) return;
+        const target = document.getElementById(anchor) || document.querySelector(`[name="${anchor}"]`);
+        if (!target) return;
+        const hasForm = target.tagName === "FORM" || !!target.querySelector("form");
+        if (!hasForm) return;
+      }
+
+      found.push({ label_text: labelText, href, opens_new_tab: a.getAttribute("target") === "_blank", is_anchor: href.startsWith("#") });
     });
     return found;
   });
@@ -628,6 +865,24 @@ async function extractBookingCTAs(page, context, baseUrl) {
   const results = [];
 
   for (const link of bookingLinks) {
+    // Same-page anchor links (#section) that passed the form check above are
+    // classified directly — no navigation needed, form is already on this page.
+    if (link.is_anchor) {
+      results.push({
+        link_text: link.label_text,
+        source_href: link.href,
+        final_url: baseUrl,
+        page_title: await page.title().catch(() => ""),
+        destination_type: "same_site_form",
+        platform: null,
+        clicks_to_book: 1,
+        redirect_hops: 0,
+        page_snippet: "",
+        gtm_recommendation: `GA4 Event: contact_form | Trigger: Form Submission — on-page booking form (anchor: ${link.href})`,
+      });
+      continue;
+    }
+
     let newPage = null;
     try {
       let absoluteUrl;
@@ -656,12 +911,30 @@ async function extractBookingCTAs(page, context, baseUrl) {
       let destinationType = "unknown";
       let platform = null;
 
+      // 1. Check known booking platform domains
       for (const [domain, name] of Object.entries(ALL_BOOKING_DOMAINS)) {
         if (finalUrl.includes(domain)) {
           destinationType = "booking_platform";
           platform = name;
           break;
         }
+      }
+
+      // 2. If not a known platform, check if the destination URL path itself
+      //    signals a booking system we haven't catalogued (e.g. /book, /booking,
+      //    /appointments, /schedule, /reserve, /checkout on an external domain).
+      if (destinationType === "unknown") {
+        try {
+          const destUrl = new URL(finalUrl);
+          const isSameSite = destUrl.origin === new URL(baseUrl).origin;
+          if (!isSameSite) {
+            const BOOKING_PATH = /\/(book(ing|ings)?|appointments?|schedule|reserve|reservations?|checkout|order|quote|availability)(\/|$|\?)/i;
+            if (BOOKING_PATH.test(destUrl.pathname)) {
+              destinationType = "booking_platform";
+              platform = destUrl.hostname.replace(/^www\./, "");
+            }
+          }
+        } catch {}
       }
 
       if (destinationType === "unknown") {
@@ -719,7 +992,9 @@ async function extractBookingCTAs(page, context, baseUrl) {
       const isDirectConversion =
         destinationType === "booking_platform" ||
         destinationType === "external_unknown" ||
-        (destinationType === "same_site_form" && !CONTACT_PAGE_PATTERN.test(finalUrl)) ||
+        (destinationType === "same_site_form" &&
+          !CONTACT_PAGE_PATTERN.test(finalUrl) &&
+          !INFO_PAGE_PATTERN.test(finalUrl)) ||
         (destinationType === "same_site_page" && clicksToBook !== null);
 
       if (!isDirectConversion) continue;
@@ -931,10 +1206,30 @@ async function extractLocationLinks(page, pageUrl) {
       const found = [];
       const seenKeys = new Set();
 
+      // Google attribution/system link texts that appear on embedded maps but are
+      // not business location links worth tracking.
+      const MAPS_SYSTEM_TEXT = /^(report\s*(a\s*)?(error|problem|an?\s*issue)|view\s*larger\s*map|open\s*(in\s*)?(google\s*)?maps|terms\s*of\s*use|map\s*data|©|privacy|keyboard\s*shortcuts?|satellite|terrain)\s*$/i;
+
       document.querySelectorAll("a[href]").forEach((a) => {
         const href = (a.getAttribute("href") || "").trim();
         if (!href.startsWith("http")) return;
         if (!patterns.some((p) => href.includes(p))) return;
+
+        // Skip Google attribution / system links that appear alongside embedded maps
+        const displayText = (a.textContent || "").replace(/\s+/g, " ").trim();
+        if (MAPS_SYSTEM_TEXT.test(displayText)) return;
+
+        // Also require the URL to contain a location identifier — a plain map view
+        // URL with no place/dir/search/cid is not a useful business location link.
+        const hasLocationId =
+          href.includes("/maps/place/") ||
+          href.includes("/maps/dir/") ||
+          href.includes("/maps/search/") ||
+          href.includes("place_id=") ||
+          href.includes("cid=") ||
+          /[?&]q=/.test(href) ||
+          href.includes("g.page/");
+        if (!hasLocationId) return;
 
         // Deduplicate by the URL without query fragments
         const key = href.split("#")[0];
