@@ -261,24 +261,33 @@ async function fetchGtmCodes(page, { gtm_container_id }) {
     console.log("⚠️ Could not extract numeric IDs from URL:", gtmUrl);
   }
 
-  // Admin tab
-  console.log("⚙️ Clicking Admin tab...");
-  const adminTab = page.locator('a:has-text("Admin"), [role="link"]:has-text("Admin")').first();
-  await adminTab.waitFor({ state: "visible", timeout: 30000 });
-  await adminTab.click();
-  await page.waitForTimeout(2000);
-
-  // Install Google Tag Manager link
-  console.log("🔍 Clicking Install Google Tag Manager...");
-  const installLink = page
-    .locator(
-      'a:has-text("Install Google Tag Manager"), ' +
-        '[role="link"]:has-text("Install Google Tag Manager")'
-    )
-    .first();
-  await installLink.waitFor({ state: "visible", timeout: 30000 });
-  await installLink.click();
-  await page.waitForTimeout(2000);
+  // Navigate directly to the Admin/Install page for this specific container
+  // using the numeric IDs from the URL — guarantees we always read the correct
+  // container's snippets rather than relying on UI click navigation.
+  if (numericAccountId && numericContainerId) {
+    const installUrl =
+      `https://tagmanager.google.com/#/admin/install` +
+      `?accountId=${numericAccountId}&containerId=${numericContainerId}`;
+    console.log("🔗 Navigating to install page:", installUrl);
+    await page.goto(installUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+    await page.waitForTimeout(2000);
+  } else {
+    // Fallback: click through Admin UI if numeric IDs not available
+    console.log("⚙️ Clicking Admin tab...");
+    const adminTab = page.locator('a:has-text("Admin"), [role="link"]:has-text("Admin")').first();
+    await adminTab.waitFor({ state: "visible", timeout: 30000 });
+    await adminTab.click();
+    await page.waitForTimeout(2000);
+    const installLink = page
+      .locator(
+        'a:has-text("Install Google Tag Manager"), ' +
+          '[role="link"]:has-text("Install Google Tag Manager")'
+      )
+      .first();
+    await installLink.waitFor({ state: "visible", timeout: 30000 });
+    await installLink.click();
+    await page.waitForTimeout(2000);
+  }
 
   // Extract codes
   const codes = await extractGTMCodes(page);

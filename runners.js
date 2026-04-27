@@ -4432,60 +4432,52 @@ app.post("/run", async (req, res) => {
         return res.json({ status: "failed", reason: "gtm_no_space" });
       }
 
-      // No snackbar = success, grab codes
+      // No snackbar = success — navigate directly to the Admin/Install page for
+      // the newly created container so we always read THAT container's codes,
+      // not whatever GTM ID appears first in the tagmanager.google.com page HTML.
       console.log("✅ No limit snackbar - grabbing codes...");
       await page.waitForTimeout(2000);
 
-      const codes = {
-        containerId: null,
-        headCode: null,
-        bodyCode: null,
-      };
-
-      // Get container ID from page
-      const pageContent = await page.content();
-      const containerMatch = pageContent.match(/GTM-[A-Z0-9]{7,}/);
-      if (containerMatch) {
-        codes.containerId = containerMatch[0];
-        console.log("✅ Found Container ID:", codes.containerId);
-      }
-
-      // Find code snippets
-      const codeElements = await page.locator("code, pre, textarea").all();
-      console.log(`📊 Found ${codeElements.length} code elements`);
-
-      for (const el of codeElements) {
-        const text = await el.textContent().catch(() => "");
-
-        if (text.includes("googletagmanager.com/gtm.js") && !codes.headCode) {
-          codes.headCode = text.trim();
-          console.log("✅ Found Head Code");
-        }
-
-        if (text.includes("noscript") && text.includes("googletagmanager.com") && !codes.bodyCode) {
-          codes.bodyCode = text.trim();
-          console.log("✅ Found Body Code");
-        }
-      }
-
-      // Extract numeric account and container IDs from URL
+      // Step 1: Extract numeric account + container IDs from the current URL.
+      // GTM sets these in the URL immediately after creation.
       const gtmUrl = page.url();
       console.log("📍 GTM URL after creation:", gtmUrl);
       const gtmUrlMatch = gtmUrl.match(/accounts\/(\d+)\/containers\/(\d+)/);
+      let numericAccountId = null;
+      let numericContainerId = null;
       if (gtmUrlMatch) {
-        codes.numericAccountId = gtmUrlMatch[1];
-        codes.numericContainerId = gtmUrlMatch[2];
-        console.log("✅ Numeric Account ID:", codes.numericAccountId);
-        console.log("✅ Numeric Container ID:", codes.numericContainerId);
-      } else {
-        console.log("⚠️ Could not extract numeric IDs from URL:", gtmUrl);
+        numericAccountId = gtmUrlMatch[1];
+        numericContainerId = gtmUrlMatch[2];
+        console.log("✅ Numeric Account ID:", numericAccountId);
+        console.log("✅ Numeric Container ID:", numericContainerId);
       }
+
+      // Step 2: If we have the numeric IDs, navigate directly to the Admin/Install
+      // page for this specific container — this guarantees the snippets on the
+      // page belong to the container we just created.
+      if (numericAccountId && numericContainerId) {
+        const installUrl =
+          `https://tagmanager.google.com/#/admin/install` +
+          `?accountId=${numericAccountId}&containerId=${numericContainerId}`;
+        console.log("🔗 Navigating to install page:", installUrl);
+        await page.goto(installUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+        await page.waitForTimeout(2000);
+      }
+
+      // Step 3: Extract the codes using the reliable multi-method extractor.
+      const extracted = await extractGTMCodes(page);
 
       await browser.close();
       return res.json({
         status: "success",
         reason: "gtm_has_space",
-        codes: codes,
+        codes: {
+          containerId:        extracted.containerId,
+          headCode:           extracted.gtmHeadCode,
+          bodyCode:           extracted.gtmBodyCode,
+          numericAccountId,
+          numericContainerId,
+        },
       });
     }
 
@@ -5563,116 +5555,64 @@ app.post("/run", async (req, res) => {
       const { gtm_container_id } = req.body;
       if (!gtm_container_id) throw new Error("Missing gtm_container_id");
 
-      // Navigate to GTM
+      // Step 1: Navigate to GTM home and find the container in the list.
+      // openContainerFromHomeList searches by exact GTM-XXXXXXX string so it
+      // always opens the right container even if multiple exist on the account.
       await page.goto("https://tagmanager.google.com", { waitUntil: "load", timeout: 60000 });
       await page.waitForTimeout(3000);
-
-      // Find and click the container, then select most active workspace
-      console.log("🔍 Looking for container:", gtm_container_id);
       await openContainerFromHomeList(page, gtm_container_id);
 
-      // Extract numeric account and container IDs from URL
-      const gtmUrl = page.url();
-      console.log("📍 GTM URL after workspace entry:", gtmUrl);
-      let numericAccountId = null;
+      // Step 2: Extract numeric IDs from the workspace URL — these are available
+      // immediately after openContainerFromHomeList lands on the workspaces page.
+      const workspaceUrl = page.url();
+      console.log("📍 Workspace URL:", workspaceUrl);
+      let numericAccountId   = null;
       let numericContainerId = null;
-      const gtmUrlMatch = gtmUrl.match(/accounts\/(\d+)\/containers\/(\d+)/);
-      if (gtmUrlMatch) {
-        numericAccountId = gtmUrlMatch[1];
-        numericContainerId = gtmUrlMatch[2];
+      const urlMatch = workspaceUrl.match(/accounts\/(\d+)\/containers\/(\d+)/);
+      if (urlMatch) {
+        numericAccountId   = urlMatch[1];
+        numericContainerId = urlMatch[2];
         console.log("✅ Numeric Account ID:", numericAccountId);
         console.log("✅ Numeric Container ID:", numericContainerId);
-      } else {
-        console.log("⚠️ Could not extract numeric IDs from URL:", gtmUrl);
       }
 
-      // Now we're in the workspace — go to Admin tab
-      console.log("⚙️ Clicking Admin tab...");
-      const adminTab = page.locator('a:has-text("Admin"), [role="link"]:has-text("Admin")').first();
-      await adminTab.waitFor({ state: "visible", timeout: 30000 });
-      await adminTab.click();
-      await page.waitForTimeout(2000);
+      // Step 3: Navigate directly to the Admin/Install page for THIS container.
+      // Using the numeric IDs guarantees we read the correct container's snippets
+      // rather than relying on clicking through the Admin UI (which can be flaky).
+      if (numericAccountId && numericContainerId) {
+        const installUrl =
+          `https://tagmanager.google.com/#/admin/install` +
+          `?accountId=${numericAccountId}&containerId=${numericContainerId}`;
+        console.log("🔗 Navigating to install page:", installUrl);
+        await page.goto(installUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+        await page.waitForTimeout(2000);
+      } else {
+        // Fallback: click through Admin UI if numeric IDs not available
+        console.log("⚙️ Falling back to Admin tab navigation...");
+        const adminTab = page.locator('a:has-text("Admin"), [role="link"]:has-text("Admin")').first();
+        await adminTab.waitFor({ state: "visible", timeout: 30000 });
+        await adminTab.click();
+        await page.waitForTimeout(2000);
+        const installLink = page
+          .locator('a:has-text("Install Google Tag Manager"), [role="link"]:has-text("Install Google Tag Manager")')
+          .first();
+        await installLink.waitFor({ state: "visible", timeout: 30000 });
+        await installLink.click();
+        await page.waitForTimeout(2000);
+      }
 
-      // Click Install Google Tag Manager
-      console.log("🔍 Clicking Install Google Tag Manager...");
-      const installLink = page
-        .locator('a:has-text("Install Google Tag Manager"), ' + '[role="link"]:has-text("Install Google Tag Manager")')
-        .first();
-      await installLink.waitFor({ state: "visible", timeout: 30000 });
-      await installLink.click();
-      await page.waitForTimeout(2000);
-
-      // Extract codes
-      console.log("📋 Extracting GTM codes...");
+      // Step 4: Extract the codes — extractGTMCodes reads from code/pre/textarea
+      // elements on the install page, which always contain the correct container's
+      // snippets. The fallback constructs them from the container ID if needed.
       const { containerId, gtmHeadCode, gtmBodyCode } = await extractGTMCodes(page);
 
       await browser.close();
       return res.json({
         status: "success",
-        gtm_container_id: containerId,
-        gtm_head_code: gtmHeadCode,
-        gtm_body_code: gtmBodyCode,
-        numeric_account_id: numericAccountId,
-        numeric_container_id: numericContainerId,
-      });
-    }
-
-    if (action === "fetch_gtm_codes") {
-      console.log("🔍 Fetching GTM codes for container:", req.body.gtm_container_id);
-
-      const { gtm_container_id } = req.body;
-      if (!gtm_container_id) throw new Error("Missing gtm_container_id");
-
-      // Navigate to GTM
-      await page.goto("https://tagmanager.google.com", { waitUntil: "load", timeout: 60000 });
-      await page.waitForTimeout(3000);
-
-      // Find and click the container, then select most active workspace
-      console.log("🔍 Looking for container:", gtm_container_id);
-      await openContainerFromHomeList(page, gtm_container_id);
-
-      // Extract numeric account and container IDs from URL
-      const gtmUrl = page.url();
-      console.log("📍 GTM URL after workspace entry:", gtmUrl);
-      let numericAccountId = null;
-      let numericContainerId = null;
-      const gtmUrlMatch = gtmUrl.match(/accounts\/(\d+)\/containers\/(\d+)/);
-      if (gtmUrlMatch) {
-        numericAccountId = gtmUrlMatch[1];
-        numericContainerId = gtmUrlMatch[2];
-        console.log("✅ Numeric Account ID:", numericAccountId);
-        console.log("✅ Numeric Container ID:", numericContainerId);
-      } else {
-        console.log("⚠️ Could not extract numeric IDs from URL:", gtmUrl);
-      }
-
-      // Now we're in the workspace — go to Admin tab
-      console.log("⚙️ Clicking Admin tab...");
-      const adminTab = page.locator('a:has-text("Admin"), [role="link"]:has-text("Admin")').first();
-      await adminTab.waitFor({ state: "visible", timeout: 30000 });
-      await adminTab.click();
-      await page.waitForTimeout(2000);
-
-      // Click Install Google Tag Manager
-      console.log("🔍 Clicking Install Google Tag Manager...");
-      const installLink = page
-        .locator('a:has-text("Install Google Tag Manager"), ' + '[role="link"]:has-text("Install Google Tag Manager")')
-        .first();
-      await installLink.waitFor({ state: "visible", timeout: 30000 });
-      await installLink.click();
-      await page.waitForTimeout(2000);
-
-      // Extract codes
-      console.log("📋 Extracting GTM codes...");
-      const { containerId, gtmHeadCode, gtmBodyCode } = await extractGTMCodes(page);
-
-      await browser.close();
-      return res.json({
-        status: "success",
-        gtm_container_id: containerId,
-        gtm_head_code: gtmHeadCode,
-        gtm_body_code: gtmBodyCode,
-        numeric_account_id: numericAccountId,
+        gtm_container_id:    containerId,
+        gtm_head_code:       gtmHeadCode,
+        gtm_body_code:       gtmBodyCode,
+        numeric_account_id:  numericAccountId,
         numeric_container_id: numericContainerId,
       });
     }
