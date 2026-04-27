@@ -242,7 +242,9 @@ function generateGTMPayload(audit, measurementId, accountId, containerId) {
   // ── Social platforms ──────────────────────────────────────────────────────
   socialPlatforms.forEach((platform, i) => {
     const domain    = SOCIAL_TRIGGER_DOMAINS[platform];
-    const eventName = safeEventName(`click_social_${platform.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase()}`);
+    const eventName = platform === "X (Twitter)"
+      ? "click_social_x_twitter"
+      : safeEventName(`click_social_${platform.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase()}`);
     addLinkTriggerAndTag(
       `AP Click ${platform}`, domain,
       `AP Click ${platform}`, eventName,
@@ -265,11 +267,11 @@ function generateGTMPayload(audit, measurementId, accountId, containerId) {
             `booking_trigger_${i}`,
           );
         } else {
-          const path      = new URL(cta.final_url).pathname;
-          const eventName = "click_book_cta";
+          const path     = new URL(cta.final_url).pathname;
+          const safePath = path.replace(/[^a-zA-Z0-9]/g, "_").replace(/^_+|_+$/g, "") || "root";
           addLinkTriggerAndTag(
             `AP Book CTA - ${path}`, path,
-            "AP Click Book CTA", eventName,
+            `AP Click Book CTA - ${safePath}`, `click_book_cta_${safePath}`,
             `booking_trigger_${i}`,
           );
         }

@@ -502,8 +502,9 @@ async function buildContainerFromAudit(accessToken, {
   // ── 8. Social platforms ───────────────────────────────────────────────────
   for (const platform of socialPlatforms) {
     const domain    = SOCIAL_TRIGGER_DOMAINS[platform];
-    const safeName  = platform.replace(/[^a-zA-Z0-9]/g, "_");
-    const eventName = safeEventName(`click_social_${safeName.toLowerCase()}`);
+    const eventName = platform === "X (Twitter)"
+      ? "click_social_x_twitter"
+      : safeEventName(`click_social_${platform.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase()}`);
 
     const r = await createLinkTriggerAndTag(
       accessToken, triggersPath, tagsPath,
@@ -530,11 +531,12 @@ async function buildContainerFromAudit(accessToken, {
         created.tags.push(r.tagName);
       } else {
         // same_site_page or same_site_form — trigger on the destination path
-        const path = new URL(cta.final_url).pathname;
+        const path     = new URL(cta.final_url).pathname;
+        const safePath = path.replace(/[^a-zA-Z0-9]/g, "_").replace(/^_+|_+$/g, "") || "root";
         const r = await createLinkTriggerAndTag(
           accessToken, triggersPath, tagsPath,
           `AP Book CTA - ${path}`, path,
-          "AP Click Book CTA", "click_book_cta", measurementId,
+          `AP Click Book CTA - ${safePath}`, `click_book_cta_${safePath}`, measurementId,
         );
         created.triggers.push(r.triggerName);
         created.tags.push(r.tagName);

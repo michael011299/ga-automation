@@ -481,14 +481,11 @@ function generateGTMContainerExport(audit, measurementId, containerName, account
   const pages = audit.pages || [];
 
   // ── Aggregate audit findings ──────────────────────────────────────────────
-  const hasClickablePhone    = pages.some((p) => p.phones?.clickable?.length > 0);
-  const hasClickableEmail    = pages.some((p) => p.emails?.clickable?.length > 0);
-  const hasForms             = pages.some((p) => p.forms?.length > 0);
-  const hasHighFrictionForms = pages.some((p) => p.forms?.some((f) => f.friction_level === "high"));
-  // Regular forms = forms that are NOT high-friction (high-friction forms get their own dedicated tag)
-  const hasRegularForms      = pages.some((p) => p.forms?.some((f) => f.friction_level !== "high"));
-  const hasNewsletter        = pages.some((p) => p.newsletter?.length > 0);
-  const hasWhatsApp          = pages.some((p) => p.whatsapp?.links?.length > 0);
+  const hasClickablePhone = pages.some((p) => p.phones?.clickable?.length > 0);
+  const hasClickableEmail = pages.some((p) => p.emails?.clickable?.length > 0);
+  const hasForms          = pages.some((p) => p.forms?.length > 0);
+  const hasNewsletter     = pages.some((p) => p.newsletter?.length > 0);
+  const hasWhatsApp       = pages.some((p) => p.whatsapp?.links?.length > 0);
 
   // Detect the dominant form plugin across all pages — first detected wins.
   // form_plugin_meta carries optional extras like form_id for WPForms/MetForm.
@@ -756,18 +753,15 @@ function generateGTMContainerExport(audit, measurementId, containerName, account
   }
 
   // ── Contact Form ──────────────────────────────────────────────────────────
-  // Only create for regular (non-high-friction) forms. High-friction forms are
-  // tracked via form_submit_hi_friction to avoid the same submission firing
-  // two separate form conversion events into GA4.
-  //
-  // When a form plugin is detected we use a Custom HTML listener tag +
-  // Custom Event trigger instead of the generic GTM FORM_SUBMISSION trigger,
-  // which is unreliable on AJAX-based form plugins (CF7, Elementor, etc.).
-  if (hasRegularForms) {
+  // Single contact_form event covers all form submissions regardless of field
+  // count. When a recognised AJAX form plugin is detected we inject a Custom
+  // HTML listener + Custom Event trigger so the tag fires reliably on plugins
+  // that bypass GTM's native FORM_SUBMISSION trigger (CF7, Elementor, etc.).
+  if (hasForms) {
     const plugin = detectedFormPlugin ? FORM_PLUGIN_LISTENERS[detectedFormPlugin] : null;
 
     if (plugin) {
-      // Build the listener HTML (some plugins need dynamic values)
+      // Build the listener HTML (some plugins need dynamic values injected)
       let listenerHtml = plugin.html;
 
       if (detectedFormPlugin === "wpforms") {
@@ -811,57 +805,24 @@ function generateGTMContainerExport(audit, measurementId, containerName, account
 <\/script>`;
       }
 
-      // Custom HTML tag fires on All Pages (DOM_READY_TRIGGER_ID) so the
-      // listener is attached before any form interaction occurs.
       addCustomHTMLTag(
         `AP Form Listener - ${plugin.label}`,
         listenerHtml,
         [DOM_READY_TRIGGER_ID],
       );
 
-      // Custom Event trigger listens for the plugin's dataLayer event
       const customEventTriggerId = addCustomEventTrigger(
         `AP ${plugin.label} Submission`,
         plugin.eventName,
       );
 
-      // GA4 tag fires on the custom event
       addGA4EventTag("AP Contact Form", "contact_form", [customEventTriggerId]);
     } else {
-      // No recognised plugin — fall back to GTM's native FORM_SUBMISSION trigger
+      // No recognised plugin — use GTM's native FORM_SUBMISSION trigger
       addGA4EventTag("AP Contact Form", "contact_form", [addFormTrigger("AP Contact Form")]);
     }
-  } else if (!hasForms) {
+  } else {
     skipped.push("contact_form — no contact forms found on site");
-  } else {
-    skipped.push("contact_form — all forms are high-friction (tracked via form_submit_hi_friction)");
-  }
-
-  // ── High-Friction Form Tracking ───────────────────────────────────────────
-  if (hasHighFrictionForms) {
-    // form_view fires when the form scrolls 50% into the viewport — this is a
-    // scroll/visibility event and is intentionally distinct from GA4's native
-    // form_start (which fires on first field interaction via Enhanced Measurement).
-    // Naming it form_view avoids any conflict with the native form_start event.
-    const visibilityTriggerId = nextTriggerId();
-    triggers.push({
-      ...meta,
-      triggerId:          visibilityTriggerId,
-      name:               "AP Form Visible (High Friction)",
-      type:               "ELEMENT_VISIBILITY",
-      visibilitySelector: { type: "TEMPLATE", value: "form" },
-      visibleRatioType:   { type: "INTEGER",  value: "50" },
-      visibleRatioMin:    { type: "INTEGER",  value: "50" },
-      uniqueTriggerId:    { type: "TEMPLATE" },
-      waitForTags:        { type: "TEMPLATE" },
-      checkValidation:    { type: "TEMPLATE" },
-      waitForTagsTimeout: { type: "TEMPLATE", value: "2000" },
-      fingerprint:        nextFp(),
-    });
-    addGA4EventTag("AP Form View (High Friction)", "form_view", [visibilityTriggerId]);
-    addGA4EventTag("AP Form Submit (High Friction)", "form_submit_hi_friction", [addFormTrigger("AP Form Submit (High Friction)")]);
-  } else {
-    skipped.push("form_view / form_submit_hi_friction — no high-friction forms (5+ fields) found on site");
   }
 
   // ── Newsletter Form ────────────────────────────────────────────────────────

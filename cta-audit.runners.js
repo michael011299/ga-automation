@@ -146,19 +146,12 @@ const GENERIC_EMAIL_PROVIDERS = new Set([
 const GENERIC_EMAIL_LOCAL =
   /^(noreply|no[-_.]reply|donotreply|do[-_.]not[-_.]reply|bounce|bounces?|mailer[-_]daemon|postmaster|webmaster|hostmaster|daemon|automated|unsubscribe|subscribe|notification|notifications|alerts?|info-noreply|support-noreply|admin-noreply)$/i;
 
-// Generic business placeholder local-parts — these are catch-all inboxes that
-// appear on almost every site and don't represent meaningful conversion intent.
-// Named personal emails (john@company.com) or specific dept emails (sales@) pass.
-const PLACEHOLDER_EMAIL_LOCAL =
-  /^(info|information|hello|hi|hey|contact|contactus|enquir(y|ies|e)|general|generalenquir(y|ies)|office|team|mail|email|reception|welcome|getintouch|reach|reachout|ask|query|queries|message|feedback|hq|headquarters)$/i;
-
 function isGenericEmail(address) {
   if (!address || !address.includes("@")) return false;
   const [local, domain] = address.toLowerCase().split("@");
   if (!domain) return false;
   if (GENERIC_EMAIL_PROVIDERS.has(domain)) return true;
   if (GENERIC_EMAIL_LOCAL.test(local)) return true;
-  if (PLACEHOLDER_EMAIL_LOCAL.test(local)) return true;
   return false;
 }
 
@@ -238,23 +231,32 @@ async function acceptCookieConsent(page) {
 }
 
 async function findContactPageUrl(page, baseUrl) {
-  const contactKeywords = ["contact", "get-in-touch", "enquire", "enquiry", "quote", "book", "reach-us"];
-  const commonPaths = ["/contact", "/contact-us", "/get-in-touch", "/enquiry"];
+  const contactKeywords = [
+    "contact", "get in touch", "get-in-touch", "enquire", "enquiry", "enquiries",
+    "reach us", "reach-us", "talk to us", "speak to us", "write to us",
+    "send a message", "drop us", "touch with us",
+  ];
+  const commonPaths = [
+    "/contact", "/contact-us", "/contact-us/", "/contactus",
+    "/get-in-touch", "/get-in-touch/",
+    "/enquiry", "/enquiries", "/enquire",
+    "/reach-us", "/talk-to-us", "/speak-to-us",
+  ];
 
-  // Check common paths first
+  const baseOrigin = new URL(baseUrl).origin;
+
+  // Check common paths first via HEAD request
   for (const path of commonPaths) {
     try {
       const url = new URL(path, baseUrl).href;
-      const response = await page.request.head(url);
-      if (response.ok()) {
-        return url;
-      }
+      const response = await page.request.head(url, { timeout: 8000 });
+      if (response.ok()) return url;
     } catch (e) {
       // Continue to next path
     }
   }
 
-  // Look for contact links on the page
+  // Fall back to scanning nav/header links on the page
   const links = await safeEval(page, () => {
     return Array.from(document.querySelectorAll("a[href]")).map((a) => ({
       href: a.href,
@@ -264,16 +266,29 @@ async function findContactPageUrl(page, baseUrl) {
 
   if (links) {
     for (const link of links) {
-      const linkText = link.text;
-      if (contactKeywords.some((keyword) => linkText.includes(keyword))) {
+      const t = link.text;
+      if (contactKeywords.some((kw) => t.includes(kw))) {
         try {
           const url = new URL(link.href, baseUrl);
-          if (url.origin === new URL(baseUrl).origin) {
-            return url.href;
-          }
+          if (url.origin === baseOrigin && !url.href.includes("#")) return url.href;
         } catch (e) {
-          // Continue to next link
+          // continue
         }
+      }
+    }
+
+    // Also scan hrefs directly for /contact patterns
+    for (const link of links) {
+      try {
+        const url = new URL(link.href, baseUrl);
+        if (
+          url.origin === baseOrigin &&
+          /\/(contact|enqui|get-in-touch|reach-us|talk-to-us)([-/]|$)/i.test(url.pathname)
+        ) {
+          return url.href;
+        }
+      } catch (e) {
+        // continue
       }
     }
   }
@@ -1320,6 +1335,69 @@ async function extractLocationLinks(page, pageUrl) {
   }
 
   return locations || [];
+}
+
+// ---------------------------------------------------------------------------
+// Sitemap + internal link discovery
+// ---------------------------------------------------------------------------
+
+async function getSitemapUrls(page, origin) {
+  const extractLocs = (xml) => {
+    const locs = [];
+    const re = /<loc[^>]*>([\s\S]*?)<\/loc>/g;
+    let m;
+    while ((m = re.exec(xml)) !== null) locs.push(m[1].trim().replace(/&amp;/g, "&"));
+    return locs;
+  };
+
+  const fetchXml = async (sitemapUrl) => {
+    try {
+      const res = await page.request.get(sitemapUrl, { timeout: 10000 });
+      if (!res.ok()) return null;
+      const text = await res.text();
+      return text.includes("<loc>") ? text : null;
+    } catch { return null; }
+  };
+
+  // Collect candidates — robots.txt first, then standard paths
+  const candidates = [];
+  try {
+    const robots = await page.request.get(`${origin}/robots.txt`, { timeout: 8000 });
+    if (robots.ok()) {
+      const text = await robots.text();
+      for (const m of text.matchAll(/^Sitemap:\s*(.+)$/gmi)) candidates.push(m[1].trim());
+    }
+  } catch { /* ignore */ }
+  candidates.push(`${origin}/sitemap.xml`, `${origin}/sitemap_index.xml`, `${origin}/sitemap`);
+
+  for (const candidate of [...new Set(candidates)]) {
+    const xml = await fetchXml(candidate);
+    if (!xml) continue;
+
+    if (xml.includes("<sitemapindex")) {
+      const subUrls = extractLocs(xml);
+      const all = [];
+      for (const sub of subUrls.slice(0, 15)) {
+        const subXml = await fetchXml(sub);
+        if (subXml) all.push(...extractLocs(subXml));
+      }
+      return all.filter(u => { try { return new URL(u).origin === origin; } catch { return false; } });
+    }
+
+    return extractLocs(xml).filter(u => { try { return new URL(u).origin === origin; } catch { return false; } });
+  }
+
+  return [];
+}
+
+async function getPageInternalLinks(page, origin) {
+  const links = await safeEval(page, () =>
+    Array.from(document.querySelectorAll("a[href]")).map(a => a.href).filter(Boolean)
+  ) || [];
+  return [...new Set(links)].filter(href => {
+    try { const u = new URL(href); return u.origin === origin && !u.hash; }
+    catch { return false; }
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -2431,58 +2509,54 @@ async function generateGTMSummary(pageData) {
   if (totalBookingLinks > 0) {
     const platforms = [...new Set(pageData.flatMap((p) => p.booking_links.map((b) => b.domain)))];
     platforms.forEach((platform) => {
+      const safePlat = platform.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase();
+      const evtName  = `click_booking_${safePlat}`.slice(0, 25);
       tagsToCreate.push(
-        `GA4 Event: click_booking_${platform.replace(".", "_")} | Trigger: Click - Just Links | Filter: Click URL contains "${platform}"`,
+        `GA4 Event: ${evtName} | Trigger: Click - Just Links | Filter: Click URL contains "${platform}"`,
       );
     });
   }
 
-  // Form tracking
+  // Form tracking — single contact_form event covers all forms
   if (totalForms > 0) {
-    tagsToCreate.push(`GA4 Event: form_submit_contact | Trigger: Form Submission on contact forms`);
-  }
-
-  // High-friction form abandonment tracking
-  const highFrictionForms = pageData.flatMap((p) => (p.forms || []).filter((f) => f.friction_level === "high"));
-  if (highFrictionForms.length > 0) {
-    tagsToCreate.push(
-      `GA4 Event: form_view | Trigger: Element Visibility — form 50% in viewport (fires when user first sees high-friction form)`,
-    );
-    tagsToCreate.push(
-      `GA4 Event: form_submit_hi_friction | Trigger: Form Submission on high-friction forms (${highFrictionForms.length} form(s) with 5+ fields) — compare with form_view to measure abandonment rate`,
-    );
+    tagsToCreate.push(`GA4 Event: contact_form | Trigger: Form Submission`);
   }
 
   // Newsletter tracking
   if (totalNewsletterForms > 0) {
-    tagsToCreate.push(`GA4 Event: form_submit_newsletter | Trigger: Form Submission on newsletter forms`);
+    tagsToCreate.push(`GA4 Event: newsletter_signup | Trigger: Form Submission on newsletter forms`);
   }
 
   // Booking CTA tracking
   const allBookingCTAs = pageData.flatMap((p) => p.booking_ctas || []);
   if (allBookingCTAs.length > 0) {
-    const platformCTAs = allBookingCTAs.filter((c) => c.destination_type === "booking_platform");
+    const platformCTAs    = allBookingCTAs.filter((c) => c.destination_type === "booking_platform");
     const nonPlatformCTAs = allBookingCTAs.filter(
       (c) => c.destination_type !== "booking_platform" && c.destination_type !== "error",
     );
     const platformNames = [...new Set(platformCTAs.map((c) => c.platform).filter(Boolean))];
     platformNames.forEach((p) => {
+      const safePlat = p.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase();
+      const evtName  = `click_booking_${safePlat}`.slice(0, 25);
       tagsToCreate.push(
-        `GA4 Event: click_booking_cta | Destination: ${p} | Trigger: Click - Just Links on "${p}" CTA buttons`,
+        `GA4 Event: ${evtName} | Destination: ${p} | Trigger: Click - Just Links on "${p}" CTA buttons`,
       );
     });
     if (nonPlatformCTAs.length > 0) {
       tagsToCreate.push(
-        `GA4 Event: click_book_cta | Trigger: Click - Just Links on booking CTA buttons (see booking_ctas in audit for per-link GTM details)`,
+        `GA4 Event: click_book_cta_[path] | Trigger: Click - Just Links on booking CTA buttons (see booking_ctas in audit for per-link GTM details)`,
       );
     }
   }
 
-  // Social link tracking
+  // Social link tracking — matches container generator event naming
   if (socialPlatformsSeen.size > 0) {
     [...socialPlatformsSeen].forEach((platform) => {
+      const evtName = platform === "X (Twitter)"
+        ? "click_social_x_twitter"
+        : `click_social_${platform.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase()}`.slice(0, 25);
       tagsToCreate.push(
-        `GA4 Event: click_social_${platform.toLowerCase().replace(/[^a-z0-9]/g, "_")} | Trigger: Click - Just Links | Filter: Click URL contains "${platform}"`,
+        `GA4 Event: ${evtName} | Trigger: Click - Just Links | Filter: Click URL contains "${platform}"`,
       );
     });
   }
@@ -2985,6 +3059,21 @@ async function extractPageData(page, pageUrl, label, context) {
 
 async function ctaAuditSite(url) {
   const startTime = Date.now();
+  const MAX_PAGES = 75;
+
+  const NON_HTML_EXT = /\.(xml|pdf|jpg|jpeg|png|gif|svg|webp|css|js|zip|tar|gz|txt|ico|mp4|mp3|wav|mov|eot|woff|woff2|ttf|otf)(\?.*)?$/i;
+  const SKIP_PATH    = /\/(wp-admin|wp-login|wp-json|admin|login|sign-in|signup|register|account|cart|checkout|search)(\/|$|\?)/i;
+  const CONTACT_PAT  = /\/(contact|enquir|get-in-touch|reach-us|talk-to-us|speak-to-us)([-/]|$)/i;
+
+  let origin;
+  try { origin = new URL(url).origin; } catch { throw new Error(`Invalid URL: ${url}`); }
+
+  const isUsableUrl = (u) => {
+    try {
+      const p = new URL(u);
+      return p.origin === origin && !p.hash && !NON_HTML_EXT.test(p.pathname) && !SKIP_PATH.test(p.pathname);
+    } catch { return false; }
+  };
 
   try {
     const browser = await getBrowser();
@@ -3004,69 +3093,64 @@ async function ctaAuditSite(url) {
 
     const page = await context.newPage();
     const pagesCrawled = [];
-    const pagesData = [];
+    const pagesData    = [];
+    const crawledSet   = new Set();
 
     // ── Homepage ──────────────────────────────────────────────────────────────
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
     await page.waitForLoadState("load", { timeout: 5000 }).catch(() => {});
     await acceptCookieConsent(page);
+    crawledSet.add(url);
     pagesCrawled.push(url);
-
-    // Discover contact + service pages while we're on the homepage
-    const [contactPageUrl, servicePageUrls] = await Promise.all([
-      findContactPageUrl(page, url),
-      findServicePages(page, url),
-    ]);
-
     pagesData.push(await extractPageData(page, url, "homepage", context));
 
-    // ── Contact page ──────────────────────────────────────────────────────────
-    if (contactPageUrl && contactPageUrl !== url) {
+    // ── Discover all site URLs (sitemap → BFS fallback) ───────────────────────
+    console.log("Fetching sitemap...");
+    const sitemapUrls = await getSitemapUrls(page, origin);
+    const usingSitemap = sitemapUrls.length > 0;
+
+    if (usingSitemap) {
+      console.log(`Sitemap found: ${sitemapUrls.length} URLs`);
+    } else {
+      console.log("No sitemap found — will use BFS link discovery");
+    }
+
+    // Build initial queue from sitemap or homepage links
+    const crawlQueue = usingSitemap
+      ? sitemapUrls.filter(isUsableUrl).filter(u => !crawledSet.has(u))
+      : (await getPageInternalLinks(page, origin)).filter(isUsableUrl);
+
+    // Prioritise contact/enquiry pages so they're always included
+    crawlQueue.sort((a, b) => (CONTACT_PAT.test(a) ? 0 : 1) - (CONTACT_PAT.test(b) ? 0 : 1));
+
+    // ── Crawl queue ───────────────────────────────────────────────────────────
+    let qi = 0;
+    while (qi < crawlQueue.length && pagesCrawled.length < MAX_PAGES) {
+      const pageUrl = crawlQueue[qi++];
+      if (crawledSet.has(pageUrl)) continue;
+
       try {
-        await page.goto(contactPageUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+        await page.goto(pageUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
         await page.waitForLoadState("load", { timeout: 5000 }).catch(() => {});
-        pagesCrawled.push(contactPageUrl);
-        pagesData.push(await extractPageData(page, contactPageUrl, "contact", context));
+        crawledSet.add(pageUrl);
+        pagesCrawled.push(pageUrl);
+
+        const label = CONTACT_PAT.test(pageUrl) ? "contact" : "page";
+        pagesData.push(await extractPageData(page, pageUrl, label, context));
+
+        // BFS mode: discover links from each visited page and add new ones
+        if (!usingSitemap) {
+          const newLinks = (await getPageInternalLinks(page, origin))
+            .filter(u => isUsableUrl(u) && !crawledSet.has(u) && !crawlQueue.includes(u));
+          crawlQueue.push(...newLinks);
+        }
       } catch (e) {
-        console.error("Failed to crawl contact page:", e.message);
+        console.error(`Failed to crawl ${pageUrl}:`, e.message);
       }
     }
 
-    // ── Service pages — dynamic queue ─────────────────────────────────────────
-    // The queue starts with pages found in the nav. After visiting each page,
-    // findServiceSubPages scans it for any additional service pages linked from
-    // the content (e.g. individual treatment pages linked from a /services listing).
-    // New discoveries are pushed back onto the queue so the crawl expands naturally.
-    const crawledSet = new Set(pagesCrawled);
-    const serviceQueue = [...servicePageUrls];
-    let qi = 0;
-
-    let baseOrigin;
-    try { baseOrigin = new URL(url).origin; } catch { baseOrigin = ''; }
-
-    while (qi < serviceQueue.length) {
-      const serviceUrl = serviceQueue[qi++];
-      if (crawledSet.has(serviceUrl)) continue;
-
-      try {
-        await page.goto(serviceUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-        await page.waitForLoadState('load', { timeout: 5000 }).catch(() => {});
-        crawledSet.add(serviceUrl);
-        pagesCrawled.push(serviceUrl);
-
-        pagesData.push(await extractPageData(page, serviceUrl, 'service', context));
-
-        // After visiting the page, scan it for any linked service sub-pages and
-        // add them to the queue if not already seen. This handles listing pages
-        // (e.g. /services → /services/massage) as well as any page that cross-links
-        // to other service pages in its body copy or sidebar.
-        const subPages = await findServiceSubPages(page, serviceUrl, baseOrigin, crawledSet);
-        subPages.forEach(u => {
-          if (!crawledSet.has(u)) serviceQueue.push(u);
-        });
-      } catch (e) {
-        console.error(`Failed to crawl service page ${serviceUrl}:`, e.message);
-      }
+    if (pagesCrawled.length >= MAX_PAGES) {
+      console.log(`Crawl capped at ${MAX_PAGES} pages`);
     }
 
     await context.close();
