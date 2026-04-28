@@ -497,14 +497,21 @@ function generateGTMContainerExport(audit, measurementId, containerName, account
     ...new Set(pages.flatMap((p) => (p.social_links || []).map((s) => s.platform))),
   ].filter((p) => SOCIAL_TRIGGER_DOMAINS[p]);
 
+  // Filter out placeholder phone numbers — digits where any single digit repeats 4+ times consecutively
+  const isPlaceholderPhone = (n) => /(\d)\1{3,}/.test(n.replace(/\D/g, ""));
+
+  // Filter out placeholder/test emails
+  const PLACEHOLDER_EMAIL_DOMAINS = ["example.com", "example.org", "example.net", "test.com"];
+  const isPlaceholderEmail = (e) => PLACEHOLDER_EMAIL_DOMAINS.some((d) => e.toLowerCase().endsWith("@" + d));
+
   const allClickablePhones = [
     ...new Set(
       pages.flatMap((p) => (p.phones?.clickable || []).map((ph) => ph.number || ph.href?.replace("tel:", "") || "")),
     ),
-  ].filter(Boolean);
+  ].filter((n) => n && !isPlaceholderPhone(n));
   const allPlainTextPhones = [
     ...new Set(pages.flatMap((p) => (p.phones?.plainText || []).map((ph) => ph.digits || ph.number || ""))),
-  ].filter((n) => n && !allClickablePhones.some((c) => c.replace(/\D/g, "") === n.replace(/\D/g, "")));
+  ].filter((n) => n && !isPlaceholderPhone(n) && !allClickablePhones.some((c) => c.replace(/\D/g, "") === n.replace(/\D/g, "")));
   const allPhoneNumbers = [...allClickablePhones, ...allPlainTextPhones];
 
   const allEmails = [
@@ -514,7 +521,7 @@ function generateGTMContainerExport(audit, measurementId, containerName, account
         ...(p.emails?.plainText || []).map((e) => e.address || e.email || ""),
       ]),
     ),
-  ].filter(Boolean);
+  ].filter((e) => e && !isPlaceholderEmail(e));
 
   const locationLinks = pages
     .flatMap((p) => p.location_links || [])

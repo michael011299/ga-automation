@@ -1021,6 +1021,10 @@ async function extractBookingCTAs(page, context, baseUrl) {
 
       if (!isDirectConversion) continue;
 
+      const hasGlParam = (() => {
+        try { return new URL(finalUrl).searchParams.has('_gl'); } catch { return false; }
+      })();
+
       results.push({
         link_text: link.label_text,
         source_href: link.href,
@@ -1032,6 +1036,8 @@ async function extractBookingCTAs(page, context, baseUrl) {
         redirect_hops: redirectHops,
         page_snippet: pageSnippet,
         gtm_recommendation,
+        has_gl_param: hasGlParam,
+        attribution_status: (redirectHops > 2 && !hasGlParam) ? 'decay_risk' : 'ok',
       });
     } catch (err) {
       results.push({
@@ -2794,6 +2800,8 @@ function generateCTAQualityReport(pagesData) {
   const successfulCTAs = allBookingCTAs.filter((c) => c.destination_type !== "error");
   const directToPlatform = successfulCTAs.filter((c) => c.destination_type === "booking_platform").length;
   const highHopCTAs = successfulCTAs.filter((c) => (c.redirect_hops ?? 0) > 1);
+  const attributionDecayCTAs = successfulCTAs.filter((c) => c.attribution_status === 'decay_risk');
+  const missingGlCTAs = successfulCTAs.filter((c) => c.destination_type === 'booking_platform' && !c.has_gl_param);
   const avgRedirectHops = successfulCTAs.length
     ? Math.round((successfulCTAs.reduce((n, c) => n + (c.redirect_hops ?? 0), 0) / successfulCTAs.length) * 10) / 10
     : 0;
@@ -2881,6 +2889,8 @@ function generateCTAQualityReport(pagesData) {
       avg_redirect_hops: avgRedirectHops,
       direct_to_platform: directToPlatform,
       high_hop_ctas: highHopCTAs.length,
+      attribution_decay_count: attributionDecayCTAs.length,
+      missing_gl_count: missingGlCTAs.length,
     },
     strengths,
     issues,
@@ -3054,6 +3064,133 @@ async function extractPageData(page, pageUrl, label, context) {
     live_chat: await extractLiveChat(page),
     above_fold_ctas: await extractAboveFoldCTAs(page),
     geo_signals: await extractGeoSignals(page),
+    page_text: (await page.innerText('body').catch(() => '')).slice(0, 5000),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Service Intent Classification
+// ---------------------------------------------------------------------------
+
+const HIGH_URGENCY_PATTERNS = [
+  /24[\s/]?7/i, /24[\s-]?hour/i, /emergency/i, /urgent/i,
+  /same[\s-]?day/i, /immediate/i, /\basap\b/i, /breakdown/i,
+  /burst pipe/i, /locked out/i, /out of hours/i, /rapid response/i,
+  /call[\s-]?out/i, /no call[\s-]?out charge/i, /fast response/i,
+  /within the hour/i,
+];
+
+const LOW_URGENCY_PATTERNS = [
+  /how to/i, /benefits of/i, /installation guide/i, /maintenance plan/i,
+  /request a quote/i, /book a survey/i, /planned works/i, /\bscheduled\b/i,
+  /buyer.?s guide/i, /learn more/i, /get started/i, /free consultation/i,
+];
+
+function classifyServiceIntent(pages) {
+  const matchedHigh = new Set();
+  const matchedLow  = new Set();
+
+  for (const page of pages) {
+    const text = page.page_text || '';
+    for (const re of HIGH_URGENCY_PATTERNS) {
+      const m = text.match(re);
+      if (m) matchedHigh.add(m[0].toLowerCase());
+    }
+    for (const re of LOW_URGENCY_PATTERNS) {
+      const m = text.match(re);
+      if (m) matchedLow.add(m[0].toLowerCase());
+    }
+  }
+
+  const h = matchedHigh.size;
+  const l = matchedLow.size;
+  const total = h + l;
+
+  let urgency;
+  if (total < 2)                       urgency = 'unknown';
+  else if (h >= 2 && h >= l * 2)       urgency = 'high';
+  else if (l >= 2 && l >= h * 2)       urgency = 'low';
+  else if (h > 0 && l > 0)             urgency = 'mixed';
+  else                                  urgency = 'unknown';
+
+  return {
+    urgency,
+    matched_high: [...matchedHigh],
+    matched_low:  [...matchedLow],
+    confidence:   total >= 5 ? 'high' : total >= 2 ? 'medium' : 'low',
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Location Intelligence
+// ---------------------------------------------------------------------------
+
+const UK_PLACES = [
+  'London','Birmingham','Manchester','Leeds','Liverpool','Sheffield','Bristol',
+  'Edinburgh','Glasgow','Cardiff','Belfast','Newcastle','Nottingham','Southampton',
+  'Leicester','Coventry','Bradford','Plymouth','Derby','Swansea','Aberdeen',
+  'Dundee','York','Oxford','Cambridge','Bath','Brighton','Exeter','Norwich',
+  'Chester','Reading','Milton Keynes','Northampton','Luton','Guildford',
+  'Peterborough','Wolverhampton','Stoke','Sunderland','Middlesbrough','Bolton',
+  'Wigan','Salford','Oldham','Rochdale','Stockport','Huddersfield','Halifax',
+  'Wakefield','Barnsley','Rotherham','Doncaster','Grimsby','Hull','Blackpool',
+  'Preston','Blackburn','Burnley','Lancaster','Carlisle','Inverness','Perth',
+  'Stirling','Wrexham','Newport','Gloucester','Worcester','Hereford','Ipswich',
+  'Colchester','Chelmsford','Basildon','Southend','Slough','Windsor','Woking',
+  'Crawley','Hastings','Eastbourne','Bournemouth','Poole','Weymouth','Taunton',
+  'Exeter','Truro','Torquay','Yorkshire','Lancashire','Kent','Surrey','Essex',
+  'Devon','Cornwall','Hampshire','Berkshire','Oxfordshire','Gloucestershire',
+  'Staffordshire','Derbyshire','Lincolnshire','Norfolk','Suffolk','Cambridgeshire',
+  'Hertfordshire','Buckinghamshire','Wiltshire','Somerset','Cumbria','Cheshire',
+  'Merseyside','West Midlands','East Midlands','West Yorkshire','South Yorkshire',
+  'North Yorkshire','County Durham','Northumberland','Dorset','Worcestershire',
+  'Warwickshire','Leicestershire','Northamptonshire','Shropshire','Herefordshire',
+];
+
+function extractLocationIntelligence(pages, siteOrigin) {
+  const POSTCODE_RE = /\b([A-Z]{1,2}[0-9][A-Z0-9]?\s*[0-9][A-Z]{2})\b/g;
+
+  const postcodes    = new Set();
+  const citiesFound  = new Set();
+
+  // Prioritise contact/homepage pages for geographic signal extraction
+  const ordered = [
+    ...pages.filter(p => p.label === 'contact' || p.label === 'homepage'),
+    ...pages.filter(p => p.label !== 'contact' && p.label !== 'homepage'),
+  ];
+
+  for (const page of ordered) {
+    const text = page.page_text || '';
+    if (!text) continue;
+
+    // Postcodes
+    const upper = text.toUpperCase();
+    let m;
+    POSTCODE_RE.lastIndex = 0;
+    while ((m = POSTCODE_RE.exec(upper)) !== null) {
+      postcodes.add(m[1].replace(/\s+/, ' ').trim());
+    }
+
+    // City/county mentions
+    for (const place of UK_PLACES) {
+      const re = new RegExp(`\\b${place.replace(/[\s-]/g, '[\\s\\-]')}\\b`, 'i');
+      if (re.test(text)) citiesFound.add(place);
+    }
+  }
+
+  // Compare found places against crawled URL paths
+  const allPaths = pages.map(p => (p.url || '').toLowerCase()).join(' ');
+  const locationPageGaps = [...citiesFound].filter(city => {
+    const slug = city.toLowerCase().replace(/\s+/g, '-');
+    return !allPaths.includes(slug) && !allPaths.includes(city.toLowerCase().replace(/\s+/g, ' '));
+  });
+  const hasAreaPages = citiesFound.size > 0 && locationPageGaps.length < citiesFound.size;
+
+  return {
+    postcodes:          [...postcodes].slice(0, 20),
+    cities_mentioned:   [...citiesFound],
+    location_page_gaps: locationPageGaps,
+    has_area_pages:     hasAreaPages,
   };
 }
 
@@ -3158,6 +3295,8 @@ async function ctaAuditSite(url) {
     const gtmSummary = await generateGTMSummary(pagesData);
     const ctaQuality = generateCTAQualityReport(pagesData);
     const sayHello = generateSayHelloViability(pagesData, url);
+    const serviceIntent = classifyServiceIntent(pagesData);
+    const locationIntel = extractLocationIntelligence(pagesData, origin);
 
     return {
       website_url: url,
@@ -3167,6 +3306,8 @@ async function ctaAuditSite(url) {
       gtm_summary: gtmSummary,
       cta_quality: ctaQuality,
       sayhello_viability: sayHello,
+      service_intent: serviceIntent,
+      location_intelligence: locationIntel,
       duration_ms: Date.now() - startTime,
     };
   } catch (error) {

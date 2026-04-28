@@ -170,10 +170,12 @@ function buildDocTitle(websiteUrl, date) {
 function buildAuditReport(audit, clientName) {
   const websiteUrl = audit.website_url || '';
   const ranAt      = audit.ran_at      || new Date().toISOString();
-  const quality    = audit.cta_quality || {};
-  const gtmSummary = audit.gtm_summary || {};
-  const sayHello   = audit.sayhello_viability || null;
-  const pages      = audit.pages || [];
+  const quality       = audit.cta_quality          || {};
+  const gtmSummary    = audit.gtm_summary          || {};
+  const sayHello      = audit.sayhello_viability   || null;
+  const pages         = audit.pages                || [];
+  const serviceIntent = audit.service_intent       || {};
+  const locationIntel = audit.location_intelligence || {};
 
   const d = new Date(ranAt);
   const dateStr = d.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' });
@@ -264,6 +266,25 @@ function buildAuditReport(audit, clientName) {
   }
   spacer();
 
+  // ── Service Profile (only if urgency is determinable) ────────────────────
+  if (serviceIntent.urgency && serviceIntent.urgency !== 'unknown') {
+    const urgencyColour = serviceIntent.urgency === 'high' ? COLOUR.red
+      : serviceIntent.urgency === 'low' ? COLOUR.green : COLOUR.amber;
+    const urgencyLabel = serviceIntent.urgency === 'high' ? 'Emergency / High-Urgency'
+      : serviceIntent.urgency === 'low' ? 'Scheduled / Low-Urgency' : 'Mixed (both urgency and scheduled signals)';
+    h2(sectionTitle('Service Profile'));
+    sub('How the business positions itself — informs CRO and content strategy recommendations.');
+    blocks.push({ text: `Service type: ${urgencyLabel}`, bold: true, colour: urgencyColour, paragraphNamedStyle: 'NORMAL_TEXT' });
+    if ((serviceIntent.matched_high || []).length > 0) {
+      line(`Urgency signals detected: ${serviceIntent.matched_high.map(s => `"${s}"`).join(', ')}`);
+    }
+    if ((serviceIntent.matched_low || []).length > 0) {
+      line(`Scheduled signals detected: ${serviceIntent.matched_low.map(s => `"${s}"`).join(', ')}`);
+    }
+    line(`Confidence: ${serviceIntent.confidence || 'low'}`);
+    spacer();
+  }
+
   // ── Section 2: What is Working Well (only if strengths exist) ────────────
   if ((quality.strengths || []).length > 0) {
     h2(sectionTitle('What is Working Well'));
@@ -295,6 +316,44 @@ function buildAuditReport(audit, clientName) {
       });
     }
     spacer();
+  }
+
+  // ── Strategic Recommendations (CRO logic matrix) ─────────────────────────
+  {
+    const recs = [];
+    const urgency    = serviceIntent.urgency;
+    const af_        = quality.above_fold   || {};
+    const ff_        = quality.form_friction || {};
+    const bj_        = quality.booking_journey || {};
+    const locGaps    = (locationIntel.location_page_gaps || []).length;
+
+    if (urgency === 'high' && !af_.has_phone) {
+      recs.push({ text: 'Critical: Move click-to-call to the top-right header. Emergency users abandon within 3 seconds of not finding a phone number.', colour: COLOUR.red });
+    }
+    if (urgency === 'high' && (ff_.avg_field_count || 0) >= 5) {
+      recs.push({ text: 'Conversion Killer: Reduce contact form to Name + Phone + Postcode only — high field counts kill conversions for urgent enquiries.', colour: COLOUR.amber });
+    }
+    if (urgency === 'low' && !af_.has_cta_button) {
+      recs.push({ text: 'Trust Gap: Scheduled services rely on comparison. Add testimonials and case study links next to each booking button.', colour: COLOUR.black });
+    }
+    if (urgency === 'low' && (bj_.ctas_found || 0) === 0) {
+      recs.push({ text: 'Nurturing Gap: Users researching scheduled services need 8–10 touches before converting. Add a lead magnet (e.g. buyer\'s guide) to capture emails before the hard sell.', colour: COLOUR.black });
+    }
+    if (locGaps > 0) {
+      recs.push({ text: `Local SEO: ${locGaps} service area(s) mentioned in content but no dedicated location page found. Adding /[service]-in-[city]/ pages could improve local search visibility.`, colour: COLOUR.amber });
+    }
+    if ((bj_.attribution_decay_count || 0) > 0) {
+      recs.push({ text: `Attribution Risk: ${bj_.attribution_decay_count} booking CTA(s) pass through 3+ redirects without GA4 link decoration. Conversions are likely misattributed as Direct traffic.`, colour: COLOUR.red });
+    }
+
+    if (recs.length > 0) {
+      h2(sectionTitle('Strategic Recommendations'));
+      sub('Prioritised actions based on service type and audit findings.');
+      recs.forEach((r, i) => {
+        line(`  ${i + 1}. ${r.text}`, { colour: r.colour });
+      });
+      spacer();
+    }
   }
 
   // ── Section 4: Contact Methods ───────────────────────────────────────────
@@ -371,6 +430,30 @@ function buildAuditReport(audit, clientName) {
 
   spacer();
 
+  // ── Local SEO Opportunities ───────────────────────────────────────────────
+  const liPostcodes = locationIntel.postcodes || [];
+  const liCities    = locationIntel.cities_mentioned || [];
+  const liGaps      = locationIntel.location_page_gaps || [];
+  if (liPostcodes.length > 0 || liCities.length > 0) {
+    h2(sectionTitle('Local SEO Opportunities'));
+    sub('Geographic signals detected in page content compared against the site URL structure.');
+    if (liPostcodes.length > 0) {
+      line(`Postcodes found: ${liPostcodes.join(', ')}`);
+    }
+    if (liCities.length > 0) {
+      line(`Service areas mentioned: ${liCities.join(', ')}`);
+    }
+    if (liGaps.length === 0) {
+      line('Dedicated location pages: Detected — site appears to have area-specific pages.', { colour: COLOUR.green });
+    } else {
+      line(`Dedicated location pages: None found for ${liGaps.length} area(s).`, { colour: COLOUR.red });
+      liGaps.forEach(city => {
+        line(`  - No page found for "${city}" — consider adding /${city.toLowerCase().replace(/\s+/g, '-')}-[service]/ pages.`, { colour: COLOUR.amber });
+      });
+    }
+    spacer();
+  }
+
   // ── Section 5: Contact Forms (only if forms detected) ────────────────────
   const ff = quality.form_friction || {};
   const allForms = pages.flatMap((p) => (p.forms || []).map((f) => ({ ...f, _page: p.label || p.page_url })));
@@ -422,6 +505,14 @@ function buildAuditReport(audit, clientName) {
     line(`CTAs linking directly to a booking platform: ${bj.direct_to_platform || 0}`);
     if ((bj.high_hop_ctas || 0) > 0) {
       line(`CTAs passing through multiple redirects: ${bj.high_hop_ctas}`, { colour: COLOUR.amber });
+    }
+    if ((bj.missing_gl_count || 0) > 0) {
+      line(`Booking links missing GA4 cross-domain decoration (_gl=): ${bj.missing_gl_count}`, { colour: COLOUR.red });
+      line('  This causes booking conversions to appear as Direct / (none) traffic in GA4.');
+    }
+    if ((bj.attribution_decay_count || 0) > 0) {
+      line(`CTAs with 3+ redirect hops (attribution decay risk): ${bj.attribution_decay_count}`, { colour: COLOUR.amber });
+      line('  Each additional hop increases mobile load time and the chance the GA4 pixel does not fire.');
     }
     spacer();
   }
