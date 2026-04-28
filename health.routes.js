@@ -195,7 +195,6 @@ router.post('/offboard-ga4', async (req, res) => {
       `https://analytics.google.com/analytics/web/#/a${numericAccountId}/admin/suiteusermanagement/account`;
     console.log(`Navigating to account access management: ${adminUrl}`);
     await page.goto(adminUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await page.waitForTimeout(3000);
 
     // Step 3: Find and click "Remove myself"
     const removeMyselfBtn = page
@@ -205,7 +204,6 @@ router.post('/offboard-ga4', async (req, res) => {
     await removeMyselfBtn.waitFor({ state: 'visible', timeout: 20000 });
     console.log('Clicking "Remove myself"...');
     await removeMyselfBtn.click();
-    await page.waitForTimeout(1500);
 
     // Step 4: Confirm in the modal — click the red "Remove" button
     const confirmBtn = page
@@ -215,7 +213,7 @@ router.post('/offboard-ga4', async (req, res) => {
     await confirmBtn.waitFor({ state: 'visible', timeout: 10000 });
     console.log('Confirming removal...');
     await confirmBtn.click();
-    await page.waitForTimeout(2000);
+    await page.waitForTimeout(1000);
 
     console.log(`✅ Removed access from GA4 account ${account_id} for ${email}`);
     return res.json({ ok: true, account_id, email, message: 'Successfully removed from GA4 account' });

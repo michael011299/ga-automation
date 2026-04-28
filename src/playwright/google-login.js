@@ -41,7 +41,7 @@ async function loginToGoogle(page, { google_email, google_password, sso_username
     if ((await page.locator('input[type="email"]:visible').count()) > 0) {
       await page.fill('input[type="email"]:visible', google_email);
       await page.keyboard.press("Enter");
-      await page.waitForTimeout(4000);
+      await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 10000 }).catch(() => {});
       continue;
     }
 
@@ -49,7 +49,7 @@ async function loginToGoogle(page, { google_email, google_password, sso_username
     if ((await page.locator('input[name="Passwd"]:visible').count()) > 0) {
       await page.fill('input[name="Passwd"]:visible', google_password);
       await page.keyboard.press("Enter");
-      await page.waitForTimeout(5000);
+      await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 10000 }).catch(() => {});
       continue;
     }
 
@@ -58,13 +58,13 @@ async function loginToGoogle(page, { google_email, google_password, sso_username
       if ((await page.locator('input[name="username"]:visible').count()) > 0) {
         await page.fill('input[name="username"]:visible', sso_username || google_email);
         await page.keyboard.press("Enter");
-        await page.waitForTimeout(3000);
+        await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 10000 }).catch(() => {});
         continue;
       }
       if ((await page.locator('input[name="password"]:visible').count()) > 0) {
         await page.fill('input[name="password"]:visible', sso_password || google_password);
         await page.keyboard.press("Enter");
-        await page.waitForTimeout(5000);
+        await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 15000 }).catch(() => {});
         continue;
       }
     }
@@ -75,13 +75,13 @@ async function loginToGoogle(page, { google_email, google_password, sso_username
       .first();
     if (await accountPickerEmail.isVisible().catch(() => false)) {
       await accountPickerEmail.click();
-      await page.waitForTimeout(3000);
+      await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 10000 }).catch(() => {});
       continue;
     }
     const anyPickerAccount = page.locator("[data-identifier], .OVnw0d").first();
     if (await anyPickerAccount.isVisible().catch(() => false)) {
       await anyPickerAccount.click();
-      await page.waitForTimeout(3000);
+      await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 10000 }).catch(() => {});
       continue;
     }
 
@@ -91,7 +91,7 @@ async function loginToGoogle(page, { google_email, google_password, sso_username
       .first();
     if (await staySignedIn.isVisible().catch(() => false)) {
       await staySignedIn.click();
-      await page.waitForTimeout(3000);
+      await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 10000 }).catch(() => {});
       continue;
     }
 
@@ -101,11 +101,11 @@ async function loginToGoogle(page, { google_email, google_password, sso_username
       .first();
     if (await continueBtn.isVisible().catch(() => false)) {
       await continueBtn.click();
-      await page.waitForTimeout(3000);
+      await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 10000 }).catch(() => {});
       continue;
     }
 
-    await page.waitForTimeout(3000);
+    await page.waitForTimeout(1000);
   }
 
   // Final check — if we're still not on Analytics, throw
