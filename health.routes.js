@@ -168,6 +168,9 @@ router.post('/offboard-ga4', async (req, res) => {
   if (!email)      return res.status(400).json({ ok: false, error: 'email is required' });
   if (!account_id) return res.status(400).json({ ok: false, error: 'account_id is required' });
 
+  // Accept both "accounts/283675043" and "283675043"
+  const numericAccountId = String(account_id).replace(/^accounts\//, '');
+
   let browser;
   try {
     browser = await chromium.launch({
@@ -189,7 +192,7 @@ router.post('/offboard-ga4', async (req, res) => {
     // The URL pattern is /a{account_id}/admin/suiteusermanagement/account.
     // We don't need a property ID to reach the account-level user management page.
     const adminUrl =
-      `https://analytics.google.com/analytics/web/#/a${account_id}/admin/suiteusermanagement/account`;
+      `https://analytics.google.com/analytics/web/#/a${numericAccountId}/admin/suiteusermanagement/account`;
     console.log(`Navigating to account access management: ${adminUrl}`);
     await page.goto(adminUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
     await page.waitForTimeout(3000);
