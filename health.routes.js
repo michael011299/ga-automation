@@ -185,44 +185,21 @@ router.post("/offboard-ga4", async (req, res) => {
       sso_password: sso_password || "",
     });
 
-    // Step 2: Navigate directly to the correct account + property
-    // GA4 may show a "Missing permissions" dialog on first load — dismiss it and retry
-    const accountUrl = `https://analytics.google.com/analytics/web/#/a${numericAccountId}p${numericPropertyId}/admin`;
-    console.log(`Navigating to GA4 admin: ${accountUrl}`);
-    for (let attempt = 0; attempt < 3; attempt++) {
-      await page.goto(accountUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
-      await page.waitForTimeout(2000);
+    // Step 2: Navigate directly to Account Access Management
+    const accessMgmtUrl = `https://analytics.google.com/analytics/web/#/a${numericAccountId}p${numericPropertyId}/admin/suiteusermanagement/account`;
+    console.log(`Navigating to Account Access Management: ${accessMgmtUrl}`);
+    await page.goto(accessMgmtUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+    await page.waitForTimeout(3000);
 
-      // Dismiss "Missing permissions" dialog if present
-      const okBtn = page.locator('button:has-text("OK")').first();
-      if (await okBtn.isVisible().catch(() => false)) {
-        console.log('Dismissing "Missing permissions" dialog...');
-        await okBtn.click();
-        await page.waitForTimeout(1000);
-        // Navigate again after dismissing
-        await page.goto(accountUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
-        await page.waitForTimeout(2000);
-      }
-
-      if (page.url().includes(`/a${numericAccountId}p${numericPropertyId}`)) break;
-      console.log(`URL mismatch (got ${page.url()}), retrying...`);
+    // Dismiss any blocking dialog (e.g. "Missing permissions") then navigate again
+    const okBtn = page.locator('button:has-text("OK")').first();
+    if (await okBtn.isVisible().catch(() => false)) {
+      console.log('Dismissing dialog...');
+      await okBtn.click();
+      await page.waitForTimeout(1500);
+      await page.goto(accessMgmtUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+      await page.waitForTimeout(3000);
     }
-
-    // Step 3: Click the Admin cog in the left nav
-    console.log("Clicking Admin cog...");
-    const adminCog = page.locator('a:has(mat-icon[data-mat-icon-name="settings_filled"])').first();
-    await adminCog.waitFor({ state: "visible", timeout: 15000 });
-    await adminCog.click();
-    await page.waitForTimeout(2000);
-
-    // Step 4: Click "Account Access Management" in the admin panel
-    console.log("Clicking Account Access Management...");
-    const accountAccessLink = page
-      .locator('a:has-text("Account Access Management"), span:has-text("Account Access Management")')
-      .first();
-    await accountAccessLink.waitFor({ state: "visible", timeout: 15000 });
-    await accountAccessLink.click();
-    await page.waitForTimeout(2000);
 
     // Step 5: Click "Remove myself"
     const removeMyselfBtn = page.locator('button:has-text("Remove myself"), a:has-text("Remove myself")').first();
