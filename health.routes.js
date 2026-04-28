@@ -188,15 +188,29 @@ router.post('/offboard-ga4', async (req, res) => {
       sso_password:    sso_password || '',
     });
 
-    // Step 2: Navigate directly to Account access management for this account.
-    // The URL pattern is /a{account_id}/admin/suiteusermanagement/account.
-    // We don't need a property ID to reach the account-level user management page.
-    const adminUrl =
-      `https://analytics.google.com/analytics/web/#/a${numericAccountId}/admin/suiteusermanagement/account`;
-    console.log(`Navigating to account access management: ${adminUrl}`);
-    await page.goto(adminUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    // Step 2: Navigate to the GA4 account homepage
+    const accountUrl = `https://analytics.google.com/analytics/web/#/a${numericAccountId}`;
+    console.log(`Navigating to GA4 account: ${accountUrl}`);
+    await page.goto(accountUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.waitForTimeout(2000);
 
-    // Step 3: Find and click "Remove myself"
+    // Step 3: Click the Admin cog in the left nav
+    console.log('Clicking Admin cog...');
+    const adminCog = page.locator('[aria-label="Admin"], a[href*="admin"], button[aria-label*="dmin"]').first();
+    await adminCog.waitFor({ state: 'visible', timeout: 15000 });
+    await adminCog.click();
+    await page.waitForTimeout(2000);
+
+    // Step 4: Click "Account Access Management" in the admin panel
+    console.log('Clicking Account Access Management...');
+    const accountAccessLink = page
+      .locator('a:has-text("Account Access Management"), span:has-text("Account Access Management")')
+      .first();
+    await accountAccessLink.waitFor({ state: 'visible', timeout: 15000 });
+    await accountAccessLink.click();
+    await page.waitForTimeout(2000);
+
+    // Step 5: Find and click "Remove myself"
     const removeMyselfBtn = page
       .locator('button:has-text("Remove myself"), a:has-text("Remove myself")')
       .first();
@@ -205,7 +219,7 @@ router.post('/offboard-ga4', async (req, res) => {
     console.log('Clicking "Remove myself"...');
     await removeMyselfBtn.click();
 
-    // Step 4: Confirm in the modal — click the red "Remove" button
+    // Step 6: Confirm in the modal — click the red "Remove" button
     const confirmBtn = page
       .locator('button:has-text("Remove"):not(:has-text("myself")), [mat-button]:has-text("Remove")')
       .last();
