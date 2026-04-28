@@ -281,7 +281,6 @@ function buildAuditReport(audit, clientName) {
     if ((serviceIntent.matched_low || []).length > 0) {
       line(`Scheduled signals detected: ${serviceIntent.matched_low.map(s => `"${s}"`).join(', ')}`);
     }
-    line(`Confidence: ${serviceIntent.confidence || 'low'}`);
     spacer();
   }
 
@@ -331,7 +330,7 @@ function buildAuditReport(audit, clientName) {
       recs.push({ text: 'Critical: Move click-to-call to the top-right header. Emergency users abandon within 3 seconds of not finding a phone number.', colour: COLOUR.red });
     }
     if (urgency === 'high' && (ff_.avg_field_count || 0) >= 5) {
-      recs.push({ text: 'Conversion Killer: Reduce contact form to Name + Phone + Postcode only — high field counts kill conversions for urgent enquiries.', colour: COLOUR.amber });
+      recs.push({ text: 'Conversion Killer: Reduce contact form to the essential fields only (Name, Email, Phone, and Message) — high field counts kill conversions for urgent enquiries.', colour: COLOUR.amber });
     }
     if (urgency === 'low' && !af_.has_cta_button) {
       recs.push({ text: 'Trust Gap: Scheduled services rely on comparison. Add testimonials and case study links next to each booking button.', colour: COLOUR.black });

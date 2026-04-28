@@ -3036,8 +3036,15 @@ function generateSayHelloViability(pagesData, siteUrl) {
 
 // Helper: extract all data from a single already-loaded page.
 // Shared between homepage, contact, and service page crawls.
+const isPlaceholderPhone = (digits) => /(\d)\1{3,}/.test(digits);
+
 async function extractPageData(page, pageUrl, label, context) {
-  const phones = await extractPhones(page, pageUrl);
+  const rawPhones = await extractPhones(page, pageUrl);
+  // Strip placeholder numbers (e.g. 02222 222222, 03333 333333)
+  const phones = {
+    clickable: (rawPhones.clickable || []).filter(p => !isPlaceholderPhone(p.number || p.digits || '')),
+    plainText: (rawPhones.plainText || []).filter(p => !isPlaceholderPhone(p.number || p.digits || '')),
+  };
   const whatsapp = await extractWhatsApp(page, pageUrl);
 
   // Cross-reference: mark phone numbers that are also used in a WhatsApp link.
@@ -3065,6 +3072,13 @@ async function extractPageData(page, pageUrl, label, context) {
     above_fold_ctas: await extractAboveFoldCTAs(page),
     geo_signals: await extractGeoSignals(page),
     page_text: (await page.innerText('body').catch(() => '')).slice(0, 5000),
+    page_headings: await page.evaluate(() =>
+      [...document.querySelectorAll('h1, h2, h3')]
+        .map(h => h.innerText.trim())
+        .filter(Boolean)
+        .join(' ')
+        .slice(0, 2000)
+    ).catch(() => ''),
   };
 }
 
@@ -3081,17 +3095,18 @@ const HIGH_URGENCY_PATTERNS = [
 ];
 
 const LOW_URGENCY_PATTERNS = [
-  /how to/i, /benefits of/i, /installation guide/i, /maintenance plan/i,
-  /request a quote/i, /book a survey/i, /planned works/i, /\bscheduled\b/i,
-  /buyer.?s guide/i, /learn more/i, /get started/i, /free consultation/i,
+  /installation guide/i, /maintenance plan/i, /book a survey/i,
+  /planned works/i, /buyer.?s guide/i,
 ];
 
 function classifyServiceIntent(pages) {
   const matchedHigh = new Set();
   const matchedLow  = new Set();
 
+  // Use headings (h1/h2/h3) only — body text is too noisy with nav/footer phrases
   for (const page of pages) {
-    const text = page.page_text || '';
+    const text = page.page_headings || '';
+    if (!text) continue;
     for (const re of HIGH_URGENCY_PATTERNS) {
       const m = text.match(re);
       if (m) matchedHigh.add(m[0].toLowerCase());
@@ -3117,7 +3132,6 @@ function classifyServiceIntent(pages) {
     urgency,
     matched_high: [...matchedHigh],
     matched_low:  [...matchedLow],
-    confidence:   total >= 5 ? 'high' : total >= 2 ? 'medium' : 'low',
   };
 }
 
@@ -3128,19 +3142,19 @@ function classifyServiceIntent(pages) {
 const UK_PLACES = [
   'London','Birmingham','Manchester','Leeds','Liverpool','Sheffield','Bristol',
   'Edinburgh','Glasgow','Cardiff','Belfast','Newcastle','Nottingham','Southampton',
-  'Leicester','Coventry','Bradford','Plymouth','Derby','Swansea','Aberdeen',
-  'Dundee','York','Oxford','Cambridge','Bath','Brighton','Exeter','Norwich',
-  'Chester','Reading','Milton Keynes','Northampton','Luton','Guildford',
-  'Peterborough','Wolverhampton','Stoke','Sunderland','Middlesbrough','Bolton',
+  'Leicester','Coventry','Bradford','Plymouth','Swansea','Aberdeen',
+  'Dundee','York','Oxford','Cambridge','Brighton','Exeter','Norwich',
+  'Chester','Milton Keynes','Northampton','Luton','Guildford',
+  'Peterborough','Wolverhampton','Sunderland','Middlesbrough',
   'Wigan','Salford','Oldham','Rochdale','Stockport','Huddersfield','Halifax',
   'Wakefield','Barnsley','Rotherham','Doncaster','Grimsby','Hull','Blackpool',
-  'Preston','Blackburn','Burnley','Lancaster','Carlisle','Inverness','Perth',
+  'Blackburn','Burnley','Lancaster','Carlisle','Inverness',
   'Stirling','Wrexham','Newport','Gloucester','Worcester','Hereford','Ipswich',
   'Colchester','Chelmsford','Basildon','Southend','Slough','Windsor','Woking',
   'Crawley','Hastings','Eastbourne','Bournemouth','Poole','Weymouth','Taunton',
-  'Exeter','Truro','Torquay','Yorkshire','Lancashire','Kent','Surrey','Essex',
+  'Truro','Torquay','Yorkshire','Lancashire','Kent','Surrey','Essex',
   'Devon','Cornwall','Hampshire','Berkshire','Oxfordshire','Gloucestershire',
-  'Staffordshire','Derbyshire','Lincolnshire','Norfolk','Suffolk','Cambridgeshire',
+  'Staffordshire','Lincolnshire','Norfolk','Suffolk','Cambridgeshire',
   'Hertfordshire','Buckinghamshire','Wiltshire','Somerset','Cumbria','Cheshire',
   'Merseyside','West Midlands','East Midlands','West Yorkshire','South Yorkshire',
   'North Yorkshire','County Durham','Northumberland','Dorset','Worcestershire',
@@ -3153,13 +3167,10 @@ function extractLocationIntelligence(pages, siteOrigin) {
   const postcodes    = new Set();
   const citiesFound  = new Set();
 
-  // Prioritise contact/homepage pages for geographic signal extraction
-  const ordered = [
-    ...pages.filter(p => p.label === 'contact' || p.label === 'homepage'),
-    ...pages.filter(p => p.label !== 'contact' && p.label !== 'homepage'),
-  ];
+  // Only scan homepage and contact pages — other pages are too noisy
+  const targetPages = pages.filter(p => p.label === 'contact' || p.label === 'homepage');
 
-  for (const page of ordered) {
+  for (const page of targetPages) {
     const text = page.page_text || '';
     if (!text) continue;
 
