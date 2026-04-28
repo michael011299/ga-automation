@@ -203,7 +203,14 @@ router.post("/offboard-ga4", async (req, res) => {
 
     // Step 5: Click "Remove myself"
     const removeMyselfBtn = page.locator('button:has-text("Remove myself"), a:has-text("Remove myself")').first();
-    await removeMyselfBtn.waitFor({ state: "visible", timeout: 20000 });
+    const btnVisible = await removeMyselfBtn.isVisible().catch(() => false) ||
+      await removeMyselfBtn.waitFor({ state: "visible", timeout: 10000 }).then(() => true).catch(() => false);
+
+    if (!btnVisible) {
+      console.log(`ℹ️ "Remove myself" not found — already offboarded from GA4 account ${account_id}`);
+      return res.json({ ok: true, account_id, property_id, email, message: "Already removed from GA4 account" });
+    }
+
     console.log('Clicking "Remove myself"...');
     await removeMyselfBtn.click();
 
