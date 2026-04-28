@@ -1,6 +1,8 @@
 const express = require('express');
+const { chromium } = require('playwright');
 const { trackingHealthCheckSite, runBatchHealthCheck, getBatchJob } = require('./health.runners');
 const { ctaAuditSite, getBrowser } = require('./cta-audit.runners');
+const { loginToGoogle } = require('./src/playwright/google-login');
 const crypto = require('crypto');
 const router = express.Router();
 
@@ -151,6 +153,75 @@ router.get('/scrape', async (req, res) => {
     return res.status(500).json({ ok: false, error: e.message, url });
   } finally {
     if (page) await page.close().catch(() => {});
+  }
+});
+
+// POST /health/offboard-ga4
+// Logs into GA4 as the given account and removes itself from the specified
+// GA4 account using the "Remove myself" button in Account access management.
+//
+// Body: { email, sso_username, sso_password, account_id }
+//   account_id — numeric GA4 account ID (e.g. "283675043")
+router.post('/offboard-ga4', async (req, res) => {
+  const { email, sso_username, sso_password, account_id } = req.body || {};
+
+  if (!email)      return res.status(400).json({ ok: false, error: 'email is required' });
+  if (!account_id) return res.status(400).json({ ok: false, error: 'account_id is required' });
+
+  let browser;
+  try {
+    browser = await chromium.launch({
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
+    });
+    const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+    const page    = await context.newPage();
+
+    // Step 1: Log in
+    await loginToGoogle(page, {
+      google_email:    email,
+      google_password: '',        // SSO accounts don't need a direct password
+      sso_username:    sso_username || email,
+      sso_password:    sso_password || '',
+    });
+
+    // Step 2: Navigate directly to Account access management for this account.
+    // The URL pattern is /a{account_id}/admin/suiteusermanagement/account.
+    // We don't need a property ID to reach the account-level user management page.
+    const adminUrl =
+      `https://analytics.google.com/analytics/web/#/a${account_id}/admin/suiteusermanagement/account`;
+    console.log(`Navigating to account access management: ${adminUrl}`);
+    await page.goto(adminUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.waitForTimeout(3000);
+
+    // Step 3: Find and click "Remove myself"
+    const removeMyselfBtn = page
+      .locator('button:has-text("Remove myself"), a:has-text("Remove myself")')
+      .first();
+
+    await removeMyselfBtn.waitFor({ state: 'visible', timeout: 20000 });
+    console.log('Clicking "Remove myself"...');
+    await removeMyselfBtn.click();
+    await page.waitForTimeout(1500);
+
+    // Step 4: Confirm in the modal — click the red "Remove" button
+    const confirmBtn = page
+      .locator('button:has-text("Remove"):not(:has-text("myself")), [mat-button]:has-text("Remove")')
+      .last();
+
+    await confirmBtn.waitFor({ state: 'visible', timeout: 10000 });
+    console.log('Confirming removal...');
+    await confirmBtn.click();
+    await page.waitForTimeout(2000);
+
+    console.log(`✅ Removed access from GA4 account ${account_id} for ${email}`);
+    return res.json({ ok: true, account_id, email, message: 'Successfully removed from GA4 account' });
+
+  } catch (e) {
+    console.error('Offboard GA4 error:', e);
+    return res.status(500).json({ ok: false, error: e.message, account_id, email });
+  } finally {
+    if (browser) await browser.close().catch(() => {});
   }
 });
 
