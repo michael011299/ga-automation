@@ -157,18 +157,14 @@ router.get('/scrape', async (req, res) => {
 });
 
 // POST /health/offboard-ga4
-// Logs into GA4 as the given account and removes itself from the specified
-// GA4 account using the "Remove myself" button in Account access management.
-//
 // Body: { email, sso_username, sso_password, account_id }
-//   account_id — numeric GA4 account ID (e.g. "283675043")
+//   account_id — numeric GA4 account ID (e.g. "283675043" or "accounts/283675043")
 router.post('/offboard-ga4', async (req, res) => {
   const { email, sso_username, sso_password, account_id } = req.body || {};
 
   if (!email)      return res.status(400).json({ ok: false, error: 'email is required' });
   if (!account_id) return res.status(400).json({ ok: false, error: 'account_id is required' });
 
-  // Accept both "accounts/283675043" and "283675043"
   const numericAccountId = String(account_id).replace(/^accounts\//, '');
 
   let browser;
@@ -183,7 +179,7 @@ router.post('/offboard-ga4', async (req, res) => {
     // Step 1: Log in
     await loginToGoogle(page, {
       google_email:    email,
-      google_password: '',        // SSO accounts don't need a direct password
+      google_password: '',
       sso_username:    sso_username || email,
       sso_password:    sso_password || '',
     });
@@ -196,7 +192,7 @@ router.post('/offboard-ga4', async (req, res) => {
 
     // Step 3: Click the Admin cog in the left nav
     console.log('Clicking Admin cog...');
-    const adminCog = page.locator('[aria-label="Admin"], a[href*="admin"], button[aria-label*="dmin"]').first();
+    const adminCog = page.locator('a:has(mat-icon[data-mat-icon-name="settings_filled"])').first();
     await adminCog.waitFor({ state: 'visible', timeout: 15000 });
     await adminCog.click();
     await page.waitForTimeout(2000);
@@ -210,26 +206,24 @@ router.post('/offboard-ga4', async (req, res) => {
     await accountAccessLink.click();
     await page.waitForTimeout(2000);
 
-    // Step 5: Find and click "Remove myself"
+    // Step 5: Click "Remove myself"
     const removeMyselfBtn = page
       .locator('button:has-text("Remove myself"), a:has-text("Remove myself")')
       .first();
-
     await removeMyselfBtn.waitFor({ state: 'visible', timeout: 20000 });
     console.log('Clicking "Remove myself"...');
     await removeMyselfBtn.click();
 
-    // Step 6: Confirm in the modal — click the red "Remove" button
+    // Step 6: Confirm in the modal
     const confirmBtn = page
       .locator('button:has-text("Remove"):not(:has-text("myself")), [mat-button]:has-text("Remove")')
       .last();
-
     await confirmBtn.waitFor({ state: 'visible', timeout: 10000 });
     console.log('Confirming removal...');
     await confirmBtn.click();
     await page.waitForTimeout(1000);
 
-    console.log(`✅ Removed access from GA4 account ${account_id} for ${email}`);
+    console.log(`✅ Removed ${email} from GA4 account ${account_id}`);
     return res.json({ ok: true, account_id, email, message: 'Successfully removed from GA4 account' });
 
   } catch (e) {
