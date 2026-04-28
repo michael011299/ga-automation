@@ -146,12 +146,21 @@ const GENERIC_EMAIL_PROVIDERS = new Set([
 const GENERIC_EMAIL_LOCAL =
   /^(noreply|no[-_.]reply|donotreply|do[-_.]not[-_.]reply|bounce|bounces?|mailer[-_]daemon|postmaster|webmaster|hostmaster|daemon|automated|unsubscribe|subscribe|notification|notifications|alerts?|info-noreply|support-noreply|admin-noreply)$/i;
 
+const PLACEHOLDER_EMAIL_DOMAINS = new Set([
+  "example.com", "example.org", "example.net", "example.co.uk",
+  "test.com", "test.org", "test.net", "placeholder.com",
+]);
+
+const PLACEHOLDER_EMAIL_LOCAL = /^(new\.email\d+|test\.email\d+|email\d+|placeholder\d*|dummy\d*|fake\d*|sample\d*)$/i;
+
 function isGenericEmail(address) {
   if (!address || !address.includes("@")) return false;
   const [local, domain] = address.toLowerCase().split("@");
   if (!domain) return false;
   if (GENERIC_EMAIL_PROVIDERS.has(domain)) return true;
+  if (PLACEHOLDER_EMAIL_DOMAINS.has(domain)) return true;
   if (GENERIC_EMAIL_LOCAL.test(local)) return true;
+  if (PLACEHOLDER_EMAIL_LOCAL.test(local)) return true;
   return false;
 }
 
@@ -1110,7 +1119,9 @@ async function extractSocialLinks(page, pageUrl) {
     const seen = new Set();
 
     document.querySelectorAll("a[href]").forEach((a) => {
-      const href = a.getAttribute("href") || "";
+      let href = a.getAttribute("href") || "";
+      // Normalise protocol-relative links (//facebook.com/...) to https
+      if (href.startsWith("//")) href = "https:" + href;
       if (!href.startsWith("http")) return;
 
       for (const [domain, platform] of Object.entries(platforms)) {
@@ -1234,16 +1245,18 @@ async function extractLocationLinks(page, pageUrl) {
       const found = [];
       const seenKeys = new Set();
 
-      // Google attribution/system link texts that appear on embedded maps but are
-      // not business location links worth tracking.
-      const MAPS_SYSTEM_TEXT = /^(report\s*(a\s*)?(error|problem|an?\s*issue)|view\s*larger\s*map|open\s*(in\s*)?(google\s*)?maps|terms\s*of\s*use|map\s*data|©|privacy|keyboard\s*shortcuts?|satellite|terrain)\s*$/i;
+      // Pure attribution/legal links that appear inside embedded maps — not business links.
+      // "View larger map" and "Open in Google Maps" ARE valid business location links.
+      const MAPS_SYSTEM_TEXT = /^(report\s*(a\s*)?(error|problem|an?\s*issue)|terms\s*of\s*use|map\s*data|©|privacy|keyboard\s*shortcuts?|satellite|terrain)\s*$/i;
 
       document.querySelectorAll("a[href]").forEach((a) => {
-        const href = (a.getAttribute("href") || "").trim();
+        let href = (a.getAttribute("href") || "").trim();
+        // Normalise protocol-relative links
+        if (href.startsWith("//")) href = "https:" + href;
         if (!href.startsWith("http")) return;
         if (!patterns.some((p) => href.includes(p))) return;
 
-        // Skip Google attribution / system links that appear alongside embedded maps
+        // Skip legal/attribution links only (not navigation links to the map)
         const displayText = (a.textContent || "").replace(/\s+/g, " ").trim();
         if (MAPS_SYSTEM_TEXT.test(displayText)) return;
 
@@ -1328,6 +1341,41 @@ async function extractLocationLinks(page, pageUrl) {
           place_id: placeId,
           display_text: (a.textContent || "").replace(/\s+/g, " ").trim() || a.getAttribute("aria-label") || "",
           opens_new_tab: a.getAttribute("target") === "_blank",
+          source: "link",
+        });
+      });
+
+      // Also detect embedded Google Maps iframes — they're clickable and indicate
+      // a mapped business location even though they aren't anchor links.
+      document.querySelectorAll("iframe[src]").forEach((iframe) => {
+        const src = (iframe.getAttribute("src") || "").trim();
+        if (!patterns.some((p) => src.includes(p))) return;
+        const key = src.split("#")[0];
+        if (seenKeys.has(key)) return;
+        seenKeys.add(key);
+
+        let locationName = "";
+        const placeMatch = src.match(/\/maps\/place\/([^/@?&]+)/);
+        if (placeMatch) {
+          try { locationName = decodeURIComponent(placeMatch[1].replace(/\+/g, " ")); } catch {}
+        }
+        const qMatch = src.match(/[?&]q=([^&]+)/);
+        if (!locationName && qMatch) {
+          try { locationName = decodeURIComponent(qMatch[1].replace(/\+/g, " ")); } catch {}
+        }
+
+        let coords = null;
+        const coordsMatch = src.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
+        if (coordsMatch) coords = `${coordsMatch[1]},${coordsMatch[2]}`;
+
+        found.push({
+          href: src,
+          location_name: locationName || "Embedded Google Map",
+          coords,
+          place_id: null,
+          display_text: "Embedded map",
+          opens_new_tab: false,
+          source: "iframe",
         });
       });
 
@@ -3189,11 +3237,17 @@ function extractLocationIntelligence(pages, siteOrigin) {
     }
   }
 
-  // Compare found places against crawled URL paths
-  const allPaths = pages.map(p => (p.url || '').toLowerCase()).join(' ');
+  // Compare found places against crawled URL paths.
+  // A location page is only counted if the city slug appears as a distinct URL
+  // path segment (surrounded by /, -, or end of path) to avoid false positives
+  // from city names embedded in business names or other unrelated URL segments.
+  const allUrls = pages.map(p => (p.url || '').toLowerCase());
   const locationPageGaps = [...citiesFound].filter(city => {
     const slug = city.toLowerCase().replace(/\s+/g, '-');
-    return !allPaths.includes(slug) && !allPaths.includes(city.toLowerCase().replace(/\s+/g, ' '));
+    return !allUrls.some(url => {
+      const path = url.replace(/^https?:\/\/[^/]+/, '');
+      return new RegExp(`(^|[/-])${slug.replace(/-/g, '[\\-_]')}([/-]|$)`).test(path);
+    });
   });
   const hasAreaPages = citiesFound.size > 0 && locationPageGaps.length < citiesFound.size;
 
