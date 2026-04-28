@@ -161,17 +161,17 @@ router.get("/scrape", async (req, res) => {
 router.post("/offboard-ga4", async (req, res) => {
   const { email, sso_username, sso_password, account_id, property_id } = req.body || {};
 
-  if (!email)       return res.status(400).json({ ok: false, error: "email is required" });
-  if (!account_id)  return res.status(400).json({ ok: false, error: "account_id is required" });
+  if (!email) return res.status(400).json({ ok: false, error: "email is required" });
+  if (!account_id) return res.status(400).json({ ok: false, error: "account_id is required" });
   if (!property_id) return res.status(400).json({ ok: false, error: "property_id is required" });
 
-  const numericAccountId  = String(account_id).replace(/^accounts\//, "");
+  const numericAccountId = String(account_id).replace(/^accounts\//, "");
   const numericPropertyId = String(property_id).replace(/^properties\//, "");
 
   let browser;
   try {
     browser = await chromium.launch({
-      headless: false,
+      headless: true,
       args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
     });
     const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
