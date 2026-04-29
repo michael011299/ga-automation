@@ -16,24 +16,26 @@
  */
 
 /**
- * Log into Google Analytics using email/password + OneLogin SSO.
- * Navigates to analytics.google.com and works through all login screens.
+ * Log into a Google property using email/password + optional OneLogin SSO.
  *
  * @param {import('playwright').Page} page
  * @param {{ google_email: string, google_password: string, sso_username: string, sso_password: string }} credentials
- * @throws if login does not reach analytics.google.com after 15 attempts
+ * @param {string} [targetUrl] - Google property to land on (default: analytics.google.com)
+ * @throws if login does not reach the target after 15 attempts
  */
-async function loginToGoogle(page, { google_email, google_password, sso_username, sso_password }) {
-  console.log(`🔐 Logging into Google as ${google_email}...`);
+async function loginToGoogle(page, { google_email, google_password, sso_username, sso_password }, targetUrl = "https://analytics.google.com") {
+  // Strip hash fragment for success-check — hash is not part of the origin
+  const targetOrigin = targetUrl.split("#")[0].replace(/\/$/, "");
+  console.log(`🔐 Logging into Google as ${google_email} (target: ${targetOrigin})...`);
 
-  await page.goto("https://analytics.google.com", { waitUntil: "domcontentloaded" });
+  await page.goto(targetUrl, { waitUntil: "domcontentloaded" });
 
   for (let i = 0; i < 15; i++) {
     const url = page.url();
 
-    // ── Success: reached Analytics ─────────────────────────────────────────
-    if (url.startsWith("https://analytics.google.com")) {
-      console.log("✅ Logged into Google Analytics");
+    // ── Success: reached target ────────────────────────────────────────────
+    if (url.startsWith(targetOrigin)) {
+      console.log(`✅ Logged in — reached ${targetOrigin}`);
       return;
     }
 
@@ -108,8 +110,8 @@ async function loginToGoogle(page, { google_email, google_password, sso_username
     await page.waitForTimeout(1000);
   }
 
-  // Final check — if we're still not on Analytics, throw
-  if (!page.url().startsWith("https://analytics.google.com")) {
+  // Final check — if we're still not on the target, throw
+  if (!page.url().startsWith(targetOrigin)) {
     throw new Error(`Login failed — stuck at: ${page.url()}`);
   }
 }

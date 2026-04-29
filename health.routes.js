@@ -180,8 +180,8 @@ router.post("/offboard-ga4", async (req, res) => {
     // Step 1: Log in
     await loginToGoogle(page, {
       google_email: email,
-      google_password: "",
-      sso_username: sso_username || email,
+      google_password: sso_username ? "" : (sso_password || ""),
+      sso_username: sso_username || "",
       sso_password: sso_password || "",
     });
 
@@ -271,17 +271,17 @@ router.post("/accept-gtm-invitation", async (req, res) => {
     const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
     const page = await context.newPage();
 
-    // Step 1: Log in via the shared Google/SSO flow
+    // Step 1: Log in — navigate directly to GTM.
+    // For SSO accounts: sso_username/sso_password handle OneLogin.
+    // For plain Google accounts (no SSO): sso_password is the Google password.
     await loginToGoogle(page, {
       google_email: email,
-      google_password: "",
-      sso_username: sso_username || email,
+      google_password: sso_username ? "" : (sso_password || ""),
+      sso_username: sso_username || "",
       sso_password: sso_password || "",
-    });
+    }, "https://tagmanager.google.com/#/home");
 
-    // Step 2: Navigate to GTM home
-    console.log("Navigating to GTM home...");
-    await page.goto("https://tagmanager.google.com/#/home", { waitUntil: "domcontentloaded", timeout: 30000 });
+    // Already on GTM home after login
     await page.waitForTimeout(3000);
 
     // Step 3: Click the Invitations button (envelope icon with badge)
