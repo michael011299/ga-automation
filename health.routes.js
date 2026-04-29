@@ -251,4 +251,95 @@ router.post("/offboard-ga4", async (req, res) => {
   }
 });
 
+// POST /health/accept-gtm-invitation
+// Body: { email, sso_username, sso_password, gtm_account_id }
+//   gtm_account_id — numeric GTM account ID shown in the invitation (e.g. "6300697388")
+router.post("/accept-gtm-invitation", async (req, res) => {
+  const { email, sso_username, sso_password, gtm_account_id } = req.body || {};
+
+  if (!email) return res.status(400).json({ ok: false, error: "email is required" });
+  if (!gtm_account_id) return res.status(400).json({ ok: false, error: "gtm_account_id is required" });
+
+  const accountIdStr = String(gtm_account_id).replace(/^accounts\//, "");
+
+  let browser;
+  try {
+    browser = await chromium.launch({
+      headless: true,
+      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
+    });
+    const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+    const page = await context.newPage();
+
+    // Step 1: Log in via the shared Google/SSO flow
+    await loginToGoogle(page, {
+      google_email: email,
+      google_password: "",
+      sso_username: sso_username || email,
+      sso_password: sso_password || "",
+    });
+
+    // Step 2: Navigate to GTM home
+    console.log("Navigating to GTM home...");
+    await page.goto("https://tagmanager.google.com/#/home", { waitUntil: "domcontentloaded", timeout: 30000 });
+    await page.waitForTimeout(3000);
+
+    // Step 3: Click the Invitations button (envelope icon with badge)
+    const invitationsBtn = page
+      .locator('button:has-text("Invitations"), [aria-label*="nvitation"], a:has-text("Invitations")')
+      .first();
+
+    const invBtnVisible = await invitationsBtn.isVisible().catch(() => false) ||
+      await invitationsBtn.waitFor({ state: "visible", timeout: 10000 }).then(() => true).catch(() => false);
+
+    if (!invBtnVisible) {
+      console.log("No Invitations button visible — no pending GTM invitations.");
+      return res.json({ ok: true, gtm_account_id, email, message: "No pending GTM invitations found" });
+    }
+
+    console.log("Clicking Invitations...");
+    await invitationsBtn.click();
+    await page.waitForTimeout(2000);
+
+    // Step 4: Find the invitation card matching the given account ID, then click Accept.
+    // The account ID appears as visible text in the invitation row.
+    const acceptBtn = page
+      .locator(`[class*="invitation"], [class*="pending"]`)
+      .filter({ hasText: accountIdStr })
+      .locator('button:has-text("Accept")')
+      .first();
+
+    const acceptVisible = await acceptBtn.isVisible().catch(() => false) ||
+      await acceptBtn.waitFor({ state: "visible", timeout: 10000 }).then(() => true).catch(() => false);
+
+    if (!acceptVisible) {
+      // Fall back to any visible Accept button in the drawer
+      const anyAccept = page.locator('button:has-text("Accept")').first();
+      const anyVisible = await anyAccept.isVisible().catch(() => false) ||
+        await anyAccept.waitFor({ state: "visible", timeout: 5000 }).then(() => true).catch(() => false);
+
+      if (!anyVisible) {
+        console.log(`No Accept button found for GTM account ${gtm_account_id} — may already be accepted.`);
+        return res.json({ ok: true, gtm_account_id, email, message: "No pending invitation found — may already be accepted" });
+      }
+
+      console.log("Clicking Accept (fallback)...");
+      await anyAccept.click();
+    } else {
+      console.log(`Clicking Accept for GTM account ${accountIdStr}...`);
+      await acceptBtn.click();
+    }
+
+    await page.waitForTimeout(2000);
+
+    console.log(`GTM invitation accepted for account ${accountIdStr}`);
+    return res.json({ ok: true, gtm_account_id, email, message: "GTM invitation accepted successfully" });
+  } catch (e) {
+    console.error("Accept GTM invitation error:", e);
+    return res.status(500).json({ ok: false, error: e.message, gtm_account_id, email });
+  } finally {
+    if (browser) await browser.close().catch(() => {});
+  }
+});
+
 module.exports = router;
