@@ -40,16 +40,20 @@ async function loginToGoogle(page, { google_email, google_password, sso_username
     }
 
     // ── Email input ────────────────────────────────────────────────────────
-    if ((await page.locator('input[type="email"]:visible').count()) > 0) {
-      await page.fill('input[type="email"]:visible', google_email);
+    const emailInput = page.locator('input[type="email"], input#identifierId').first();
+    if (await emailInput.isVisible({ timeout: 500 }).catch(() => false)) {
+      await emailInput.click({ timeout: 5000 }).catch(() => {});
+      await emailInput.fill(google_email, { timeout: 10000 });
       await page.keyboard.press("Enter");
       await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 10000 }).catch(() => {});
       continue;
     }
 
     // ── Password input ─────────────────────────────────────────────────────
-    if ((await page.locator('input[name="Passwd"]:visible').count()) > 0) {
-      await page.fill('input[name="Passwd"]:visible', google_password);
+    const passwdInput = page.locator('input[name="Passwd"], input[type="password"]').first();
+    if (await passwdInput.isVisible({ timeout: 500 }).catch(() => false)) {
+      await passwdInput.click({ timeout: 5000 }).catch(() => {});
+      await passwdInput.fill(google_password, { timeout: 10000 });
       await page.keyboard.press("Enter");
       await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 10000 }).catch(() => {});
       continue;
