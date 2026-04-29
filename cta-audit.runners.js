@@ -496,7 +496,7 @@ async function extractWhatsApp(page, pageUrl) {
         '[onclick*="wa.me"], [onclick*="whatsapp"], [data-href*="wa.me"], [data-href*="whatsapp"], [data-url*="wa.me"], [data-url*="whatsapp"], [data-link*="wa.me"], [data-link*="whatsapp"]',
       )
       .forEach((el) => {
-        if (el.tagName === "A") return; // already handled above
+        if (el.tagName === "A") return;
         const src =
           el.getAttribute("onclick") ||
           el.getAttribute("data-href") ||
@@ -507,6 +507,50 @@ async function extractWhatsApp(page, pageUrl) {
         if (urlMatch) pushLink(urlMatch[0], el);
       });
 
+    // 2b. Plugins that store just the phone number in a data attribute and build
+    //     the wa.me URL in JavaScript (e.g. Joinchat, Click to Chat, WP-Whatsapp)
+    document
+      .querySelectorAll(
+        '[data-phone], [data-number], [data-whatsapp], [data-wa-phone], [data-wa-number]',
+      )
+      .forEach((el) => {
+        const rawNum =
+          el.getAttribute("data-phone") ||
+          el.getAttribute("data-number") ||
+          el.getAttribute("data-whatsapp") ||
+          el.getAttribute("data-wa-phone") ||
+          el.getAttribute("data-wa-number") ||
+          "";
+        const digits = rawNum.replace(/\D/g, "");
+        if (digits.length >= 8) {
+          const syntheticHref = `https://wa.me/${digits}`;
+          pushLink(syntheticHref, el);
+        }
+      });
+
+    // 2c. Fixed/sticky elements that contain "whatsapp" anywhere in their
+    //     attributes or visible text — last-resort catch for custom implementations
+    document.querySelectorAll("a, button, div, span").forEach((el) => {
+      const pos = window.getComputedStyle(el).position;
+      if (pos !== "fixed" && pos !== "sticky") return;
+      const allAttrs = [...el.attributes].map(a => a.value).join(" ").toLowerCase();
+      const text = (el.textContent || "").toLowerCase();
+      const ariaLabel = (el.getAttribute("aria-label") || "").toLowerCase();
+      if (!(allAttrs.includes("whatsapp") || text.includes("whatsapp") || ariaLabel.includes("whatsapp"))) return;
+      // Only process if we haven't already captured this element via href
+      if (el.tagName === "A") {
+        const href = el.getAttribute("href") || "";
+        if (href.includes("wa.me") || href.includes("whatsapp")) return; // already in pass 1
+      }
+      // Try to extract a phone number from any attribute
+      const combined = [...el.attributes].map(a => a.value).join(" ");
+      const numMatch = combined.match(/\b(\+?[0-9]{7,15})\b/);
+      if (numMatch) {
+        const digits = numMatch[1].replace(/\D/g, "");
+        pushLink(`https://wa.me/${digits}`, el);
+      }
+    });
+
     // 3. Widget detection — broader class/id patterns used by popular WP plugins
     const hasWidget =
       !!document.querySelector('script[src*="whatsapp"]') ||
@@ -514,7 +558,8 @@ async function extractWhatsApp(page, pageUrl) {
       !!document.querySelector(
         '[class*="whatsapp"],[id*="whatsapp"],[class*="wts-chat"],[class*="wwa-btn"],' +
           '[class*="wa-chat"],[class*="wp-whatsapp"],[class*="whatshelp"],' +
-          '[class*="wpwl-"],[id*="wpwl-"],[class*="tawkto-whatsapp"]',
+          '[class*="wpwl-"],[id*="wpwl-"],[class*="joinchat"],[class*="click-to-chat"],' +
+          '[class*="ctc-btn"],[class*="floating-whatsapp"],[id*="joinchat"]',
       );
 
     return { links, has_widget: hasWidget };
@@ -3187,75 +3232,94 @@ function classifyServiceIntent(pages) {
 // Location Intelligence
 // ---------------------------------------------------------------------------
 
-const UK_PLACES = [
-  'London','Birmingham','Manchester','Leeds','Liverpool','Sheffield','Bristol',
-  'Edinburgh','Glasgow','Cardiff','Belfast','Newcastle','Nottingham','Southampton',
-  'Leicester','Coventry','Bradford','Plymouth','Swansea','Aberdeen',
-  'Dundee','York','Oxford','Cambridge','Brighton','Exeter','Norwich',
-  'Chester','Milton Keynes','Northampton','Luton','Guildford',
-  'Peterborough','Wolverhampton','Sunderland','Middlesbrough',
-  'Wigan','Salford','Oldham','Rochdale','Stockport','Huddersfield','Halifax',
-  'Wakefield','Barnsley','Rotherham','Doncaster','Grimsby','Hull','Blackpool',
-  'Blackburn','Burnley','Lancaster','Carlisle','Inverness',
-  'Stirling','Wrexham','Newport','Gloucester','Worcester','Hereford','Ipswich',
-  'Colchester','Chelmsford','Basildon','Southend','Slough','Windsor','Woking',
-  'Crawley','Hastings','Eastbourne','Bournemouth','Poole','Weymouth','Taunton',
-  'Truro','Torquay','Yorkshire','Lancashire','Kent','Surrey','Essex',
-  'Devon','Cornwall','Hampshire','Berkshire','Oxfordshire','Gloucestershire',
-  'Staffordshire','Lincolnshire','Norfolk','Suffolk','Cambridgeshire',
-  'Hertfordshire','Buckinghamshire','Wiltshire','Somerset','Cumbria','Cheshire',
-  'Merseyside','West Midlands','East Midlands','West Yorkshire','South Yorkshire',
-  'North Yorkshire','County Durham','Northumberland','Dorset','Worcestershire',
-  'Warwickshire','Leicestershire','Northamptonshire','Shropshire','Herefordshire',
+// URL slug patterns that indicate a dedicated location/area page.
+// Capture group 1 is the place slug.
+const LOCATION_URL_PATTERNS = [
+  // /service-in-place/ or /service-in-place-2/ — most common UK local SEO pattern
+  /-in-([a-z][a-z0-9-]+?)(?:-\d+)?(?:\/|$)/i,
+  // /locations/place/ or /location/place/
+  /\/locations?\/([a-z][a-z0-9-]+?)(?:\/|$)/i,
+  // /areas/place/ or /area/place/
+  /\/areas?\/([a-z][a-z0-9-]+?)(?:\/|$)/i,
+  // /service-area/place/ or /service-areas/place/
+  /\/service-areas?\/([a-z][a-z0-9-]+?)(?:\/|$)/i,
 ];
+
+// Common path segments that look like place slugs but are service/page words.
+const NOT_A_PLACE = new Set([
+  'us','you','contact','services','repairs','mobile','accident','alloy','wheel',
+  'diamond','colour','changes','smart','dent','scratch','scuff','lease','return',
+  'sale','prep','work','boat','jet','ski','about','faqs','reviews','privacy',
+  'cookie','policy','break','detailing','ceramic','coating','customising',
+  'refurbishments','inspection','bowden',
+]);
+
+function slugToTitle(slug) {
+  return slug.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
 
 function extractLocationIntelligence(pages, siteOrigin) {
   const POSTCODE_RE = /\b([A-Z]{1,2}[0-9][A-Z0-9]?\s*[0-9][A-Z]{2})\b/g;
 
-  const postcodes    = new Set();
-  const citiesFound  = new Set();
+  const postcodes   = new Set();
+  const servedAreas = new Set();
 
-  // Only scan homepage and contact pages — other pages are too noisy
+  // Extract served areas from crawled URL slugs (all pages, not just homepage/contact).
+  // This is the most reliable source — the site itself defines which areas it serves
+  // by having dedicated pages, regardless of whether they appear in a predefined list.
+  for (const page of pages) {
+    const path = (page.url || '')
+      .replace(/^https?:\/\/[^/]+/, '')
+      .replace(/#.*$/, '')
+      .toLowerCase();
+
+    if (!path || path === '/') continue;
+
+    for (const re of LOCATION_URL_PATTERNS) {
+      const m = path.match(re);
+      if (m) {
+        const slug = m[1];
+        // Skip if the slug is a common service/page word, not a place name
+        if (NOT_A_PLACE.has(slug)) continue;
+        servedAreas.add(slugToTitle(slug));
+        break;
+      }
+    }
+  }
+
+  // Check for a /locations/ hub page
+  const hasLocationHub = pages.some(p => {
+    const path = (p.url || '')
+      .replace(/^https?:\/\/[^/]+/, '')
+      .replace(/#.*$/, '')
+      .toLowerCase();
+    return path === '/locations' || path === '/locations/';
+  });
+
+  // Extract postcodes from homepage + contact pages only
   const targetPages = pages.filter(p => p.label === 'contact' || p.label === 'homepage');
-
   for (const page of targetPages) {
     const text = page.page_text || '';
     if (!text) continue;
-
-    // Postcodes
     const upper = text.toUpperCase();
     let m;
     POSTCODE_RE.lastIndex = 0;
     while ((m = POSTCODE_RE.exec(upper)) !== null) {
       postcodes.add(m[1].replace(/\s+/, ' ').trim());
     }
-
-    // City/county mentions
-    for (const place of UK_PLACES) {
-      const re = new RegExp(`\\b${place.replace(/[\s-]/g, '[\\s\\-]')}\\b`, 'i');
-      if (re.test(text)) citiesFound.add(place);
-    }
   }
 
-  // Compare found places against crawled URL paths.
-  // A location page is only counted if the city slug appears as a distinct URL
-  // path segment (surrounded by /, -, or end of path) to avoid false positives
-  // from city names embedded in business names or other unrelated URL segments.
-  const allUrls = pages.map(p => (p.url || '').toLowerCase());
-  const locationPageGaps = [...citiesFound].filter(city => {
-    const slug = city.toLowerCase().replace(/\s+/g, '-');
-    return !allUrls.some(url => {
-      const path = url.replace(/^https?:\/\/[^/]+/, '');
-      return new RegExp(`(^|[/-])${slug.replace(/-/g, '[\\-_]')}([/-]|$)`).test(path);
-    });
-  });
-  const hasAreaPages = citiesFound.size > 0 && locationPageGaps.length < citiesFound.size;
+  const areaList = [...servedAreas].sort();
 
   return {
-    postcodes:          [...postcodes].slice(0, 20),
-    cities_mentioned:   [...citiesFound],
-    location_page_gaps: locationPageGaps,
-    has_area_pages:     hasAreaPages,
+    postcodes:           [...postcodes].slice(0, 20),
+    served_areas:        areaList,
+    has_area_pages:      areaList.length > 0,
+    location_page_count: areaList.length,
+    has_location_hub:    hasLocationHub,
+    // kept for backward compat with any external scripts
+    cities_mentioned:    areaList,
+    location_page_gaps:  [],
   };
 }
 

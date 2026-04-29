@@ -324,8 +324,6 @@ function buildAuditReport(audit, clientName) {
     const af_        = quality.above_fold   || {};
     const ff_        = quality.form_friction || {};
     const bj_        = quality.booking_journey || {};
-    const locGaps    = (locationIntel.location_page_gaps || []).length;
-
     if (urgency === 'high' && !af_.has_phone) {
       recs.push({ text: 'Critical: Move click-to-call to the top-right header. Emergency users abandon within 3 seconds of not finding a phone number.', colour: COLOUR.red });
     }
@@ -338,8 +336,8 @@ function buildAuditReport(audit, clientName) {
     if (urgency === 'low' && (bj_.ctas_found || 0) === 0) {
       recs.push({ text: 'Nurturing Gap: Users researching scheduled services need 8–10 touches before converting. Add a lead magnet (e.g. buyer\'s guide) to capture emails before the hard sell.', colour: COLOUR.black });
     }
-    if (locGaps > 0) {
-      recs.push({ text: `Local SEO: ${locGaps} service area(s) mentioned in content but no dedicated location page found. Adding /[service]-in-[city]/ pages could improve local search visibility.`, colour: COLOUR.amber });
+    if (!locationIntel.has_area_pages) {
+      recs.push({ text: 'Local SEO: No dedicated location pages detected. Creating /[service]-in-[city]/ pages for each service area could significantly improve local search visibility.', colour: COLOUR.amber });
     }
     if ((bj_.attribution_decay_count || 0) > 0) {
       recs.push({ text: `Attribution Risk: ${bj_.attribution_decay_count} booking CTA(s) pass through 3+ redirects without GA4 link decoration. Conversions are likely misattributed as Direct traffic.`, colour: COLOUR.red });
@@ -430,25 +428,27 @@ function buildAuditReport(audit, clientName) {
   spacer();
 
   // ── Local SEO Opportunities ───────────────────────────────────────────────
-  const liPostcodes = locationIntel.postcodes || [];
-  const liCities    = locationIntel.cities_mentioned || [];
-  const liGaps      = locationIntel.location_page_gaps || [];
-  if (liPostcodes.length > 0 || liCities.length > 0) {
-    h2(sectionTitle('Local SEO Opportunities'));
-    sub('Geographic signals detected in page content compared against the site URL structure.');
+  const liPostcodes  = locationIntel.postcodes    || [];
+  const liAreas      = locationIntel.served_areas || locationIntel.cities_mentioned || [];
+  const liHasHub     = locationIntel.has_location_hub;
+  const liHasPages   = locationIntel.has_area_pages;
+  const liPageCount  = locationIntel.location_page_count || liAreas.length;
+
+  if (liPostcodes.length > 0 || liAreas.length > 0 || liHasPages !== undefined) {
+    h2(sectionTitle('Local SEO'));
+    sub('Service area coverage detected from site URL structure.');
     if (liPostcodes.length > 0) {
       line(`Postcodes found: ${liPostcodes.join(', ')}`);
     }
-    if (liCities.length > 0) {
-      line(`Service areas mentioned: ${liCities.join(', ')}`);
-    }
-    if (liGaps.length === 0) {
-      line('Dedicated location pages: Detected — site appears to have area-specific pages.', { colour: COLOUR.green });
+    if (liHasPages) {
+      line(`Dedicated location pages: ${liPageCount} area(s) covered`, { colour: COLOUR.green });
+      if (liHasHub) line('  Location hub page detected (/locations/)');
+      if (liAreas.length > 0) {
+        line(`  Areas: ${liAreas.join(', ')}`);
+      }
     } else {
-      line(`Dedicated location pages: None found for ${liGaps.length} area(s).`, { colour: COLOUR.red });
-      liGaps.forEach(city => {
-        line(`  - No page found for "${city}" — consider adding /${city.toLowerCase().replace(/\s+/g, '-')}-[service]/ pages.`, { colour: COLOUR.amber });
-      });
+      line('Dedicated location pages: None detected', { colour: COLOUR.red });
+      line('  Consider creating /[service]-in-[city]/ pages for each area you serve.');
     }
     spacer();
   }
