@@ -174,13 +174,13 @@ const SOCIAL_DOMAINS = [
 // Placeholder / fake GTM IDs that appear in themes, starter templates, or error pages.
 // These are never real container IDs — exclude them from detected_gtm_ids.
 const FAKE_GTM_ID_PATTERNS = [
-  /^GTM-[X]+$/i,          // GTM-XXXXXXX (template placeholders)
-  /^GTM-INIT$/i,          // GTM-INIT
-  /^GTM-SCRIPT$/i,        // GTM-SCRIPT
-  /^GTM-TAG$/i,           // GTM-TAG
-  /^GTM-CODE$/i,          // GTM-CODE
-  /^GTM-ID$/i,            // GTM-ID
-  /^GTM-[0-9]{1,3}$/i,   // GTM-1, GTM-12 (too short to be real)
+  /^GTM-[X]+$/i, // GTM-XXXXXXX (template placeholders)
+  /^GTM-INIT$/i, // GTM-INIT
+  /^GTM-SCRIPT$/i, // GTM-SCRIPT
+  /^GTM-TAG$/i, // GTM-TAG
+  /^GTM-CODE$/i, // GTM-CODE
+  /^GTM-ID$/i, // GTM-ID
+  /^GTM-[0-9]{1,3}$/i, // GTM-1, GTM-12 (too short to be real)
 ];
 
 // Real GTM IDs are GTM- followed by exactly 7–8 alphanumeric chars.
@@ -432,7 +432,8 @@ function classifyAndParseBeacon(reqUrl, postData) {
   if (u.includes("/g/collect") || u.includes("/r/collect") || u.includes("/mp/collect")) type = "GA4";
   else if (u.includes("gtag/js")) type = "GTAG";
   else if (u.includes("google-analytics.com")) type = "GA";
-  else if (/googletagmanager\.com\/gtm\.js/.test(u) || /\/gtm\.js\?(?:[^#]*&)?id=GTM-[A-Z0-9]{4,}/i.test(u)) type = "GTM"; // second clause catches server-side GTM proxy on custom domain
+  else if (/googletagmanager\.com\/gtm\.js/.test(u) || /\/gtm\.js\?(?:[^#]*&)?id=GTM-[A-Z0-9]{4,}/i.test(u))
+    type = "GTM"; // second clause catches server-side GTM proxy on custom domain
   if (type === "OTHER") return null;
 
   let event_name = null;
@@ -480,7 +481,8 @@ function classifyAndParseBeacon(reqUrl, postData) {
       const extracted = {};
       // Standard GA4 Measurement Protocol fields
       for (const key of ["en", "tid", "cid", "sid", "sct", "_et", "dl", "dt", "dr"]) {
-        const v = p.get(key); if (v) extracted[key] = v;
+        const v = p.get(key);
+        if (v) extracted[key] = v;
       }
       // Event parameters (ep.XXX) and user properties (up.XXX)
       for (const [k, v] of p.entries()) {
@@ -530,7 +532,7 @@ async function handleCookieConsent(page) {
   for (const pattern of nativePatterns) {
     try {
       const btn = page.getByRole("button", { name: pattern });
-      if (await btn.count() > 0) {
+      if ((await btn.count()) > 0) {
         await btn.first().click({ timeout: 1500, force: true });
         out.accepted = true;
         logDebug("🍪 Cookie consent accepted (native click)");
@@ -725,7 +727,8 @@ async function detectTrackingSetup(page, beacons) {
         if (typeof str !== "string" || !str) return;
         for (const m of str.toUpperCase().matchAll(/GTM-[A-Z0-9]{4,}/g)) found.gtm.push(m[0]);
         // Require ≥7 chars after dash (rules out G-1234, G-RECAPTCHA etc.)
-        for (const m of str.toUpperCase().matchAll(/\b(?:G|GT)-(?=[A-Z0-9]*[0-9])[A-Z0-9]{7,}\b/g)) found.ga4.push(m[0]);
+        for (const m of str.toUpperCase().matchAll(/\b(?:G|GT)-(?=[A-Z0-9]*[0-9])[A-Z0-9]{7,}\b/g))
+          found.ga4.push(m[0]);
       }
       for (const s of document.querySelectorAll("script")) {
         extract(s.src);
@@ -794,15 +797,21 @@ async function detectTrackingSetup(page, beacons) {
     });
 
     if (scan) {
-      scan.gtm.forEach((id) => { if (isValidGtmId(id)) gtmIds.add(id); });
-      scan.ga4.forEach((id) => { if (isValidGa4Id(id)) ga4Ids.add(id); });
+      scan.gtm.forEach((id) => {
+        if (isValidGtmId(id)) gtmIds.add(id);
+      });
+      scan.ga4.forEach((id) => {
+        if (isValidGa4Id(id)) ga4Ids.add(id);
+      });
       if (scan.gtmStartFired) gtmStartFired = true;
       if (scan.gtmIframe) gtmIframe = true;
     }
 
     for (const b of beacons) {
       const u = b.url.toUpperCase();
-      for (const m of u.matchAll(/GTM-[A-Z0-9]{4,}/g)) { if (isValidGtmId(m[0])) gtmIds.add(m[0]); }
+      for (const m of u.matchAll(/GTM-[A-Z0-9]{4,}/g)) {
+        if (isValidGtmId(m[0])) gtmIds.add(m[0]);
+      }
       if (b.type === "GA4" && b.tid && isValidGa4Id(b.tid)) ga4Ids.add(b.tid.toUpperCase());
       try {
         const params = new URL(b.url).searchParams;
@@ -830,8 +839,12 @@ async function detectTrackingSetup(page, beacons) {
       try {
         const html = await page.content();
         if (html) {
-          for (const m of html.toUpperCase().matchAll(/GTM-[A-Z0-9]{4,}/g)) { if (isValidGtmId(m[0])) gtmIds.add(m[0]); }
-          for (const m of html.toUpperCase().matchAll(/\b(?:G|GT)-(?=[A-Z0-9]*[0-9])[A-Z0-9]{7,}\b/g)) { if (isValidGa4Id(m[0])) ga4Ids.add(m[0]); }
+          for (const m of html.toUpperCase().matchAll(/GTM-[A-Z0-9]{4,}/g)) {
+            if (isValidGtmId(m[0])) gtmIds.add(m[0]);
+          }
+          for (const m of html.toUpperCase().matchAll(/\b(?:G|GT)-(?=[A-Z0-9]*[0-9])[A-Z0-9]{7,}\b/g)) {
+            if (isValidGa4Id(m[0])) ga4Ids.add(m[0]);
+          }
           if (/googletagmanager\.com\/ns\.html/i.test(html)) gtmIframe = true;
           if (/data-src="[^"]*googletagmanager\.com\/gtm\.js/i.test(html)) gtmIframe = true;
           logDebug(`page.content() GTM fallback (attempt ${htmlAttempt + 1}): found ${gtmIds.size} GTM IDs`);
@@ -1275,7 +1288,6 @@ async function testCTAsOnPage(
     const norm = normaliseMailtoHref(ctaObj.href);
     if (norm) uniqueEmails.add(norm);
   }
-
 }
 
 // ─────────────────────────────────────────────
@@ -1507,30 +1519,32 @@ async function testFirstPartyForm(page, beacons, pageUrl, formMeta) {
     if (formMeta.isFrame) return { status: "NOT_TESTED", reason: "Form is inside a cross-origin iframe" };
     const formLocator = page.locator("form").nth(formMeta.index);
     if (!(await formLocator.count())) return { status: "NOT_TESTED", reason: "Form not found in DOM" };
-    const botDetected = await safeEvaluate(
-      page,
-      () => {
-        // CAPTCHA widgets
-        if (document.querySelector(
+    const botDetected = await safeEvaluate(page, () => {
+      // CAPTCHA widgets
+      if (
+        document.querySelector(
           "iframe[src*='recaptcha'],iframe[src*='turnstile'],iframe[src*='hcaptcha']," +
-          ".g-recaptcha,.h-captcha,[data-sitekey],[data-captcha]," +
-          "div[class*='recaptcha'],div[class*='captcha'],div[id*='captcha']," +
-          "script[src*='recaptcha'],script[src*='hcaptcha'],script[src*='turnstile']",
-        )) return "CAPTCHA";
-        // Cloudflare challenge / interstitial page
-        if (
-          document.querySelector("#challenge-form,#cf-challenge-running,#cf-error-details") ||
-          /checking your browser|enable javascript and cookies|cloudflare ray id/i.test(document.body?.innerText || "")
-        ) return "Cloudflare";
-        // Generic "bot detected" / access denied pages
-        if (
-          /access denied|403 forbidden|you have been blocked|bot detected|automated access/i.test(
-            document.title + " " + (document.body?.innerText || "").slice(0, 500)
-          )
-        ) return "AccessDenied";
-        return null;
-      },
-    );
+            ".g-recaptcha,.h-captcha,[data-sitekey],[data-captcha]," +
+            "div[class*='recaptcha'],div[class*='captcha'],div[id*='captcha']," +
+            "script[src*='recaptcha'],script[src*='hcaptcha'],script[src*='turnstile']",
+        )
+      )
+        return "CAPTCHA";
+      // Cloudflare challenge / interstitial page
+      if (
+        document.querySelector("#challenge-form,#cf-challenge-running,#cf-error-details") ||
+        /checking your browser|enable javascript and cookies|cloudflare ray id/i.test(document.body?.innerText || "")
+      )
+        return "Cloudflare";
+      // Generic "bot detected" / access denied pages
+      if (
+        /access denied|403 forbidden|you have been blocked|bot detected|automated access/i.test(
+          document.title + " " + (document.body?.innerText || "").slice(0, 500),
+        )
+      )
+        return "AccessDenied";
+      return null;
+    });
     if (botDetected) return { status: "FAIL", reason: `Bot Protection (${botDetected})` };
 
     // Check for multi-step form (Next/Continue button or step-progress widgets)
@@ -1710,19 +1724,19 @@ async function testAllFormsOnPage(page, beacons, pageUrl) {
 
 // Map of GTM tag function names to human-readable labels
 const GTM_TAG_TYPES = {
-  "__googtag": "Google Tag (gtag)",
-  "__gaawe":   "GA4 Event",
-  "__sp":      "GA4 Configuration",
-  "__ua":      "Universal Analytics",
-  "__html":    "Custom HTML",
-  "__gclidw":  "Google Ads Conversion Linking",
-  "__awct":    "Google Ads Conversion Tracking",
-  "__flc":     "Floodlight Counter",
-  "__fls":     "Floodlight Sales",
-  "__bzi":     "Bizible Insights",
-  "__fb":      "Meta Pixel",
-  "__linkedin_insight": "LinkedIn Insight Tag",
-  "__msft_uet": "Microsoft/Bing UET",
+  __googtag: "Google Tag (gtag)",
+  __gaawe: "GA4 Event",
+  __sp: "GA4 Configuration",
+  __ua: "Universal Analytics",
+  __html: "Custom HTML",
+  __gclidw: "Google Ads Conversion Linking",
+  __awct: "Google Ads Conversion Tracking",
+  __flc: "Floodlight Counter",
+  __fls: "Floodlight Sales",
+  __bzi: "Bizible Insights",
+  __fb: "Meta Pixel",
+  __linkedin_insight: "LinkedIn Insight Tag",
+  __msft_uet: "Microsoft/Bing UET",
 };
 
 /**
@@ -1755,9 +1769,7 @@ async function downloadGtmContainerConfig(gtmId) {
     const eventNames = [...js.matchAll(/"vtp_eventName":"([^"]+)"/g)].map((m) => m[1]);
 
     // ── Measurement IDs referenced in the container ──
-    const measurementIds = [...new Set(
-      [...js.matchAll(/G-[A-Z0-9]{7,}/g)].map((m) => m[0]).filter(isValidGa4Id)
-    )];
+    const measurementIds = [...new Set([...js.matchAll(/G-[A-Z0-9]{7,}/g)].map((m) => m[0]).filter(isValidGa4Id))];
 
     // ── Container version (rough extract) ──
     const verMatch = js.match(/"version":"(\d+)"/);
@@ -1882,9 +1894,15 @@ async function trackingHealthCheckSiteInternal(url) {
     // on a Linux server leaks and that Cloudflare's fingerprinting checks.
     await page.addInitScript(() => {
       // Remove Playwright's internal automation globals that can leak through
-      try { delete window.__playwright; } catch {}
-      try { delete window.__pw_manual; } catch {}
-      try { delete window.playwrightBinding; } catch {}
+      try {
+        delete window.__playwright;
+      } catch {}
+      try {
+        delete window.__pw_manual;
+      } catch {}
+      try {
+        delete window.playwrightBinding;
+      } catch {}
 
       // hardwareConcurrency — headless on low-CPU VMs often returns 0 or 1
       try {
@@ -1902,17 +1920,17 @@ async function trackingHealthCheckSiteInternal(url) {
 
       // screen dimensions — viewport is 1920×1080 but screen properties can differ
       try {
-        Object.defineProperty(screen, "availWidth",  { get: () => 1920 });
+        Object.defineProperty(screen, "availWidth", { get: () => 1920 });
         Object.defineProperty(screen, "availHeight", { get: () => 1040 }); // taskbar offset
-        Object.defineProperty(screen, "width",       { get: () => 1920 });
-        Object.defineProperty(screen, "height",      { get: () => 1080 });
-        Object.defineProperty(screen, "colorDepth",  { get: () => 24 });
-        Object.defineProperty(screen, "pixelDepth",  { get: () => 24 });
+        Object.defineProperty(screen, "width", { get: () => 1920 });
+        Object.defineProperty(screen, "height", { get: () => 1080 });
+        Object.defineProperty(screen, "colorDepth", { get: () => 24 });
+        Object.defineProperty(screen, "pixelDepth", { get: () => 24 });
       } catch {}
 
       // window.outerWidth / outerHeight — should match viewport in a real browser
       try {
-        Object.defineProperty(window, "outerWidth",  { get: () => 1920 });
+        Object.defineProperty(window, "outerWidth", { get: () => 1920 });
         Object.defineProperty(window, "outerHeight", { get: () => 1080 });
       } catch {}
 
@@ -1931,10 +1949,12 @@ async function trackingHealthCheckSiteInternal(url) {
           const _orig = navigator.mediaDevices.enumerateDevices.bind(navigator.mediaDevices);
           navigator.mediaDevices.enumerateDevices = () =>
             _orig().then((devices) =>
-              devices.length > 0 ? devices : [
-                { deviceId: "default", groupId: "default", kind: "audioinput",  label: "" },
-                { deviceId: "default", groupId: "default", kind: "audiooutput", label: "" },
-              ]
+              devices.length > 0
+                ? devices
+                : [
+                    { deviceId: "default", groupId: "default", kind: "audioinput", label: "" },
+                    { deviceId: "default", groupId: "default", kind: "audiooutput", label: "" },
+                  ],
             );
         }
       } catch {}
@@ -1949,12 +1969,17 @@ async function trackingHealthCheckSiteInternal(url) {
       const _nativePush = Array.prototype.push;
       function spyPush(...args) {
         for (const a of args) {
-          try { window.__dlSpy.push(JSON.parse(JSON.stringify(a))); } catch {}
+          try {
+            window.__dlSpy.push(JSON.parse(JSON.stringify(a)));
+          } catch {}
         }
         return _nativePush.apply(this, args);
       }
       function attachSpy(arr) {
-        if (arr && !arr.__spied) { arr.push = spyPush; arr.__spied = true; }
+        if (arr && !arr.__spied) {
+          arr.push = spyPush;
+          arr.__spied = true;
+        }
         return arr;
       }
       // Spy on any existing dataLayer
@@ -1963,10 +1988,14 @@ async function trackingHealthCheckSiteInternal(url) {
         Object.defineProperty(window, "dataLayer", {
           configurable: true,
           enumerable: true,
-          get() { return _backing; },
+          get() {
+            return _backing;
+          },
           // GTM's first action is: window.dataLayer = window.dataLayer || []
           // This setter catches that and re-attaches the spy on the new array.
-          set(v) { _backing = attachSpy(v) || v; },
+          set(v) {
+            _backing = attachSpy(v) || v;
+          },
         });
       } catch {}
       // Initialise if not already set
@@ -1982,9 +2011,11 @@ async function trackingHealthCheckSiteInternal(url) {
       const _origGtag = window.gtag;
       Object.defineProperty(window, "gtag", {
         configurable: true,
-        get() { return this._gtag; },
+        get() {
+          return this._gtag;
+        },
         set(fn) {
-          this._gtag = function(...args) {
+          this._gtag = function (...args) {
             // Inject debug_mode into 'config' calls so GA4 uses /debug/mp/collect
             if (args[0] === "config" && typeof args[2] === "undefined") {
               args[2] = { debug_mode: true };
@@ -2035,10 +2066,22 @@ async function trackingHealthCheckSiteInternal(url) {
         // We wait a beat after this for GTM to execute and push gtm.start into dataLayer.
         if (/googletagmanager\.com\/gtm\.js/i.test(req.url())) {
           logDebug("📡 GTM script response received — allowing 500ms for execution");
-          safeWait(500).then(() => {
-            const already = beacons.some((b) => b.type === "GTM" && b.url === req.url());
-            if (!already) beacons.push({ url: req.url(), timestamp: nowIso(), type: "GTM", event_name: null, payload_dump: req.url().toLowerCase(), tid: null, gtmHash: null, params: null });
-          }).catch(() => null);
+          safeWait(500)
+            .then(() => {
+              const already = beacons.some((b) => b.type === "GTM" && b.url === req.url());
+              if (!already)
+                beacons.push({
+                  url: req.url(),
+                  timestamp: nowIso(),
+                  type: "GTM",
+                  event_name: null,
+                  payload_dump: req.url().toLowerCase(),
+                  tid: null,
+                  gtmHash: null,
+                  params: null,
+                });
+            })
+            .catch(() => null);
         }
         // ── Feature 4: GA4 debug validation response ──
         // /debug/mp/collect returns a JSON body with per-event validation messages
@@ -2052,7 +2095,7 @@ async function trackingHealthCheckSiteInternal(url) {
             if (msgs.length > 0) {
               const eventName = req.url().includes("en=")
                 ? new URL(req.url()).searchParams.get("en")
-                : (msgs[0]?.fieldPath || "unknown");
+                : msgs[0]?.fieldPath || "unknown";
               ga4ValidationErrors.push({ event: eventName, messages: msgs });
               logDebug(`⚠️  GA4 debug validation errors for "${eventName}":`, msgs);
             }
@@ -2092,8 +2135,7 @@ async function trackingHealthCheckSiteInternal(url) {
 
     // Second consent pass: for React/SPA sites where the cookie banner mounts AFTER our
     // first attempt (banner rendered by JS that executes after DOMContentLoaded + hydration)
-    if (!(await safeEvaluate(page, () => !!window.google_tag_manager)) &&
-        !beacons.some(b => b.type === "GTM")) {
+    if (!(await safeEvaluate(page, () => !!window.google_tag_manager)) && !beacons.some((b) => b.type === "GTM")) {
       const retryConsent = await handleCookieConsent(page);
       if (retryConsent.accepted) {
         logInfo("🍪 Second consent pass accepted — re-polling for GTM");
@@ -2114,7 +2156,9 @@ async function trackingHealthCheckSiteInternal(url) {
       logInfo(`📦 Downloading GTM container config for ${tracking.gtm[0]}...`);
       results.container_analysis = await downloadGtmContainerConfig(tracking.gtm[0]);
       if (results.container_analysis) {
-        logInfo(`📦 Container v${results.container_analysis.version}: ${results.container_analysis.rawTagCount} tag(s) — ${results.container_analysis.tags.map(t => t.label).join(", ")}`);
+        logInfo(
+          `📦 Container v${results.container_analysis.version}: ${results.container_analysis.rawTagCount} tag(s) — ${results.container_analysis.tags.map((t) => t.label).join(", ")}`,
+        );
       }
     }
 
@@ -2154,7 +2198,11 @@ async function trackingHealthCheckSiteInternal(url) {
           if (innerTracking.has_gtm || innerTracking.has_any_ga4) {
             tracking = innerTracking;
             results.detected_gtm_ids = uniq([...results.detected_gtm_ids, ...innerTracking.gtm]);
-            results.detected_ga4_ids = uniq([...results.detected_ga4_ids, ...innerTracking.ga4, ...innerTracking.unlinked_ga4]);
+            results.detected_ga4_ids = uniq([
+              ...results.detected_ga4_ids,
+              ...innerTracking.ga4,
+              ...innerTracking.unlinked_ga4,
+            ]);
             logInfo(`⚠️  GTM/GA4 detected on inner page — updating tracking state`, { url: page.url() });
             // Run container analysis now that we have an ID
             if (innerTracking.gtm.length > 0 && !results.container_analysis) {
@@ -2186,7 +2234,11 @@ async function trackingHealthCheckSiteInternal(url) {
         if (postCtaTracking.has_gtm || postCtaTracking.has_any_ga4) {
           tracking = postCtaTracking;
           results.detected_gtm_ids = uniq([...results.detected_gtm_ids, ...postCtaTracking.gtm]);
-          results.detected_ga4_ids = uniq([...results.detected_ga4_ids, ...postCtaTracking.ga4, ...postCtaTracking.unlinked_ga4]);
+          results.detected_ga4_ids = uniq([
+            ...results.detected_ga4_ids,
+            ...postCtaTracking.ga4,
+            ...postCtaTracking.unlinked_ga4,
+          ]);
           logInfo(`⚠️  GTM/GA4 confirmed via post-CTA beacons — updating tracking state`);
         }
       }
@@ -2196,13 +2248,13 @@ async function trackingHealthCheckSiteInternal(url) {
     if (!tracking.has_gtm && !tracking.has_any_ga4) {
       results.grade = "Fail";
       results.health_status = "NO_TRACKING";
-      results.health_reasons =
-        `No GTM container or GA4 detected on any of the ${pagesToVisit.length} page(s) visited (including homepage and contact pages). No GTM tag IDs in source, no GTM network requests, no google_tag_manager global object.`;
+      results.health_reasons = `No GTM container or GA4 detected on any of the ${pagesToVisit.length} page(s) visited (including homepage and contact pages). No GTM tag IDs in source, no GTM network requests, no google_tag_manager global object.`;
       results.failure_detail = [
         {
           category: "Google Tag Manager",
           grade_impact: "FAIL",
-          summary: "No GTM container was found on any page. GTM must be installed before any conversion tracking can work.",
+          summary:
+            "No GTM container was found on any page. GTM must be installed before any conversion tracking can work.",
           fix: "Install a Google Tag Manager container. Add the GTM <head> snippet and <body> noscript snippet to every page, then republish.",
         },
       ];
@@ -2419,7 +2471,6 @@ async function trackingHealthCheckSiteInternal(url) {
       });
     }
 
-
     if (results.forms_found > 0 && results.forms_passed === 0) {
       const botBlocked = allFormResults.some((f) => f.reason?.includes("Bot Protection"));
       const allNT = allFormResults.every((f) => f.status === "NOT_TESTED");
@@ -2553,12 +2604,16 @@ async function trackingHealthCheckSiteInternal(url) {
     logInfo(`  GTM IDs    : ${results.detected_gtm_ids.join(", ") || "none"}`);
     logInfo(`  GA4 IDs    : ${results.detected_ga4_ids.join(", ") || "none"}`);
     if (results.container_analysis) {
-      logInfo(`  CONTAINER  : v${results.container_analysis.version} — tags: ${results.container_analysis.tags.map(t => `${t.label}(${t.count})`).join(", ") || "none"}`);
+      logInfo(
+        `  CONTAINER  : v${results.container_analysis.version} — tags: ${results.container_analysis.tags.map((t) => `${t.label}(${t.count})`).join(", ") || "none"}`,
+      );
       if (results.container_analysis.eventNames.length > 0)
         logInfo(`  DL EVENTS  : ${results.container_analysis.eventNames.join(", ")}`);
     }
     if (results.ga4_validation_errors.length > 0)
-      logInfo(`  GA4 ERRORS : ${results.ga4_validation_errors.map(e => `${e.event}(${e.messages.length} issue(s))`).join(", ")}`);
+      logInfo(
+        `  GA4 ERRORS : ${results.ga4_validation_errors.map((e) => `${e.event}(${e.messages.length} issue(s))`).join(", ")}`,
+      );
 
     if (failureDetail.length > 0) {
       logInfo(`\n  ── FAILURES ──`);
@@ -2590,19 +2645,21 @@ async function trackingHealthCheckSiteInternal(url) {
       });
     }
 
-    results.ga4_events_captured = [...new Set(beacons.filter(b => b.type === "GA4" && b.event_name).map(b => b.event_name))];
+    results.ga4_events_captured = [
+      ...new Set(beacons.filter((b) => b.type === "GA4" && b.event_name).map((b) => b.event_name)),
+    ];
 
     // ── Feature 1: harvest dataLayer spy ──
     const dlSpy = await safeEvaluate(page, () => window.__dlSpy || []);
     if (Array.isArray(dlSpy) && dlSpy.length > 0) {
       // Summarise: event name + any event_category / event_action for UA-style pushes
       results.datalayer_events = dlSpy
-        .filter(e => e && (e.event || e["gtm.start"]))
-        .map(e => ({
+        .filter((e) => e && (e.event || e["gtm.start"]))
+        .map((e) => ({
           event: e.event || "gtm.start",
           ...(e.event_category ? { event_category: e.event_category } : {}),
-          ...(e.event_action   ? { event_action:   e.event_action   } : {}),
-          ...(e.event_label    ? { event_label:     e.event_label    } : {}),
+          ...(e.event_action ? { event_action: e.event_action } : {}),
+          ...(e.event_label ? { event_label: e.event_label } : {}),
         }))
         .slice(0, 100); // cap to avoid huge payloads
       logInfo(`📋 dataLayer spy: ${results.datalayer_events.length} event(s) captured`);
@@ -2610,8 +2667,8 @@ async function trackingHealthCheckSiteInternal(url) {
 
     // ── Feature 3: rich GA4 event detail ──
     results.ga4_events_detail = beacons
-      .filter(b => b.type === "GA4" && b.event_name)
-      .map(b => ({
+      .filter((b) => b.type === "GA4" && b.event_name)
+      .map((b) => ({
         event_name: b.event_name,
         measurement_id: b.tid || null,
         gtm_triggered: !!b.gtmHash,
@@ -2631,7 +2688,13 @@ async function trackingHealthCheckSiteInternal(url) {
     return results;
   } catch (error) {
     logInfo(`❌ Fatal error`, { url: targetUrl, error: error.message });
-    return { ...results, grade: "Partial", health_status: "ERROR", health_reasons: `Fatal error: ${error.message}`, duration_ms: Date.now() - _checkStart };
+    return {
+      ...results,
+      grade: "Partial",
+      health_status: "ERROR",
+      health_reasons: `Fatal error: ${error.message}`,
+      duration_ms: Date.now() - _checkStart,
+    };
   } finally {
     if (page) {
       try {

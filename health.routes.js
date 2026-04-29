@@ -171,7 +171,7 @@ router.post("/offboard-ga4", async (req, res) => {
   let browser;
   try {
     browser = await chromium.launch({
-      headless: true,
+      headless: false,
       args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
     });
     const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
