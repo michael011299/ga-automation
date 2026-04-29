@@ -107,6 +107,28 @@ async function loginToGoogle(page, { google_email, google_password, sso_username
       continue;
     }
 
+    // ── "Verify it's you" / challenge/selection screen ────────────────────
+    // Google shows this for unrecognised devices even without 2FA.
+    // Try "Not now", "Skip", or "Try another way" to get past it.
+    if (url.includes("/signin/challenge") || url.includes("/signin/v2/challenge")) {
+      const skipBtn = page
+        .locator('button:has-text("Not now"), button:has-text("Skip"), a:has-text("Not now"), a:has-text("Skip")')
+        .first();
+      if (await skipBtn.isVisible().catch(() => false)) {
+        await skipBtn.click();
+        await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 10000 }).catch(() => {});
+        continue;
+      }
+      const tryAnotherWay = page.locator('button:has-text("Try another way"), a:has-text("Try another way")').first();
+      if (await tryAnotherWay.isVisible().catch(() => false)) {
+        await tryAnotherWay.click();
+        await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 10000 }).catch(() => {});
+        continue;
+      }
+      // If no skip option, this challenge cannot be bypassed automatically
+      throw new Error(`Google requires manual verification — sign into this account from the server once to trust the IP, then retry. Stuck at: ${url}`);
+    }
+
     await page.waitForTimeout(1000);
   }
 
