@@ -191,14 +191,32 @@ router.post("/offboard-ga4", async (req, res) => {
     await page.goto(accessMgmtUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
     await page.waitForTimeout(3000);
 
-    // Dismiss any blocking dialog (e.g. "Missing permissions") then navigate again
-    const okBtn = page.locator('button:has-text("OK")').first();
-    if (await okBtn.isVisible().catch(() => false)) {
-      console.log('Dismissing dialog...');
-      await okBtn.click();
+    // Dismiss any blocking overlay.
+    // GA4 may show a "Missing permissions" alert dialog OR auto-open a side-panel
+    // (e.g. "Manage user permissions for ...") that blocks other interactions.
+    // Escape reliably closes CDK side-panels and overlays without risk of clicking
+    // the wrong button. For proper alert dialogs we look inside mat-dialog-container.
+    const alertDialog = page.locator('mat-dialog-container').first();
+    if (await alertDialog.isVisible().catch(() => false)) {
+      console.log('Alert dialog detected — looking for dismiss button...');
+      const dismissBtn = alertDialog.locator('button').filter({ hasText: /^(OK|Got it|Close|Dismiss)$/i }).first();
+      if (await dismissBtn.isVisible().catch(() => false)) {
+        await dismissBtn.click();
+      } else {
+        await page.keyboard.press('Escape');
+      }
       await page.waitForTimeout(1500);
       await page.goto(accessMgmtUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
       await page.waitForTimeout(3000);
+    }
+
+    // Close any open CDK side-panel (e.g. "Manage user permissions" panel that
+    // GA4 may open automatically when the page loads with a user pre-selected).
+    const cdkPane = page.locator('.cdk-overlay-pane').first();
+    if (await cdkPane.isVisible().catch(() => false)) {
+      console.log('CDK overlay pane open — dismissing with Escape...');
+      await page.keyboard.press('Escape');
+      await page.waitForTimeout(1000);
     }
 
     // Step 5: Click "Remove myself"
