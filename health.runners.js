@@ -720,7 +720,42 @@ async function detectTrackingSetup(page, beacons) {
   let gtmStartFired = false; // set when dataLayer contains {event:"gtm.start"}
   let gtmIframe = false; // set when a live GTM noscript iframe is found
 
-  for (let attempt = 0; attempt < 4; attempt++) {
+  // ── Step 1: HTML source scan (primary) ────────────────────────────────────
+  // Pull the full serialised HTML immediately after consent/settle.
+  // This catches the standard static GTM/GA4 installation snippets:
+  //   <script src="gtm.js?id=GTM-XXXXX">   ← GTM head snippet
+  //   ('GTM-XXXXX')                         ← GTM inline IIFE
+  //   ns.html?id=GTM-XXXXX                  ← GTM noscript body tag
+  //   gtag/js?id=G-XXXXX                    ← direct GA4 script src
+  //   gtag('config','G-XXXXX')              ← direct GA4 config call
+  // Also catches CMP-blocked scripts where src has been moved to data-src —
+  // page.content() returns raw HTML attribute strings, not live DOM .src values.
+  try {
+    const html = await page.content();
+    if (html) {
+      const upper = html.toUpperCase();
+      for (const m of upper.matchAll(/GTM-[A-Z0-9]{4,}/g)) {
+        if (isValidGtmId(m[0])) gtmIds.add(m[0]);
+      }
+      for (const m of upper.matchAll(/\b(?:G|GT)-(?=[A-Z0-9]*[0-9])[A-Z0-9]{7,}\b/g)) {
+        if (isValidGa4Id(m[0])) ga4Ids.add(m[0]);
+      }
+      if (/googletagmanager\.com\/ns\.html/i.test(html)) gtmIframe = true;
+      if (/data-src="[^"]*googletagmanager\.com\/gtm\.js/i.test(html)) gtmIframe = true;
+      logDebug(`HTML source scan: ${gtmIds.size} GTM ID(s), ${ga4Ids.size} GA4 ID(s)`);
+    }
+  } catch (e) {
+    logDebug(`HTML source scan failed: ${e.message}`);
+  }
+
+  // ── Step 2: Runtime / DOM scan ────────────────────────────────────────────
+  // Checks dataLayer, window.google_tag_manager, gtag.q, and dynamically
+  // injected script attributes that only exist after JS execution.
+  // Run 1 pass if the HTML scan already found IDs (just need runtime signals);
+  // run up to 4 passes with back-off if the HTML scan found nothing (deferred
+  // loading, SPA hydration, or heavy consent gate delay).
+  const maxAttempts = (gtmIds.size > 0 || gtmIframe) ? 1 : 4;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const scan = await safeEvaluate(page, () => {
       const found = { gtm: [], ga4: [], gtmStartFired: false, gtmIframe: false };
       function extract(str) {
@@ -733,8 +768,7 @@ async function detectTrackingSetup(page, beacons) {
       for (const s of document.querySelectorAll("script")) {
         extract(s.src);
         extract(s.innerHTML);
-        // CMP-blocked scripts: consent managers (CookieYes, Cookiebot, Complianz etc.) change
-        // type="text/javascript" → type="text/plain" and move src → data-src to prevent execution.
+        // CMP-blocked scripts: consent managers move src → data-src to block execution.
         // The GTM ID is still in the attribute — scan all data-* src variants.
         extract(s.getAttribute("data-src") || "");
         extract(s.getAttribute("data-original-src") || "");
@@ -744,7 +778,6 @@ async function detectTrackingSetup(page, beacons) {
       for (const ns of document.querySelectorAll("noscript")) extract(ns.innerHTML);
       // Live iframes from GTM noscript fallback (always present even when JS blocked).
       // Second clause catches server-side GTM proxying ns.html through a custom domain.
-      // Also check data-src — some CMPs block iframes the same way as scripts.
       for (const f of document.querySelectorAll("iframe")) {
         const src = f.getAttribute("src") || f.getAttribute("data-src") || "";
         if (/googletagmanager\.com\/ns\.html/i.test(src) || /\/ns\.html\?(?:[^#]*&)?id=GTM-[A-Z0-9]{4,}/i.test(src)) {
@@ -826,35 +859,6 @@ async function detectTrackingSetup(page, beacons) {
     if (gtmIds.size > 0 || gtmInNetwork || globalGtmObj || gtmStartFired || gtmIframe) break;
 
     await safeWait([500, 1000, 2000, 6000][attempt] || 1000);
-  }
-
-  // Last-resort fallback: scan the full serialised HTML Playwright has in memory.
-  // Catches CMP-blocked scripts where data-src holds the GTM ID but safeEvaluate
-  // only reads live DOM properties (script.src), not raw attribute strings.
-  // For SPAs the first call may see a skeleton DOM — retry once after a short wait
-  // to give the framework time to hydrate and inject the GTM script tag.
-  if (gtmIds.size === 0 && !gtmStartFired && !gtmIframe) {
-    for (let htmlAttempt = 0; htmlAttempt < 2; htmlAttempt++) {
-      if (htmlAttempt === 1) await safeWait(1500); // give SPA hydration time to complete
-      try {
-        const html = await page.content();
-        if (html) {
-          for (const m of html.toUpperCase().matchAll(/GTM-[A-Z0-9]{4,}/g)) {
-            if (isValidGtmId(m[0])) gtmIds.add(m[0]);
-          }
-          for (const m of html.toUpperCase().matchAll(/\b(?:G|GT)-(?=[A-Z0-9]*[0-9])[A-Z0-9]{7,}\b/g)) {
-            if (isValidGa4Id(m[0])) ga4Ids.add(m[0]);
-          }
-          if (/googletagmanager\.com\/ns\.html/i.test(html)) gtmIframe = true;
-          if (/data-src="[^"]*googletagmanager\.com\/gtm\.js/i.test(html)) gtmIframe = true;
-          logDebug(`page.content() GTM fallback (attempt ${htmlAttempt + 1}): found ${gtmIds.size} GTM IDs`);
-          if (gtmIds.size > 0 || gtmIframe) break; // found something — no need to retry
-        }
-      } catch (e) {
-        logDebug(`page.content() GTM fallback failed: ${e.message}`);
-        break;
-      }
-    }
   }
 
   const linkedGa4 = new Set();
