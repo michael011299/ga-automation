@@ -71,7 +71,7 @@ const MAX_EMAIL_TESTS = Number(process.env.HEALTH_MAX_EMAIL_TESTS || 50);
 // FIX 3: single nav attempt, hard 15s cap
 const NAV_TIMEOUT_MS = Number(process.env.HEALTH_NAV_TIMEOUT || 15000);
 
-const HEADLESS = true;
+const HEADLESS = false;
 
 // Primary CTA click poll window
 const POST_ACTION_POLL_MS = Number(process.env.HEALTH_POLL_MS || 3000);
@@ -1791,7 +1791,7 @@ async function downloadGtmContainerConfig(gtmId) {
 // ─────────────────────────────────────────────
 // MAIN
 // ─────────────────────────────────────────────
-async function trackingHealthCheckSiteInternal(url) {
+async function trackingHealthCheckSiteInternal(url, expectedGtmId = null) {
   const targetUrl = normaliseUrl(url);
 
   // ── Working state (not returned) ──
@@ -1816,6 +1816,8 @@ async function trackingHealthCheckSiteInternal(url) {
 
     detected_gtm_ids: [],
     detected_ga4_ids: [],
+    gtm_id_expected: expectedGtmId || null,
+    gtm_id_match: null,
 
     phone_found: 0,
     phone_tested: 0,
@@ -2266,6 +2268,38 @@ async function trackingHealthCheckSiteInternal(url) {
       return results;
     }
 
+    // ── GTM ID mismatch check ──
+    // If the caller supplied an expected GTM container ID, verify the site has it installed.
+    // Any other GTM container (or no GTM at all) is treated as a Fail.
+    if (expectedGtmId) {
+      const normExpected = expectedGtmId.toUpperCase().trim();
+      const foundIds = results.detected_gtm_ids.map((id) => id.toUpperCase().trim());
+      const matched = foundIds.includes(normExpected);
+      results.gtm_id_match = matched;
+      if (!matched) {
+        const foundStr = foundIds.length > 0 ? foundIds.join(", ") : "none";
+        results.grade = "Fail";
+        results.health_status = "GTM_MISMATCH";
+        results.health_reasons = `Expected GTM container ${normExpected} but found: ${foundStr}. The wrong GTM container is installed — conversion tracking will not work for this account.`;
+        results.failure_detail = [
+          {
+            category: "Google Tag Manager",
+            grade_impact: "FAIL",
+            summary: `Wrong GTM container detected. Expected ${normExpected}, found ${foundStr || "none"}.`,
+            fix: `Replace the installed GTM snippet with container ${normExpected}. Remove any other GTM containers to avoid conflicting tracking.`,
+          },
+        ];
+        results.fix = `Replace the installed GTM snippet with container ${normExpected}. Remove any other GTM containers to avoid conflicting tracking.`;
+        logInfo(`╔══════════════════════════════════════════════╗`);
+        logInfo(`  GRADE : ❌ FAIL — GTM MISMATCH`);
+        logInfo(`  Expected : ${normExpected}`);
+        logInfo(`  Found    : ${foundStr}`);
+        logInfo(`╚══════════════════════════════════════════════╝`);
+        return results;
+      }
+      logInfo(`✅ GTM ID match confirmed: ${normExpected}`);
+    }
+
     // Direct GA4 (gtag.js without GTM container): note the setup difference but continue to grading
     const directGa4Only = !tracking.has_gtm && tracking.has_any_ga4;
     if (directGa4Only) {
@@ -2711,11 +2745,11 @@ async function trackingHealthCheckSiteInternal(url) {
   }
 }
 
-async function trackingHealthCheckSite(url) {
+async function trackingHealthCheckSite(url, expectedGtmId = null) {
   await acquireCheckSlot();
   try {
     return await withTimeout(
-      trackingHealthCheckSiteInternal(url),
+      trackingHealthCheckSiteInternal(url, expectedGtmId),
       GLOBAL_TIMEOUT_MS,
       `Global timeout (${GLOBAL_TIMEOUT_MS}ms) exceeded for ${url}`,
     );
@@ -2752,9 +2786,9 @@ async function runBatchHealthCheck(jobId, clients, callbackUrl = null) {
       const i = nextIndex++;
       if (i >= clientList.length) break;
       const client = clientList[i];
-      const { url, _index, ...metadata } = client;
+      const { url, gtm_id, _index, ...metadata } = client;
       try {
-        const result = await trackingHealthCheckSite(url);
+        const result = await trackingHealthCheckSite(url, gtm_id || null);
         const job = batchJobs.get(jobId);
         if (job) {
           job.results.push({ ...metadata, url, index: _index, ...result });

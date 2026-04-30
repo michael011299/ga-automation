@@ -7,7 +7,7 @@ const crypto = require("crypto");
 const router = express.Router();
 
 router.post("/run", async (req, res) => {
-  const { action, url, expected } = req.body || {};
+  const { action, url, expected, gtm_id } = req.body || {};
 
   if (action !== "tracking_health_check_site") {
     return res.status(400).json({ ok: false, error: "Unknown action" });
@@ -21,7 +21,7 @@ router.post("/run", async (req, res) => {
     console.log(`Received health check request for: ${url}`);
 
     // Call the health runner function
-    const results = await trackingHealthCheckSite(url);
+    const results = await trackingHealthCheckSite(url, gtm_id || null);
 
     // Return results
     return res.json({
