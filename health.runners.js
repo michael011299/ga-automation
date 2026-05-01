@@ -321,7 +321,7 @@ setInterval(async () => {
 // Utilities
 // ─────────────────────────────────────────────
 function normaliseUrl(input) {
-  const u = (input || "").trim().replace(/^http:\/\//i, "https://");
+  const u = (input || "").trim().replace(/^[a-z][a-z0-9+\-.]*:\/\//i, "https://");
   return /^https?:\/\//i.test(u) ? u : `https://${u}`;
 }
 function safeUrlObj(u) {
@@ -2183,7 +2183,7 @@ async function trackingHealthCheckSiteInternal(url, expectedGtmId = null) {
 
     // tracking is mutable — may be updated if GTM is found on an inner page
     let tracking = await detectTrackingSetup(page, beacons);
-    results.detected_gtm_ids = tracking.gtm;
+    results.detected_gtm_ids = uniq([...results.detected_gtm_ids, ...tracking.gtm]);
     results.detected_ga4_ids = [...tracking.ga4, ...tracking.unlinked_ga4];
 
     // ── Feature 2: GTM container analysis ──
@@ -2310,7 +2310,7 @@ async function trackingHealthCheckSiteInternal(url, expectedGtmId = null) {
       const normExpected = expectedGtmId.toUpperCase().trim();
       const foundIds = results.detected_gtm_ids.map((id) => id.toUpperCase().trim());
       const matched = foundIds.includes(normExpected);
-      results.gtm_id_match = matched;
+      results.gtm_id_match = results.gtm_id_match === true ? true : matched;
       if (!matched) {
         const foundStr = foundIds.length > 0 ? foundIds.join(", ") : "none";
         results.grade = "Fail";
