@@ -2146,7 +2146,7 @@ async function trackingHealthCheckSiteInternal(url, expectedGtmId = null) {
       const html = (await page.content().catch(() => "")).toUpperCase();
       const htmlGtmIds = [];
       for (const m of html.matchAll(/GTM-[A-Z0-9]{4,}/g)) {
-        if (isRealGtmId(m[0]) && !htmlGtmIds.includes(m[0])) htmlGtmIds.push(m[0]);
+        if (isValidGtmId(m[0]) && !htmlGtmIds.includes(m[0])) htmlGtmIds.push(m[0]);
       }
 
       if (htmlGtmIds.length > 0) {
