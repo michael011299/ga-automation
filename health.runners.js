@@ -321,7 +321,7 @@ setInterval(async () => {
 // Utilities
 // ─────────────────────────────────────────────
 function normaliseUrl(input) {
-  const u = (input || "").trim();
+  const u = (input || "").trim().replace(/^http:\/\//i, "https://");
   return /^https?:\/\//i.test(u) ? u : `https://${u}`;
 }
 function safeUrlObj(u) {
