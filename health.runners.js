@@ -528,12 +528,18 @@ async function handleCookieConsent(page) {
     /^ok$/i,
     /^got it$/i,
     /^continue$/i,
+    /^accept & close$/i,
+    /^accept and close$/i,
+    /^yes, i agree$/i,
+    /^yes i agree$/i,
+    /^close and accept$/i,
   ];
   for (const pattern of nativePatterns) {
     try {
       const btn = page.getByRole("button", { name: pattern });
       if ((await btn.count()) > 0) {
         await btn.first().click({ timeout: 1500, force: true });
+        await page.waitForTimeout(600);
         out.accepted = true;
         logDebug("🍪 Cookie consent accepted (native click)");
         return out;
@@ -618,20 +624,71 @@ async function handleCookieConsent(page) {
     "Yes, I agree",
     "Yes I agree",
     "Close and accept",
+    "Accept & Close",
+    "Accept and Close",
+    "Yes, I agree",
+    "Yes I agree",
   ];
+
+  // Additional CMP selectors not in candidates above
+  const extraCandidates = [
+    // Didomi
+    "#didomi-notice-agree-button",
+    "#didomi-btn-agree-and-close",
+    ".didomi-popup-notice-buttons .didomi-button-highlight",
+    // Termly
+    ".t-acceptAllButton",
+    // Real Cookie Banner (WordPress)
+    ".rcb-cookie-consent-accept-all",
+    "[data-testid='rcb-consent-banner-accept-all']",
+    // Klaro
+    ".klaro .accept-all",
+    ".klaro button.accept-all",
+    // WPGDPR / Moove GDPR
+    ".moove-gdpr-infobar-allow-all",
+    "#gdpr-cookie-notice-accept",
+    ".wpgdpr-button",
+    // Pandectes (Shopify)
+    ".pandectes-accept-all",
+    // CookieHub
+    ".ch2-allow-all-btn",
+    // CookieControl (Civic UK)
+    "#ccc-notify-accept",
+    "#ccc-accept-settings",
+  ];
+  const allCandidates = [...candidates, ...extraCandidates];
 
   try {
     const clicked = await safeEvaluate(
       page,
       (sels, labels) => {
+        // Helper: recursively query through shadow roots
+        function queryShadowAll(root, selector) {
+          const found = [];
+          try { found.push(...root.querySelectorAll(selector)); } catch {}
+          for (const el of root.querySelectorAll("*")) {
+            if (el.shadowRoot) found.push(...queryShadowAll(el.shadowRoot, selector));
+          }
+          return found;
+        }
+        function allShadowButtons(root) {
+          const found = [];
+          for (const el of root.querySelectorAll("button,a[role='button'],[type='button'],[type='submit']")) {
+            if (el.offsetHeight > 0) found.push(el);
+          }
+          for (const el of root.querySelectorAll("*")) {
+            if (el.shadowRoot) found.push(...allShadowButtons(el.shadowRoot));
+          }
+          return found;
+        }
+
+        // Regular DOM selectors
         for (const sel of sels) {
-          for (const el of document.querySelectorAll(sel)) {
-            if (el.offsetHeight > 0) {
-              el.click();
-              return true;
-            }
+          for (const el of queryShadowAll(document, sel)) {
+            if (el.offsetHeight > 0) { el.click(); return true; }
           }
         }
+        // Regular DOM text match
         for (const btn of document.querySelectorAll("button,a[role='button'],[type='button'],[type='submit']")) {
           const t = (btn.textContent || "").trim();
           if (labels.some((l) => t === l || t.startsWith(l)) && btn.offsetHeight > 0) {
@@ -639,13 +696,22 @@ async function handleCookieConsent(page) {
             return true;
           }
         }
+        // Shadow DOM text match (Usercentrics, Didomi v2, etc.)
+        for (const btn of allShadowButtons(document)) {
+          const t = (btn.textContent || "").trim();
+          if (labels.some((l) => t === l || t.startsWith(l))) {
+            btn.click();
+            return true;
+          }
+        }
         return false;
       },
-      candidates,
+      allCandidates,
       textLabels,
     );
 
     if (clicked) {
+      await page.waitForTimeout(600);
       out.accepted = true;
       logDebug("🍪 Cookie consent accepted");
     }
@@ -2133,6 +2199,32 @@ async function trackingHealthCheckSiteInternal(url, expectedGtmId = null) {
     // on image-heavy sites where resources load slowly.
     await page.waitForLoadState("load", { timeout: 6000 }).catch(() => null);
     await simulateHumanBrowsing(page);
+
+    // ── Pre-consent HTML scan ──
+    // GTM is always hardcoded in <head> by the CMS — scan before consent so
+    // GTM detection is not dependent on the consent handler succeeding.
+    {
+      const html = (await page.content().catch(() => "")).toUpperCase();
+      const preConsentGtmIds = [];
+      for (const m of html.matchAll(/GTM-[A-Z0-9]{4,}/g)) {
+        if (isValidGtmId(m[0]) && !preConsentGtmIds.includes(m[0])) preConsentGtmIds.push(m[0]);
+      }
+      if (preConsentGtmIds.length > 0) {
+        logInfo(`🔎 Pre-consent HTML scan found GTM IDs: ${preConsentGtmIds.join(", ")}`);
+        for (const id of preConsentGtmIds) {
+          if (!results.detected_gtm_ids.includes(id)) results.detected_gtm_ids.push(id);
+        }
+        if (expectedGtmId) {
+          const normExpected = expectedGtmId.toUpperCase().trim();
+          if (preConsentGtmIds.includes(normExpected)) {
+            results.gtm_id_match = true;
+            logInfo(`✅ Pre-consent HTML scan: expected GTM ID ${normExpected} confirmed in page source`);
+          }
+        }
+      } else {
+        logInfo(`⚠️  Pre-consent HTML scan: no GTM IDs found in page source`);
+      }
+    }
 
     await handleCookieConsent(page);
     // Scroll slightly after consent so IntersectionObserver-gated or consent-delayed scripts fire
