@@ -69,7 +69,7 @@ const MAX_PHONE_TESTS = Number(process.env.HEALTH_MAX_PHONE_TESTS || 50);
 const MAX_EMAIL_TESTS = Number(process.env.HEALTH_MAX_EMAIL_TESTS || 50);
 
 // FIX 3: single nav attempt, hard 15s cap
-const NAV_TIMEOUT_MS = Number(process.env.HEALTH_NAV_TIMEOUT || 15000);
+const NAV_TIMEOUT_MS = Number(process.env.HEALTH_NAV_TIMEOUT || 30000);
 
 const HEADLESS = true;
 
@@ -412,6 +412,15 @@ async function safeGoto(page, url) {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT_MS });
     return { ok: true };
   } catch (e) {
+    // On timeout, check if the page loaded enough content to be usable — some slow
+    // hosts serve the HTML but stall on third-party resources past the timeout.
+    if (/timeout/i.test(e.message)) {
+      const hasHead = await page.evaluate(() => !!document.head?.innerHTML).catch(() => false);
+      if (hasHead) {
+        logInfo(`⚠️  safeGoto timeout but page has content — proceeding: ${url}`);
+        return { ok: true };
+      }
+    }
     return { ok: false, error: e.message };
   }
 }
