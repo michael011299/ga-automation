@@ -71,7 +71,7 @@ const MAX_EMAIL_TESTS = Number(process.env.HEALTH_MAX_EMAIL_TESTS || 50);
 // FIX 3: single nav attempt, hard 15s cap
 const NAV_TIMEOUT_MS = Number(process.env.HEALTH_NAV_TIMEOUT || 15000);
 
-const HEADLESS = false;
+const HEADLESS = true;
 
 // Primary CTA click poll window
 const POST_ACTION_POLL_MS = Number(process.env.HEALTH_POLL_MS || 3000);
@@ -754,7 +754,7 @@ async function detectTrackingSetup(page, beacons) {
   // Run 1 pass if the HTML scan already found IDs (just need runtime signals);
   // run up to 4 passes with back-off if the HTML scan found nothing (deferred
   // loading, SPA hydration, or heavy consent gate delay).
-  const maxAttempts = (gtmIds.size > 0 || gtmIframe) ? 1 : 4;
+  const maxAttempts = gtmIds.size > 0 || gtmIframe ? 1 : 4;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const scan = await safeEvaluate(page, () => {
       const found = { gtm: [], ga4: [], gtmStartFired: false, gtmIframe: false };
