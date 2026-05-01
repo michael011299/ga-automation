@@ -2137,6 +2137,37 @@ async function trackingHealthCheckSiteInternal(url, expectedGtmId = null) {
     await handleCookieConsent(page);
     // Scroll slightly after consent so IntersectionObserver-gated or consent-delayed scripts fire
     await safeEvaluate(page, () => window.scrollBy(0, 200));
+
+    // ── Early HTML GTM scan ──
+    // Pull the rendered HTML immediately after cookie consent and scan for GTM IDs via
+    // regex before any JS-based beacon/global detection runs. If expectedGtmId is
+    // provided, check for that specific ID first. If null, look for any GTM ID.
+    {
+      const html = (await page.content().catch(() => "")).toUpperCase();
+      const htmlGtmIds = [];
+      for (const m of html.matchAll(/GTM-[A-Z0-9]{4,}/g)) {
+        if (isRealGtmId(m[0]) && !htmlGtmIds.includes(m[0])) htmlGtmIds.push(m[0]);
+      }
+
+      if (htmlGtmIds.length > 0) {
+        logInfo(`🔎 Early HTML scan found GTM IDs: ${htmlGtmIds.join(", ")}`);
+        for (const id of htmlGtmIds) {
+          if (!results.detected_gtm_ids.includes(id)) results.detected_gtm_ids.push(id);
+        }
+        if (expectedGtmId) {
+          const normExpected = expectedGtmId.toUpperCase().trim();
+          if (htmlGtmIds.includes(normExpected)) {
+            results.gtm_id_match = true;
+            logInfo(`✅ Early HTML scan: expected GTM ID ${normExpected} confirmed in page source`);
+          } else {
+            logInfo(`⚠️  Early HTML scan: ${normExpected} not found in HTML (found: ${htmlGtmIds.join(", ")})`);
+          }
+        }
+      } else {
+        logInfo(`⚠️  Early HTML scan: no GTM IDs found in page source`);
+      }
+    }
+
     await waitForGtmInit(page, beacons, POST_CONSENT_MAX_WAIT_MS);
 
     // Second consent pass: for React/SPA sites where the cookie banner mounts AFTER our
