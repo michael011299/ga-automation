@@ -410,9 +410,44 @@ async function safeGoto(page, url) {
   }
   try {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT_MS });
+    await waitThroughBotChallenge(page);
     return { ok: true };
   } catch (e) {
     return { ok: false, error: e.message };
+  }
+}
+
+// Detects bot-protection interstitials and waits for their automatic redirect.
+//
+// StackProtect (used by some hosting providers): shows a "Security Verification"
+// page with an invisible reCAPTCHA v3. The reCAPTCHA executes automatically via
+// setInterval every 5s, submits a hidden form, and the server redirects to the
+// real page. We just need to wait for that navigation.
+//
+// Cloudflare JS challenge ("Just a moment..."): same pattern — auto-resolves and
+// redirects without user interaction if the browser passes the JS check.
+async function waitThroughBotChallenge(page) {
+  try {
+    const html = await page.content();
+    if (!html) return;
+
+    const isStackProtect = /id="stackprotectform"|setInterval\(stackProtect|stackprotectform/i.test(html);
+    const isCloudflare = /<title>Just a moment\.\.\.<\/title>|cf-browser-verification|__cf_chl_/i.test(html);
+
+    if (!isStackProtect && !isCloudflare) return;
+
+    const challengeType = isStackProtect ? "StackProtect" : "Cloudflare";
+    logInfo(`🛡️ ${challengeType} bot challenge detected — waiting for auto-redirect (up to 20s)...`);
+
+    // Both challenges auto-submit and redirect without user interaction.
+    // Wait up to 20s for the navigation that follows the challenge resolution.
+    await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 20000 }).catch(() => {
+      logInfo(`⚠️ ${challengeType} challenge did not redirect within timeout — continuing with challenge page`);
+    });
+
+    logInfo(`✅ ${challengeType} challenge passed — now at: ${page.url()}`);
+  } catch (e) {
+    logDebug(`waitThroughBotChallenge error: ${e.message}`);
   }
 }
 
@@ -2896,4 +2931,5 @@ module.exports = {
   trackingHealthCheckSite,
   runBatchHealthCheck,
   getBatchJob,
+  waitThroughBotChallenge,
 };

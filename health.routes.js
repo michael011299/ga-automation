@@ -1,6 +1,6 @@
 const express = require("express");
 const { chromium } = require("playwright");
-const { trackingHealthCheckSite, runBatchHealthCheck, getBatchJob } = require("./health.runners");
+const { trackingHealthCheckSite, runBatchHealthCheck, getBatchJob, waitThroughBotChallenge } = require("./health.runners");
 const { ctaAuditSite, getBrowser } = require("./cta-audit.runners");
 const { loginToGoogle } = require("./src/playwright/google-login");
 const crypto = require("crypto");
@@ -143,6 +143,7 @@ router.get("/scrape", async (req, res) => {
     const browser = await getBrowser();
     page = await browser.newPage();
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+    await waitThroughBotChallenge(page);
     const html = await page.content();
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     return res.send(html);
