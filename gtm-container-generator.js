@@ -482,6 +482,7 @@ function generateGTMContainerExport(audit, measurementId, containerName, account
 
   // ── Aggregate audit findings ──────────────────────────────────────────────
   const hasClickablePhone = pages.some((p) => p.phones?.clickable?.length > 0);
+  const hasAnyPhone       = hasClickablePhone || pages.some((p) => p.phones?.plainText?.length > 0);
   const hasClickableEmail = pages.some((p) => p.emails?.clickable?.length > 0);
   const hasForms          = pages.some((p) => p.forms?.length > 0);
   const hasNewsletter     = pages.some((p) => p.newsletter?.length > 0);
@@ -746,10 +747,12 @@ function generateGTMContainerExport(audit, measurementId, containerName, account
   }
 
   // ── Click to Call ─────────────────────────────────────────────────────────
-  if (hasClickablePhone) {
+  // Include the tag whenever any phone number exists — even plain-text ones,
+  // since the developer will be wrapping them in tel: links as part of setup.
+  if (hasAnyPhone) {
     addLinkTriggerAndTag("AP Click to Call", "tel:", "AP Click Call", "click_call");
   } else {
-    skipped.push("click_call — no clickable tel: links found on site");
+    skipped.push("click_call — no phone numbers found on site");
   }
 
   // ── Click to Email ────────────────────────────────────────────────────────

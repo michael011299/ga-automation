@@ -2731,7 +2731,7 @@ function generateCTAQualityReport(pagesData) {
     issues.push(
       `${totalPlainTextPhones} phone number(s) are displayed as plain text alongside ${totalClickablePhones} clickable number(s). Plain-text numbers cannot be tracked or tapped on mobile.`,
     );
-    recommendations.push('Wrap remaining plain-text phone numbers in <a href="tel:..."> tags.');
+    recommendations.push('Wrap remaining plain-text phone numbers in <a href="tel:..."> tags, then add a GTM Click – Just Links trigger (href contains tel:) with a GA4 Event tag (event name: click_call) so the clicks are tracked.');
     if (sharedPhoneNumbers.length > 0) {
       strengths.push(
         `${sharedPhoneNumbers.length} phone number(s) double as a WhatsApp contact. These are dual-purpose CTAs.`,
@@ -2742,7 +2742,7 @@ function generateCTAQualityReport(pagesData) {
     issues.push(
       `${totalPlainTextPhones} phone number(s) are plain text. They cannot be clicked on mobile and cannot be tracked in GA4.`,
     );
-    recommendations.push('Wrap all phone numbers in <a href="tel:..."> tags.');
+    recommendations.push('Wrap all phone numbers in <a href="tel:..."> tags, then add a GTM Click – Just Links trigger (href contains tel:) with a GA4 Event tag (event name: click_call) so the clicks are tracked.');
   }
 
   if (phonesAboveFold) {
