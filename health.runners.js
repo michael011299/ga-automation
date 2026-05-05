@@ -47,6 +47,54 @@ const { chromium } = require("playwright-extra");
 const StealthPlugin = require("puppeteer-extra-plugin-stealth");
 chromium.use(StealthPlugin());
 
+const https = require("https");
+const http = require("http");
+const zlib = require("zlib");
+
+// Plain HTTP fetch (no browser) — used to extract GTM/GA4 IDs from sites
+// that serve bot-protection challenges to headless browsers but real HTML to
+// standard HTTP requests. Handles gzip/deflate/br, follows up to 5 redirects.
+// Headers mimic a real Chrome request (same set as the n8n HTTP node).
+function httpFetchHtml(url, redirectCount = 0) {
+  return new Promise((resolve) => {
+    if (redirectCount > 5) return resolve(null);
+    let parsed;
+    try { parsed = new URL(url); } catch { return resolve(null); }
+    const mod = parsed.protocol === "https:" ? https : http;
+    const req = mod.get(
+      {
+        hostname: parsed.hostname,
+        path: parsed.pathname + parsed.search,
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+          "Accept-Encoding": "gzip, deflate, br",
+          "Accept-Language": "en-GB,en;q=0.9",
+        },
+        timeout: 12000,
+      },
+      (res) => {
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          try {
+            return resolve(httpFetchHtml(new URL(res.headers.location, url).href, redirectCount + 1));
+          } catch { return resolve(null); }
+        }
+        const enc = (res.headers["content-encoding"] || "").toLowerCase();
+        let stream = res;
+        if (enc === "gzip") stream = res.pipe(zlib.createGunzip());
+        else if (enc === "deflate") stream = res.pipe(zlib.createInflate());
+        else if (enc === "br") stream = res.pipe(zlib.createBrotliDecompress());
+        const chunks = [];
+        stream.on("data", (c) => chunks.push(c));
+        stream.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+        stream.on("error", () => resolve(null));
+      },
+    );
+    req.on("error", () => resolve(null));
+    req.on("timeout", () => { req.destroy(); resolve(null); });
+  });
+}
+
 const LOG_LEVEL = (process.env.LOG_LEVEL || "info").toLowerCase();
 function logInfo(msg, data = null) {
   if (LOG_LEVEL === "silent") return;
@@ -449,9 +497,12 @@ async function waitThroughBotChallenge(page) {
     logInfo(`🛡️ ${challengeType} bot challenge detected — waiting for auto-redirect (up to 20s)...`);
 
     // Both challenges auto-submit and redirect without user interaction.
-    // Wait up to 20s for the navigation that follows the challenge resolution.
-    await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 20000 }).catch(() => {
-      logInfo(`⚠️ ${challengeType} challenge did not redirect within timeout — continuing with challenge page`);
+    // GTM IDs are now sourced from httpFetchHtml before the browser opens, so we
+    // only need the browser to pass the challenge for CTA testing. Keep the wait
+    // short — if it doesn't redirect in 8s the reCAPTCHA score is too low and
+    // CTA tests will be marked as untested rather than hanging the whole check.
+    await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 8000 }).catch(() => {
+      logInfo(`⚠️ ${challengeType} challenge did not redirect within timeout — CTAs may be untested`);
     });
 
     logInfo(`✅ ${challengeType} challenge passed — now at: ${page.url()}`);
@@ -1932,6 +1983,7 @@ async function trackingHealthCheckSiteInternal(url, expectedGtmId = null) {
     detected_ga4_ids: [],
     gtm_id_expected: expectedGtmId || null,
     gtm_id_match: null,
+    prefetch_status: null,
 
     phone_found: 0,
     phone_tested: 0,
@@ -1979,6 +2031,47 @@ async function trackingHealthCheckSiteInternal(url, expectedGtmId = null) {
 
   try {
     logInfo(`🔍 [${SCRIPT_VERSION}] Starting check`, { url: targetUrl });
+
+    // ── HTTP pre-fetch (bot-bypass GTM detection) ──────────────────────────
+    // Many sites serve bot-protection challenges (StackProtect, Cloudflare) to
+    // headless browsers but return real HTML to plain HTTP requests. Fetch the
+    // page via HTTP first to extract GTM/GA4 IDs before the browser opens.
+    // These IDs are merged with anything the browser subsequently detects.
+    try {
+      const prefetchHtml = await httpFetchHtml(targetUrl);
+      if (prefetchHtml) {
+        // Check if we got a bot challenge rather than real content
+        const isChallenge = /id="stackprotectform"|setInterval\(stackProtect|<title>Just a moment/i.test(prefetchHtml);
+        if (isChallenge) {
+          logInfo(`📡 HTTP pre-fetch: bot challenge returned even for plain HTTP — continuing with browser only`);
+          results.prefetch_status = "bot_challenge";
+        } else {
+          const upper = prefetchHtml.toUpperCase();
+          const prefetchGtm = [];
+          const prefetchGa4 = [];
+          for (const m of upper.matchAll(/GTM-[A-Z0-9]{4,}/g))
+            if (isValidGtmId(m[0])) prefetchGtm.push(m[0]);
+          for (const m of upper.matchAll(/\b(?:G|GT)-(?=[A-Z0-9]*[0-9])[A-Z0-9]{7,}\b/g))
+            if (isValidGa4Id(m[0])) prefetchGa4.push(m[0]);
+          if (prefetchGtm.length > 0 || prefetchGa4.length > 0) {
+            results.detected_gtm_ids = [...new Set(prefetchGtm)];
+            results.detected_ga4_ids = [...new Set(prefetchGa4)];
+            results.prefetch_status = "ok";
+            logInfo(`📡 HTTP pre-fetch: GTM [${prefetchGtm.join(", ") || "none"}]  GA4 [${prefetchGa4.join(", ") || "none"}]`);
+          } else {
+            results.prefetch_status = "ok_no_ids";
+            logInfo(`📡 HTTP pre-fetch: HTML fetched but no GTM/GA4 IDs found in source`);
+          }
+        }
+      } else {
+        results.prefetch_status = "fetch_failed";
+        logInfo(`📡 HTTP pre-fetch: could not fetch HTML (timeout, DNS failure, or connection refused) — browser-only detection`);
+      }
+    } catch (e) {
+      results.prefetch_status = "fetch_error";
+      logInfo(`📡 HTTP pre-fetch error: ${e.message} — browser-only detection`);
+    }
+
     const browser = await getBrowser();
 
     const ctxOpts = {
@@ -2320,7 +2413,7 @@ async function trackingHealthCheckSiteInternal(url, expectedGtmId = null) {
     // tracking is mutable — may be updated if GTM is found on an inner page
     let tracking = await detectTrackingSetup(page, beacons);
     results.detected_gtm_ids = uniq([...results.detected_gtm_ids, ...tracking.gtm]);
-    results.detected_ga4_ids = [...tracking.ga4, ...tracking.unlinked_ga4];
+    results.detected_ga4_ids = uniq([...results.detected_ga4_ids, ...tracking.ga4, ...tracking.unlinked_ga4]);
 
     // ── Feature 2: GTM container analysis ──
     // Download and analyse the compiled container JS for the first detected GTM ID.
@@ -2417,8 +2510,11 @@ async function trackingHealthCheckSiteInternal(url, expectedGtmId = null) {
       }
     }
 
-    // After visiting all pages — if still no tracking found anywhere, return NO_TRACKING
-    if (!tracking.has_gtm && !tracking.has_any_ga4) {
+    // After visiting all pages — if still no tracking found anywhere, return NO_TRACKING.
+    // Also check the pre-fetch results: the browser may have been blocked by a bot challenge
+    // while the HTTP pre-fetch still found GTM/GA4 IDs in the raw HTML.
+    const prefetchFoundTracking = results.detected_gtm_ids.length > 0 || results.detected_ga4_ids.length > 0;
+    if (!tracking.has_gtm && !tracking.has_any_ga4 && !prefetchFoundTracking) {
       results.grade = "Fail";
       results.health_status = "NO_TRACKING";
       results.health_reasons = `No GTM container or GA4 detected on any of the ${pagesToVisit.length} page(s) visited (including homepage and contact pages). No GTM tag IDs in source, no GTM network requests, no google_tag_manager global object.`;
@@ -2471,8 +2567,11 @@ async function trackingHealthCheckSiteInternal(url, expectedGtmId = null) {
       logInfo(`✅ GTM ID match confirmed: ${normExpected}`);
     }
 
-    // Direct GA4 (gtag.js without GTM container): note the setup difference but continue to grading
-    const directGa4Only = !tracking.has_gtm && tracking.has_any_ga4;
+    // Direct GA4 (gtag.js without GTM container): note the setup difference but continue to grading.
+    // Include pre-fetch detected IDs — browser may have been bot-blocked.
+    const hasGtm = tracking.has_gtm || results.detected_gtm_ids.length > 0;
+    const hasGa4 = tracking.has_any_ga4 || results.detected_ga4_ids.length > 0;
+    const directGa4Only = !hasGtm && hasGa4;
     if (directGa4Only) {
       logInfo(`⚠️  Direct GA4 detected (no GTM container)`);
     }
