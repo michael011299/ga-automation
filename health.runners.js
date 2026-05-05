@@ -69,9 +69,9 @@ const MAX_PHONE_TESTS = Number(process.env.HEALTH_MAX_PHONE_TESTS || 50);
 const MAX_EMAIL_TESTS = Number(process.env.HEALTH_MAX_EMAIL_TESTS || 50);
 
 // FIX 3: single nav attempt, hard 15s cap
-const NAV_TIMEOUT_MS = Number(process.env.HEALTH_NAV_TIMEOUT || 15000);
+const NAV_TIMEOUT_MS = Number(process.env.HEALTH_NAV_TIMEOUT || 30000);
 
-const HEADLESS = false;
+const HEADLESS = true;
 
 // Primary CTA click poll window
 const POST_ACTION_POLL_MS = Number(process.env.HEALTH_POLL_MS || 3000);
@@ -321,7 +321,7 @@ setInterval(async () => {
 // Utilities
 // ─────────────────────────────────────────────
 function normaliseUrl(input) {
-  const u = (input || "").trim();
+  const u = (input || "").trim().replace(/^[a-z][a-z0-9+\-.]*:\/\//i, "https://");
   return /^https?:\/\//i.test(u) ? u : `https://${u}`;
 }
 function safeUrlObj(u) {
@@ -413,6 +413,15 @@ async function safeGoto(page, url) {
     await waitThroughBotChallenge(page);
     return { ok: true };
   } catch (e) {
+    // On timeout, check if the page loaded enough content to be usable — some slow
+    // hosts serve the HTML but stall on third-party resources past the timeout.
+    if (/timeout/i.test(e.message)) {
+      const hasHead = await page.evaluate(() => !!document.head?.innerHTML).catch(() => false);
+      if (hasHead) {
+        logInfo(`⚠️  safeGoto timeout but page has content — proceeding: ${url}`);
+        return { ok: true };
+      }
+    }
     return { ok: false, error: e.message };
   }
 }
@@ -563,12 +572,18 @@ async function handleCookieConsent(page) {
     /^ok$/i,
     /^got it$/i,
     /^continue$/i,
+    /^accept & close$/i,
+    /^accept and close$/i,
+    /^yes, i agree$/i,
+    /^yes i agree$/i,
+    /^close and accept$/i,
   ];
   for (const pattern of nativePatterns) {
     try {
       const btn = page.getByRole("button", { name: pattern });
       if ((await btn.count()) > 0) {
         await btn.first().click({ timeout: 1500, force: true });
+        await page.waitForTimeout(600);
         out.accepted = true;
         logDebug("🍪 Cookie consent accepted (native click)");
         return out;
@@ -653,20 +668,71 @@ async function handleCookieConsent(page) {
     "Yes, I agree",
     "Yes I agree",
     "Close and accept",
+    "Accept & Close",
+    "Accept and Close",
+    "Yes, I agree",
+    "Yes I agree",
   ];
+
+  // Additional CMP selectors not in candidates above
+  const extraCandidates = [
+    // Didomi
+    "#didomi-notice-agree-button",
+    "#didomi-btn-agree-and-close",
+    ".didomi-popup-notice-buttons .didomi-button-highlight",
+    // Termly
+    ".t-acceptAllButton",
+    // Real Cookie Banner (WordPress)
+    ".rcb-cookie-consent-accept-all",
+    "[data-testid='rcb-consent-banner-accept-all']",
+    // Klaro
+    ".klaro .accept-all",
+    ".klaro button.accept-all",
+    // WPGDPR / Moove GDPR
+    ".moove-gdpr-infobar-allow-all",
+    "#gdpr-cookie-notice-accept",
+    ".wpgdpr-button",
+    // Pandectes (Shopify)
+    ".pandectes-accept-all",
+    // CookieHub
+    ".ch2-allow-all-btn",
+    // CookieControl (Civic UK)
+    "#ccc-notify-accept",
+    "#ccc-accept-settings",
+  ];
+  const allCandidates = [...candidates, ...extraCandidates];
 
   try {
     const clicked = await safeEvaluate(
       page,
       (sels, labels) => {
+        // Helper: recursively query through shadow roots
+        function queryShadowAll(root, selector) {
+          const found = [];
+          try { found.push(...root.querySelectorAll(selector)); } catch {}
+          for (const el of root.querySelectorAll("*")) {
+            if (el.shadowRoot) found.push(...queryShadowAll(el.shadowRoot, selector));
+          }
+          return found;
+        }
+        function allShadowButtons(root) {
+          const found = [];
+          for (const el of root.querySelectorAll("button,a[role='button'],[type='button'],[type='submit']")) {
+            if (el.offsetHeight > 0) found.push(el);
+          }
+          for (const el of root.querySelectorAll("*")) {
+            if (el.shadowRoot) found.push(...allShadowButtons(el.shadowRoot));
+          }
+          return found;
+        }
+
+        // Regular DOM selectors
         for (const sel of sels) {
-          for (const el of document.querySelectorAll(sel)) {
-            if (el.offsetHeight > 0) {
-              el.click();
-              return true;
-            }
+          for (const el of queryShadowAll(document, sel)) {
+            if (el.offsetHeight > 0) { el.click(); return true; }
           }
         }
+        // Regular DOM text match
         for (const btn of document.querySelectorAll("button,a[role='button'],[type='button'],[type='submit']")) {
           const t = (btn.textContent || "").trim();
           if (labels.some((l) => t === l || t.startsWith(l)) && btn.offsetHeight > 0) {
@@ -674,13 +740,22 @@ async function handleCookieConsent(page) {
             return true;
           }
         }
+        // Shadow DOM text match (Usercentrics, Didomi v2, etc.)
+        for (const btn of allShadowButtons(document)) {
+          const t = (btn.textContent || "").trim();
+          if (labels.some((l) => t === l || t.startsWith(l))) {
+            btn.click();
+            return true;
+          }
+        }
         return false;
       },
-      candidates,
+      allCandidates,
       textLabels,
     );
 
     if (clicked) {
+      await page.waitForTimeout(600);
       out.accepted = true;
       logDebug("🍪 Cookie consent accepted");
     }
@@ -789,7 +864,7 @@ async function detectTrackingSetup(page, beacons) {
   // Run 1 pass if the HTML scan already found IDs (just need runtime signals);
   // run up to 4 passes with back-off if the HTML scan found nothing (deferred
   // loading, SPA hydration, or heavy consent gate delay).
-  const maxAttempts = (gtmIds.size > 0 || gtmIframe) ? 1 : 4;
+  const maxAttempts = gtmIds.size > 0 || gtmIframe ? 1 : 4;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const scan = await safeEvaluate(page, () => {
       const found = { gtm: [], ga4: [], gtmStartFired: false, gtmIframe: false };
@@ -2169,9 +2244,66 @@ async function trackingHealthCheckSiteInternal(url, expectedGtmId = null) {
     await page.waitForLoadState("load", { timeout: 6000 }).catch(() => null);
     await simulateHumanBrowsing(page);
 
+    // ── Pre-consent HTML scan ──
+    // GTM is always hardcoded in <head> by the CMS — scan before consent so
+    // GTM detection is not dependent on the consent handler succeeding.
+    {
+      const html = (await page.content().catch(() => "")).toUpperCase();
+      const preConsentGtmIds = [];
+      for (const m of html.matchAll(/GTM-[A-Z0-9]{4,}/g)) {
+        if (isValidGtmId(m[0]) && !preConsentGtmIds.includes(m[0])) preConsentGtmIds.push(m[0]);
+      }
+      if (preConsentGtmIds.length > 0) {
+        logInfo(`🔎 Pre-consent HTML scan found GTM IDs: ${preConsentGtmIds.join(", ")}`);
+        for (const id of preConsentGtmIds) {
+          if (!results.detected_gtm_ids.includes(id)) results.detected_gtm_ids.push(id);
+        }
+        if (expectedGtmId) {
+          const normExpected = expectedGtmId.toUpperCase().trim();
+          if (preConsentGtmIds.includes(normExpected)) {
+            results.gtm_id_match = true;
+            logInfo(`✅ Pre-consent HTML scan: expected GTM ID ${normExpected} confirmed in page source`);
+          }
+        }
+      } else {
+        logInfo(`⚠️  Pre-consent HTML scan: no GTM IDs found in page source`);
+      }
+    }
+
     await handleCookieConsent(page);
     // Scroll slightly after consent so IntersectionObserver-gated or consent-delayed scripts fire
     await safeEvaluate(page, () => window.scrollBy(0, 200));
+
+    // ── Early HTML GTM scan ──
+    // Pull the rendered HTML immediately after cookie consent and scan for GTM IDs via
+    // regex before any JS-based beacon/global detection runs. If expectedGtmId is
+    // provided, check for that specific ID first. If null, look for any GTM ID.
+    {
+      const html = (await page.content().catch(() => "")).toUpperCase();
+      const htmlGtmIds = [];
+      for (const m of html.matchAll(/GTM-[A-Z0-9]{4,}/g)) {
+        if (isValidGtmId(m[0]) && !htmlGtmIds.includes(m[0])) htmlGtmIds.push(m[0]);
+      }
+
+      if (htmlGtmIds.length > 0) {
+        logInfo(`🔎 Early HTML scan found GTM IDs: ${htmlGtmIds.join(", ")}`);
+        for (const id of htmlGtmIds) {
+          if (!results.detected_gtm_ids.includes(id)) results.detected_gtm_ids.push(id);
+        }
+        if (expectedGtmId) {
+          const normExpected = expectedGtmId.toUpperCase().trim();
+          if (htmlGtmIds.includes(normExpected)) {
+            results.gtm_id_match = true;
+            logInfo(`✅ Early HTML scan: expected GTM ID ${normExpected} confirmed in page source`);
+          } else {
+            logInfo(`⚠️  Early HTML scan: ${normExpected} not found in HTML (found: ${htmlGtmIds.join(", ")})`);
+          }
+        }
+      } else {
+        logInfo(`⚠️  Early HTML scan: no GTM IDs found in page source`);
+      }
+    }
+
     await waitForGtmInit(page, beacons, POST_CONSENT_MAX_WAIT_MS);
 
     // Second consent pass: for React/SPA sites where the cookie banner mounts AFTER our
@@ -2187,7 +2319,7 @@ async function trackingHealthCheckSiteInternal(url, expectedGtmId = null) {
 
     // tracking is mutable — may be updated if GTM is found on an inner page
     let tracking = await detectTrackingSetup(page, beacons);
-    results.detected_gtm_ids = tracking.gtm;
+    results.detected_gtm_ids = uniq([...results.detected_gtm_ids, ...tracking.gtm]);
     results.detected_ga4_ids = [...tracking.ga4, ...tracking.unlinked_ga4];
 
     // ── Feature 2: GTM container analysis ──
@@ -2314,7 +2446,7 @@ async function trackingHealthCheckSiteInternal(url, expectedGtmId = null) {
       const normExpected = expectedGtmId.toUpperCase().trim();
       const foundIds = results.detected_gtm_ids.map((id) => id.toUpperCase().trim());
       const matched = foundIds.includes(normExpected);
-      results.gtm_id_match = matched;
+      results.gtm_id_match = results.gtm_id_match === true ? true : matched;
       if (!matched) {
         const foundStr = foundIds.length > 0 ? foundIds.join(", ") : "none";
         results.grade = "Fail";
