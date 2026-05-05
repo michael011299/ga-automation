@@ -2352,7 +2352,7 @@ async function trackingHealthCheckSiteInternal(url, expectedGtmId = null) {
           if (!results.detected_gtm_ids.includes(id)) results.detected_gtm_ids.push(id);
         }
         if (expectedGtmId) {
-          const normExpected = expectedGtmId.toUpperCase().trim();
+          const normExpected = expectedGtmId.toUpperCase().trim().replace(/\s+/g, "-");
           if (preConsentGtmIds.includes(normExpected)) {
             results.gtm_id_match = true;
             logInfo(`✅ Pre-consent HTML scan: expected GTM ID ${normExpected} confirmed in page source`);
@@ -2384,7 +2384,7 @@ async function trackingHealthCheckSiteInternal(url, expectedGtmId = null) {
           if (!results.detected_gtm_ids.includes(id)) results.detected_gtm_ids.push(id);
         }
         if (expectedGtmId) {
-          const normExpected = expectedGtmId.toUpperCase().trim();
+          const normExpected = expectedGtmId.toUpperCase().trim().replace(/\s+/g, "-");
           if (htmlGtmIds.includes(normExpected)) {
             results.gtm_id_match = true;
             logInfo(`✅ Early HTML scan: expected GTM ID ${normExpected} confirmed in page source`);
@@ -2539,7 +2539,7 @@ async function trackingHealthCheckSiteInternal(url, expectedGtmId = null) {
     // If the caller supplied an expected GTM container ID, verify the site has it installed.
     // Any other GTM container (or no GTM at all) is treated as a Fail.
     if (expectedGtmId) {
-      const normExpected = expectedGtmId.toUpperCase().trim();
+      const normExpected = expectedGtmId.toUpperCase().trim().replace(/\s+/g, "-");
       const foundIds = results.detected_gtm_ids.map((id) => id.toUpperCase().trim());
       const matched = foundIds.includes(normExpected);
       results.gtm_id_match = results.gtm_id_match === true ? true : matched;
@@ -3056,9 +3056,9 @@ async function runBatchHealthCheck(jobId, clients, callbackUrl = null) {
       const i = nextIndex++;
       if (i >= clientList.length) break;
       const client = clientList[i];
-      const { url, gtm_id, _index, ...metadata } = client;
+      const { url, gtm, gtm_id, _index, ...metadata } = client;
       try {
-        const result = await trackingHealthCheckSite(url, gtm_id || null);
+        const result = await trackingHealthCheckSite(url, gtm || gtm_id || null);
         const job = batchJobs.get(jobId);
         if (job) {
           job.results.push({ ...metadata, url, index: _index, ...result });
