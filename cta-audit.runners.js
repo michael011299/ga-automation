@@ -3445,4 +3445,87 @@ async function ctaAuditSite(url) {
   }
 }
 
-module.exports = { ctaAuditSite, getBrowser };
+async function scrapeAllPages(url, { limit = 75 } = {}) {
+  let parsed;
+  try { parsed = new URL(url); } catch { throw new Error(`Invalid URL: ${url}`); }
+  const origin = parsed.origin;
+  const MAX = Math.min(Math.max(1, limit), 500);
+
+  const NON_HTML_EXT = /\.(xml|pdf|jpg|jpeg|png|gif|svg|webp|css|js|zip|tar|gz|txt|ico|mp4|mp3|wav|mov|eot|woff|woff2|ttf|otf)(\?.*)?$/i;
+  const SKIP_PATH    = /\/(wp-admin|wp-login|wp-json|admin|login|sign-in|signup|register|account|cart|checkout|search)(\/|$|\?)/i;
+  const isUsableUrl = (u) => {
+    try {
+      const p = new URL(u);
+      return p.origin === origin && !p.hash && !NON_HTML_EXT.test(p.pathname) && !SKIP_PATH.test(p.pathname);
+    } catch { return false; }
+  };
+
+  const browser = await getBrowser();
+  const context = await browser.newContext({
+    userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+  });
+
+  await context.route("**/*", async (route) => {
+    if (["image", "media", "font"].includes(route.request().resourceType())) {
+      await route.abort();
+    } else {
+      await route.continue();
+    }
+  });
+
+  const page = await context.newPage();
+  const crawledSet = new Set();
+  const pages = [];
+
+  await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+  await page.waitForLoadState("load", { timeout: 5000 }).catch(() => {});
+  await acceptCookieConsent(page);
+  crawledSet.add(url);
+  pages.push({
+    url,
+    title: await page.title().catch(() => ""),
+    text: (await page.innerText("body").catch(() => "")).trim(),
+  });
+
+  console.log(`scrapeAllPages: fetching sitemap for ${origin}`);
+  const sitemapUrls = await getSitemapUrls(page, origin);
+  const usingSitemap = sitemapUrls.length > 0;
+  console.log(usingSitemap ? `scrapeAllPages: sitemap found (${sitemapUrls.length} URLs)` : "scrapeAllPages: no sitemap — using BFS");
+
+  const crawlQueue = usingSitemap
+    ? sitemapUrls.filter(isUsableUrl).filter(u => !crawledSet.has(u))
+    : (await getPageInternalLinks(page, origin)).filter(isUsableUrl);
+
+  let qi = 0;
+  while (qi < crawlQueue.length && pages.length < MAX) {
+    const pageUrl = crawlQueue[qi++];
+    if (crawledSet.has(pageUrl)) continue;
+    try {
+      await page.goto(pageUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+      await page.waitForLoadState("load", { timeout: 5000 }).catch(() => {});
+      crawledSet.add(pageUrl);
+      const title = await page.title().catch(() => "");
+      const text  = (await page.innerText("body").catch(() => "")).trim();
+      pages.push({ url: pageUrl, title, text });
+      if (!usingSitemap) {
+        const newLinks = (await getPageInternalLinks(page, origin))
+          .filter(u => isUsableUrl(u) && !crawledSet.has(u) && !crawlQueue.includes(u));
+        crawlQueue.push(...newLinks);
+      }
+    } catch (e) {
+      console.error(`scrapeAllPages: failed ${pageUrl}:`, e.message);
+    }
+  }
+
+  console.log(`scrapeAllPages: crawled ${pages.length} pages${pages.length >= MAX ? ` (capped at ${MAX})` : ""}`);
+  await context.close();
+
+  return {
+    website_url: url,
+    crawled_at: new Date().toISOString(),
+    page_count: pages.length,
+    pages,
+  };
+}
+
+module.exports = { ctaAuditSite, getBrowser, scrapeAllPages };

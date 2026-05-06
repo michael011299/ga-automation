@@ -1,10 +1,18 @@
 const express = require("express");
 const { chromium } = require("playwright");
 const { trackingHealthCheckSite, runBatchHealthCheck, getBatchJob, waitThroughBotChallenge } = require("./health.runners");
-const { ctaAuditSite, getBrowser } = require("./cta-audit.runners");
+const { ctaAuditSite, getBrowser, scrapeAllPages } = require("./cta-audit.runners");
 const { loginToGoogle } = require("./src/playwright/google-login");
 const crypto = require("crypto");
 const router = express.Router();
+
+function escapeXml(str) {
+  return String(str ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
 
 router.post("/run", async (req, res) => {
   const { action, url, expected, gtm, gtm_id } = req.body || {};
@@ -351,6 +359,39 @@ router.post("/accept-gtm-invitation", async (req, res) => {
     return res.status(500).json({ ok: false, error: e.message, gtm_account_id, email });
   } finally {
     if (browser) await browser.close().catch(() => {});
+  }
+});
+
+// GET /health/scrape-site?url=https://example.com&limit=75
+// Crawls every page of the given site (sitemap → BFS fallback) and returns
+// all page text content as XML. limit defaults to 75, max 500.
+router.get("/scrape-site", async (req, res) => {
+  const { url, limit } = req.query;
+  if (!url) return res.status(400).json({ ok: false, error: "url query parameter is required" });
+
+  const limitNum = Math.min(parseInt(limit, 10) || 75, 500);
+
+  try {
+    const result = await scrapeAllPages(url, { limit: limitNum });
+
+    const pageXml = result.pages
+      .map((p) => {
+        const safeText = String(p.text || "").replace(/\]\]>/g, "]]]]><![CDATA[>");
+        return `  <page url="${escapeXml(p.url)}" title="${escapeXml(p.title)}">\n    <content><![CDATA[${safeText}]]></content>\n  </page>`;
+      })
+      .join("\n");
+
+    const xml =
+      `<?xml version="1.0" encoding="UTF-8"?>\n` +
+      `<site url="${escapeXml(result.website_url)}" crawled_at="${result.crawled_at}" page_count="${result.page_count}">\n` +
+      `${pageXml}\n` +
+      `</site>`;
+
+    res.setHeader("Content-Type", "application/xml; charset=utf-8");
+    return res.send(xml);
+  } catch (e) {
+    console.error("scrape-site error:", e);
+    return res.status(500).json({ ok: false, error: e.message, url });
   }
 });
 
