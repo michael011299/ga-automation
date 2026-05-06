@@ -1983,6 +1983,7 @@ async function trackingHealthCheckSiteInternal(url, expectedGtmId = null) {
     detected_ga4_ids: [],
     gtm_id_expected: expectedGtmId || null,
     gtm_id_match: null,
+    gtm_id_format_warning: null,
     prefetch_status: null,
 
     phone_found: 0,
@@ -2028,6 +2029,31 @@ async function trackingHealthCheckSiteInternal(url, expectedGtmId = null) {
   let context = null,
     page = null;
   const _checkStart = Date.now();
+
+  // ── Normalise expected GTM ID once (used in all three mismatch check sites) ──
+  // Extract the valid GTM-XXXXXXX portion from whatever string arrives —
+  // source data sometimes carries trailing garbage (e.g. "GTM-NDJ5GCFG---SS").
+  // If no valid GTM pattern is found at all, flag it so callers can fix the data.
+  let normExpectedGtmId = null;
+  if (expectedGtmId) {
+    const _rawUpper = expectedGtmId.toUpperCase().replace(/\s+/g, "-");
+    const _gtmMatch = _rawUpper.match(/GTM-[A-Z0-9]{4,10}/);
+    if (_gtmMatch) {
+      normExpectedGtmId = _gtmMatch[0];
+      if (normExpectedGtmId !== _rawUpper.trim()) {
+        const warning = `Provided GTM ID "${expectedGtmId}" was cleaned to "${normExpectedGtmId}" — check the source data for trailing characters.`;
+        results.gtm_id_format_warning = warning;
+        logInfo(`⚠️  GTM ID format warning: ${warning}`);
+      }
+    } else {
+      const warning = `Provided value "${expectedGtmId}" does not contain a valid GTM container ID (expected format: GTM-XXXXXXX). GTM match check skipped.`;
+      results.gtm_id_format_warning = warning;
+      results.gtm_id_match = false;
+      logInfo(`⚠️  GTM ID format warning: ${warning}`);
+      normExpectedGtmId = null; // treat as if no expected ID was given
+    }
+    results.gtm_id_expected = normExpectedGtmId || expectedGtmId;
+  }
 
   try {
     logInfo(`🔍 [${SCRIPT_VERSION}] Starting check`, { url: targetUrl });
@@ -2351,11 +2377,10 @@ async function trackingHealthCheckSiteInternal(url, expectedGtmId = null) {
         for (const id of preConsentGtmIds) {
           if (!results.detected_gtm_ids.includes(id)) results.detected_gtm_ids.push(id);
         }
-        if (expectedGtmId) {
-          const normExpected = expectedGtmId.toUpperCase().trim().replace(/\s+/g, "-");
-          if (preConsentGtmIds.includes(normExpected)) {
+        if (normExpectedGtmId) {
+          if (preConsentGtmIds.includes(normExpectedGtmId)) {
             results.gtm_id_match = true;
-            logInfo(`✅ Pre-consent HTML scan: expected GTM ID ${normExpected} confirmed in page source`);
+            logInfo(`✅ Pre-consent HTML scan: expected GTM ID ${normExpectedGtmId} confirmed in page source`);
           }
         }
       } else {
@@ -2383,13 +2408,12 @@ async function trackingHealthCheckSiteInternal(url, expectedGtmId = null) {
         for (const id of htmlGtmIds) {
           if (!results.detected_gtm_ids.includes(id)) results.detected_gtm_ids.push(id);
         }
-        if (expectedGtmId) {
-          const normExpected = expectedGtmId.toUpperCase().trim().replace(/\s+/g, "-");
-          if (htmlGtmIds.includes(normExpected)) {
+        if (normExpectedGtmId) {
+          if (htmlGtmIds.includes(normExpectedGtmId)) {
             results.gtm_id_match = true;
-            logInfo(`✅ Early HTML scan: expected GTM ID ${normExpected} confirmed in page source`);
+            logInfo(`✅ Early HTML scan: expected GTM ID ${normExpectedGtmId} confirmed in page source`);
           } else {
-            logInfo(`⚠️  Early HTML scan: ${normExpected} not found in HTML (found: ${htmlGtmIds.join(", ")})`);
+            logInfo(`⚠️  Early HTML scan: ${normExpectedGtmId} not found in HTML (found: ${htmlGtmIds.join(", ")})`);
           }
         }
       } else {
@@ -2538,33 +2562,33 @@ async function trackingHealthCheckSiteInternal(url, expectedGtmId = null) {
     // ── GTM ID mismatch check ──
     // If the caller supplied an expected GTM container ID, verify the site has it installed.
     // Any other GTM container (or no GTM at all) is treated as a Fail.
-    if (expectedGtmId) {
-      const normExpected = expectedGtmId.toUpperCase().trim().replace(/\s+/g, "-");
+    // normExpectedGtmId is null if the input failed format validation (warning already set).
+    if (normExpectedGtmId) {
       const foundIds = results.detected_gtm_ids.map((id) => id.toUpperCase().trim());
-      const matched = foundIds.includes(normExpected);
+      const matched = foundIds.includes(normExpectedGtmId);
       results.gtm_id_match = results.gtm_id_match === true ? true : matched;
       if (!matched) {
         const foundStr = foundIds.length > 0 ? foundIds.join(", ") : "none";
         results.grade = "Fail";
         results.health_status = "GTM_MISMATCH";
-        results.health_reasons = `Expected GTM container ${normExpected} but found: ${foundStr}. The wrong GTM container is installed — conversion tracking will not work for this account.`;
+        results.health_reasons = `Expected GTM container ${normExpectedGtmId} but found: ${foundStr}. The wrong GTM container is installed — conversion tracking will not work for this account.`;
         results.failure_detail = [
           {
             category: "Google Tag Manager",
             grade_impact: "FAIL",
-            summary: `Wrong GTM container detected. Expected ${normExpected}, found ${foundStr || "none"}.`,
-            fix: `Replace the installed GTM snippet with container ${normExpected}. Remove any other GTM containers to avoid conflicting tracking.`,
+            summary: `Wrong GTM container detected. Expected ${normExpectedGtmId}, found ${foundStr || "none"}.`,
+            fix: `Replace the installed GTM snippet with container ${normExpectedGtmId}. Remove any other GTM containers to avoid conflicting tracking.`,
           },
         ];
-        results.fix = `Replace the installed GTM snippet with container ${normExpected}. Remove any other GTM containers to avoid conflicting tracking.`;
+        results.fix = `Replace the installed GTM snippet with container ${normExpectedGtmId}. Remove any other GTM containers to avoid conflicting tracking.`;
         logInfo(`╔══════════════════════════════════════════════╗`);
         logInfo(`  GRADE : ❌ FAIL — GTM MISMATCH`);
-        logInfo(`  Expected : ${normExpected}`);
+        logInfo(`  Expected : ${normExpectedGtmId}`);
         logInfo(`  Found    : ${foundStr}`);
         logInfo(`╚══════════════════════════════════════════════╝`);
         return results;
       }
-      logInfo(`✅ GTM ID match confirmed: ${normExpected}`);
+      logInfo(`✅ GTM ID match confirmed: ${normExpectedGtmId}`);
     }
 
     // Direct GA4 (gtag.js without GTM container): note the setup difference but continue to grading.
