@@ -8,9 +8,6 @@ const swaggerSpec = require("./swagger");
 const app = express();
 app.use(express.json({ limit: "50mb" }));
 
-const healthRouter = require("./health.routes");
-app.use("/health", healthRouter);
-
 app.use("/docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec, { customSiteTitle: "GA Automation API Docs" }));
 
 function extractPropertyIdFromUrl(page) {
