@@ -129,10 +129,10 @@ router.get("/batch/:job_id", (req, res) => {
 });
 
 router.post("/audit", async (req, res) => {
-  const { url } = req.body || {};
+  const { url, limit } = req.body || {};
   if (!url) return res.status(400).json({ ok: false, error: "URL is required" });
   try {
-    const result = await ctaAuditSite(url);
+    const result = await ctaAuditSite(url, { limit: limit ? parseInt(limit, 10) : 25 });
     return res.json({ ok: true, ...result });
   } catch (e) {
     console.error("CTA audit error:", e);

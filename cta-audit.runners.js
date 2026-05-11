@@ -3323,9 +3323,9 @@ function extractLocationIntelligence(pages, siteOrigin) {
   };
 }
 
-async function ctaAuditSite(url) {
+async function ctaAuditSite(url, { limit = 25 } = {}) {
   const startTime = Date.now();
-  const MAX_PAGES = 75;
+  const MAX_PAGES = Math.min(Math.max(1, limit), 200);
 
   const NON_HTML_EXT = /\.(xml|pdf|jpg|jpeg|png|gif|svg|webp|css|js|zip|tar|gz|txt|ico|mp4|mp3|wav|mov|eot|woff|woff2|ttf|otf)(\?.*)?$/i;
   const SKIP_PATH    = /\/(wp-admin|wp-login|wp-json|admin|login|sign-in|signup|register|account|cart|checkout|search)(\/|$|\?)/i;
