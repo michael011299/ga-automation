@@ -3323,8 +3323,9 @@ function extractLocationIntelligence(pages, siteOrigin) {
   };
 }
 
-async function ctaAuditSite(url, { limit = 25 } = {}) {
+async function ctaAuditSite(url, { limit = 25, maxMs = 200000 } = {}) {
   const startTime = Date.now();
+  const deadline  = startTime + maxMs;
   const MAX_PAGES = Math.min(Math.max(1, limit), 200);
 
   const NON_HTML_EXT = /\.(xml|pdf|jpg|jpeg|png|gif|svg|webp|css|js|zip|tar|gz|txt|ico|mp4|mp3|wav|mov|eot|woff|woff2|ttf|otf)(\?.*)?$/i;
@@ -3341,9 +3342,10 @@ async function ctaAuditSite(url, { limit = 25 } = {}) {
     } catch { return false; }
   };
 
+  let context;
   try {
     const browser = await getBrowser();
-    const context = await browser.newContext({
+    context = await browser.newContext({
       userAgent:
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
     });
@@ -3391,13 +3393,13 @@ async function ctaAuditSite(url, { limit = 25 } = {}) {
 
     // ── Crawl queue ───────────────────────────────────────────────────────────
     let qi = 0;
-    while (qi < crawlQueue.length && pagesCrawled.length < MAX_PAGES) {
+    while (qi < crawlQueue.length && pagesCrawled.length < MAX_PAGES && Date.now() < deadline) {
       const pageUrl = crawlQueue[qi++];
       if (crawledSet.has(pageUrl)) continue;
 
       try {
-        await page.goto(pageUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
-        await page.waitForLoadState("load", { timeout: 5000 }).catch(() => {});
+        await page.goto(pageUrl, { waitUntil: "domcontentloaded", timeout: 15000 });
+        await page.waitForLoadState("load", { timeout: 3000 }).catch(() => {});
         crawledSet.add(pageUrl);
         pagesCrawled.push(pageUrl);
 
@@ -3417,9 +3419,12 @@ async function ctaAuditSite(url, { limit = 25 } = {}) {
 
     if (pagesCrawled.length >= MAX_PAGES) {
       console.log(`Crawl capped at ${MAX_PAGES} pages`);
+    } else if (Date.now() >= deadline) {
+      console.log(`Crawl stopped at ${pagesCrawled.length} pages — deadline reached (${maxMs}ms)`);
     }
 
     await context.close();
+    context = null;
 
     const gtmSummary = await generateGTMSummary(pagesData);
     const ctaQuality = generateCTAQualityReport(pagesData);
@@ -3442,6 +3447,8 @@ async function ctaAuditSite(url, { limit = 25 } = {}) {
   } catch (error) {
     console.error("CTA audit error:", error);
     throw new Error(`CTA audit failed: ${error.message}`);
+  } finally {
+    if (context) await context.close().catch(() => {});
   }
 }
 

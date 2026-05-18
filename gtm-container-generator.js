@@ -547,15 +547,17 @@ function generateGTMContainerExport(audit, measurementId, containerName, account
   });
 
   // ── ID allocators ─────────────────────────────────────────────────────────
-  const nextTriggerId = makeIdCounter(10);
-  const nextTagId     = makeIdCounter(100);
-  const baseTs        = Date.now();
-  let   fpOffset      = 0;
-  const nextFp        = () => String(baseTs + fpOffset++);
+  const nextTriggerId  = makeIdCounter(10);
+  const nextTagId      = makeIdCounter(100);
+  const nextVariableId = makeIdCounter(1);
+  const baseTs         = Date.now();
+  let   fpOffset       = 0;
+  const nextFp         = () => String(baseTs + fpOffset++);
 
-  const triggers = [];
-  const tags     = [];
-  const skipped  = [];
+  const triggers  = [];
+  const tags      = [];
+  const variables = [];
+  const skipped   = [];
 
   const meta = { accountId, containerId };
 
@@ -576,6 +578,19 @@ function generateGTMContainerExport(audit, measurementId, containerName, account
     { accountId, containerId, type: "EVENT",         name: "Event" },
     { accountId, containerId, type: "CLICK_URL",     name: "Click URL" },
   ];
+
+  // ── Constant variable: GA4 Measurement ID ────────────────────────────────
+  // All GA4 tags reference {{GA4 Measurement ID}} so the client only needs
+  // to update this one variable to change the ID across the entire container.
+  const GA4_ID_VAR = "{{GA4 Measurement ID}}";
+  variables.push({
+    ...meta,
+    variableId:  nextVariableId(),
+    name:        "GA4 Measurement ID",
+    type:        "c",
+    parameter:   [{ type: "TEMPLATE", key: "value", value: measurementId }],
+    fingerprint: nextFp(),
+  });
 
   // ── Helper: LINK_CLICK trigger ────────────────────────────────────────────
   // Reference: BOOLEAN false for waitForTags/checkValidation, TEMPLATE (no value) for uniqueTriggerId
@@ -674,7 +689,7 @@ function generateGTMContainerExport(audit, measurementId, containerName, account
       parameter: [
         { type: "BOOLEAN",  key: "sendEcommerceData",     value: "false" },
         { type: "TEMPLATE", key: "eventName",             value: safeEventName(eventName) },
-        { type: "TEMPLATE", key: "measurementIdOverride", value: measurementId },
+        { type: "TEMPLATE", key: "measurementIdOverride", value: GA4_ID_VAR },
       ],
       firingTriggerId: firingTriggerIds,
       ...tagMeta(),
@@ -695,7 +710,7 @@ function generateGTMContainerExport(audit, measurementId, containerName, account
     name:  "AP G-TAG",
     type:  "googtag",
     parameter: [
-      { type: "TEMPLATE", key: "tagId", value: measurementId },
+      { type: "TEMPLATE", key: "tagId", value: GA4_ID_VAR },
     ],
     firingTriggerId: [WINDOW_LOADED_TRIGGER_ID],
     ...tagMeta(),
@@ -974,6 +989,7 @@ function generateGTMContainerExport(audit, measurementId, containerName, account
       },
       tag:             tags,
       trigger:         triggers,
+      variable:        variables,
       builtInVariable: builtInVariables,
       fingerprint:     nextFp(),
       tagManagerUrl:   `https://tagmanager.google.com/#/versions/${containerVerPath}?apiLink=version`,
